@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { mountMoltyScreen, type MoltyScreenHandle } from "../../services/molty-screen";
 import { grain } from "../../services/page-water";
 import { WORDS_URL, WORD_PX, WORD_PX_MAX } from "../../features/molty/content";
+import { titleForming } from "../../features/home/opening";
 import styles from "./MoltyWord.module.css";
 
 /** A heading's word as the device draws a scene: thin sharp lines the dust gathers along, on a
@@ -11,12 +12,15 @@ import styles from "./MoltyWord.module.css";
  *  across it) and its water is the page's: a wave loosens its lines where the crest passes and
  *  they sharpen back, a tap on it most. It runs while it is near the viewport and is put away
  *  when far. `data-word`: "live" once it draws (the heading's own text
- *  then steps aside), "off" if the renderer cannot load (the text stays). */
-export function MoltyWord({ word }: { word: string }) {
+ *  then steps aside), "off" if the renderer cannot load (the text stays). `forms`: the page's
+ *  title, it forms in view the first time (features/home/opening.ts). */
+export function MoltyWord({ word, forms = false }: { word: string; forms?: boolean }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState<"live" | "off">();
+  const [forming, setForming] = useState(false);
   useEffect(() => {
     const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    let first = forms && !reducedMotion; // it forms in view
     let handle: MoltyScreenHandle | null = null;
     let near = false;
     let busy = false;
@@ -35,12 +39,18 @@ export function MoltyWord({ word }: { word: string }) {
         boot: false,
         scene: { layout: word },
         heading: true,
+        forming: first,
         reducedMotion,
       }).then(
         (h) => {
           busy = false;
           if (!alive || !near) return h.destroy();
           handle = h;
+          if (first) {
+            first = false; // once: back in view later, it is as it always is
+            setForming(true);
+            titleForming();
+          }
           setState("live");
         },
         () => {
@@ -67,7 +77,13 @@ export function MoltyWord({ word }: { word: string }) {
     };
   }, [word]);
   return (
-    <span className={styles.root} data-molty-word="" data-word={state} aria-hidden="true">
+    <span
+      className={styles.root}
+      data-molty-word=""
+      data-word={state}
+      data-forming={forming || undefined}
+      aria-hidden="true"
+    >
       <canvas ref={canvas} className={styles.canvas} width={WORD_PX} height={WORD_PX} />
     </span>
   );

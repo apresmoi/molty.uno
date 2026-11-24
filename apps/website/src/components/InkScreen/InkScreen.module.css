@@ -1,0 +1,42 @@
+/* The ink screen: paper under the frame's face, its dots multiplied into it (no light of its own:
+   the same in both themes, no glow, no glass). The square it fills is the paper; the frame
+   reaches past it (Device, shape "ink"). */
+.root {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.paper {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 4%;
+  background: var(--m-paper);
+  box-shadow: inset 0 0 0 1px var(--m-paper-edge);
+}
+.canvas,
+.still {
+  position: absolute;
+  mix-blend-mode: multiply;
+}
+.canvas {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+}
+/* the still, cut to the same square (crop: 58, 50, 350 of 466) and inked: its lit lines dark,
+   its dark paper */
+.still {
+  left: -16.6%;
+  top: -14.3%;
+  width: 133.1%;
+  height: 133.1%;
+  filter: grayscale(1) invert(1) contrast(9);
+}
+.root[data-ink="lit"] .canvas {
+  opacity: 1;
+}
+.root[data-ink="lit"] .still {
+  opacity: 0;
+}

@@ -19,6 +19,9 @@
  * a click (pressed and let go) switches the screen, a double click do not disturb, held
  * 1.5 s it says goodbye and powers off (power_off); or hold: held to talk; pairing
  * and a pending question always come first). A talk names its input on the shake event. A shake's phantom taps are dropped (gesture_tap_guarded).
+ * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
+ * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
+ * tap, a drag), never a physical button (it clicks by itself).
  * Nothing leaves while a pairing is pending (its tap and buttons decide the pairing) or
  * while the link is down; events are not queued for later. A shake with "shake to talk" on
  * goes to the link task (link_audio_shake): Molty starts listening at once and the shake
@@ -59,6 +62,15 @@ static atomic_bool     s_tap;
 static _Atomic uint32_t s_tap_xy;            /* x << 16 | y, each 0..65535 of the panel    */
 static atomic_uint     s_spot;               /* a tap on a scene's spot (mole_fluid_spot_tap) */
 
+/* The human's tap did something: the touch feedback, at once. Taps closer than GESTURE_TAP_BOUNCE_MS are one (the
+ * panel's bounce). An open mic drops it (haptic_buzz); do not disturb does not: it is the human's own touch. */
+static void acted(void)
+{
+    static _Atomic uint32_t last;   /* ms: the touch poll runs on the drawer, or on the fluid's task while the screen is off */
+    const uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+    if (now - atomic_exchange(&last, now) >= GESTURE_TAP_BOUNCE_MS) haptic_touch();
+}
+
 void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
 {
     static bool down;
@@ -74,7 +86,7 @@ void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
         /* a scene's spot takes the tap (its reading shows), unless it stops a recording */
         uint32_t age;
         const unsigned spot = link_audio_listening(&age) ? 0 : mole_fluid_spot_tap(xs[0], ys[0]);
-        if (spot) atomic_store(&s_spot, spot);
+        if (spot) { acted(); atomic_store(&s_spot, spot); }
         else atomic_store(&s_tap, true);
     }
     down = n > 0;
@@ -112,6 +124,13 @@ static void screen_do(gesture_taps_t presses)
 {
     if (presses == GESTURE_TAPS_SINGLE) mole_fluid_screen(!mole_fluid_screen_on());
     else if (presses == GESTURE_TAPS_DOUBLE) power_dnd_set(!power_dnd());
+}
+
+/* The screen switch's press: a click (a single one acts after the double window), held it powers off. */
+static void switch_do(gesture_sw_t click, gesture_tapper_t *presser, uint32_t now)
+{
+    if (click == GESTURE_SW_CLICK) screen_do(gesture_tapper_feed(presser, now, true));
+    else if (click == GESTURE_SW_HOLD) { presser->pending = false; power_off(); }
 }
 
 /* A tap on a spot: Molty shows its reading, or opens the layout the spot names; the agent hears which spot (whatever
@@ -194,8 +213,7 @@ static void sense_task(void *arg)
                                                   : GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN && !link_ask_pending();
             const gesture_sw_t click = gesture_switch_feed(&sw[b], on, now);
             if (pairing || !screen) { presser[b].pending = false; gesture_switch_reset(&sw[b]); }
-            else if (click == GESTURE_SW_CLICK) screen_do(gesture_tapper_feed(&presser[b], now, true));
-            else if (click == GESTURE_SW_HOLD) { presser[b].pending = false; power_off(); }
+            else switch_do(click, &presser[b], now);
             if (on && !prev[b] && !pairing && !screen) {
                 mole_fluid_event(MOLE_FLUID_BUTTON);
                 if (gesture_limit_allow(&btn_l, now)) button_do(b == MOLTY_BTN_ACCEPT);

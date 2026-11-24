@@ -60,6 +60,16 @@ static inline uint32_t fluid_cycles(void) { return 0; }
 #endif
 #define FLUID_PROF_BEGIN(v) uint32_t v = fluid_cycles()
 #define FLUID_PROF_END(ph, v) (fluid_prof[ph] += fluid_cycles() - (v))
+/* host tests only (-DFLUID_WORK_COUNT): the dots of the 2 x 4 braille lattice a frame's per-dot loops visit, a
+ * count no machine's speed changes (scene_test's frame-cost budget); nothing at all on the device. DRAW: a dot tried
+ * against the drawing (an item's, a triangle's); PASS: a dot a whole-lattice pass reads or writes (clear, fold). */
+enum { FLUID_DOTS_DRAW, FLUID_DOTS_PASS };
+#ifdef FLUID_WORK_COUNT
+extern unsigned long fluid_dot_visits[2];
+#define FLUID_DOTS(k, n) (fluid_dot_visits[k] += (unsigned long)(n))
+#else
+#define FLUID_DOTS(k, n) ((void)0)
+#endif
 
 /* ── sim ──────────────────────────────────────────────────────────────────── */
 
@@ -652,6 +662,10 @@ typedef struct {
     const uint8_t *still;              /* W x H: cells the water never breaks (a tapped spot's drawing), or NULL */
     unsigned cap_word;                 /* the caption's word: a new number each word, 0 none (it dissolves)   */
     float cap_unformed;                /* how much of it has not formed from the dust yet, 0 (whole) .. 1    */
+    bool  haze_live;                   /* the braille haze lives as the page's dust does (a heading on the website,
+                                        * wm_haze; never the device): each of its dots reseeded at its own moment ..  */
+    float haze_water[2];               /* .. and the water moves its dots, its slope taken these many times across and
+                                        * down (wm_haze_water: as far as the page's dust moves; 0: still)          */
 } fluid_draw_opts_t;
 
 /* crisp dots' interlace: frame n of the dots' maker, its water's rows taking turns over m frames (2..9) */

@@ -25,6 +25,7 @@ const KIND = { blob: 'blob', ellipsoid: 'ell', capsule: 'cap', cone: 'cone', cyl
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`, list = (names) => names.join(', ') || 'none';
 const said = (v) => (typeof v === 'string' ? { about: v } : v);
 // the colors the device paints a part with, whatever color its shapes name (clip-dots.js)
+// (the yarn is painted with colors.yarn when the Molty gives one, else with bowl)
 const PAINTS = { eye: ['iris', 'shine'], nose: ['nose'], tongue: ['nose'], maw: ['nose'], milk: ['belly'], chest: ['belly'], earIn: ['ear'], whisker: ['whisker'], bowl: ['bowl'], yarn: ['bowl'] };
 
 /** A shape as the device takes it. The fields' order is the one each kind has always had in the cat's package. */
@@ -75,8 +76,20 @@ export function check(dir) {
     rest[p] = [`${p}_idle`, p, ...(i ? [] : ['idle'])].find((n) => actions.has(n));
     if (!rest[p]) bad(where(doc, 'poses'), `pose ${p} has no resting action: name one ${p}_idle${i ? '' : ' (or idle, for the first pose)'} (actions: ${list(names)})`);
   });
+  // a chain: { first?, then, rounds, last? }, each a name or names; first and last as lists
+  const listOf = (v) => (v === undefined ? [] : [v].flat()), chains = {};
   const plays = (group, target) => {
     for (const [n, v] of Object.entries(doc[group] ?? {})) {
+      const ch = group === 'gestures' && said(v).chain;
+      if (ch) {
+        chains[n] = { ...(ch.first ? { first: listOf(ch.first) } : {}), then: ch.then, rounds: ch.rounds, ...(ch.last ? { last: listOf(ch.last) } : {}) };
+        const missing = [...listOf(ch.first), ...ch.then, ...listOf(ch.last)].filter((a) => !actions.has(a));
+        if (missing.length) bad(where(doc[group], n), `gesture ${n}: its chain names ${list(missing)}, which are not actions (actions: ${list(names)})`);
+        if (ch.rounds[1] < ch.rounds[0]) bad(where(doc[group], n), `gesture ${n}: rounds [${ch.rounds}] goes down: say the fewest first`);
+        if (!ch.first && ch.rounds[0] < 1) bad(where(doc[group], n), `gesture ${n}: a chain without first plays at least one round: rounds from 1`);
+        target[n] = (chains[n].first ?? ch.then)[0];
+        continue;
+      }
       target[n] = said(v).plays ?? n;
       if (!actions.has(target[n])) bad(where(doc[group], n), `${group.slice(0, -1)} ${n}: there is no action named ${target[n]}. Name an action ${n}, or say which one it plays: { "about": ..., "plays": ... } (actions: ${list(names)})`);
     }
@@ -87,7 +100,8 @@ export function check(dir) {
   if (errors.length) return { errors, warnings, doc, body };
 
   // a clip only a life layer plays keeps only what moves in it
-  const loops = new Set([...Object.values(rest), ...Object.values(moods)]), baked = new Map(), played = new Set([...loops, ...Object.values(gestures)]);
+  const chained = Object.values(chains).flatMap((h) => [...(h.first ?? []), ...h.then, ...(h.last ?? [])]);
+  const loops = new Set([...Object.values(rest), ...Object.values(moods)]), baked = new Map(), played = new Set([...loops, ...Object.values(gestures), ...chained]);
   for (const a of body.actions) baked.set(a.name, bakeAction(nodes, a, fps, loops.has(a.name), !!life?.clips.has(a.name) && !played.has(a.name)));
   // which pose an action starts and ends in: what it says, what its name says (<a>_to_<b>), else the pose whose resting
   // action starts nearest to how it looks (the root's place left out)
@@ -103,7 +117,7 @@ export function check(dir) {
   const enter = {};
   for (const [m, a] of Object.entries(moods)) for (const p of poses) if (actions.has(`${p}_${m}`) && rest[p] !== `${p}_${m}`) (enter[a] ??= {})[p] = `${p}_${m}`;
   // the way from one pose to another: <a>_to_<b>, or the one action that goes that way and that nothing else plays
-  const taken = new Set([...Object.values(rest), ...Object.values(moods), ...Object.values(gestures), ...Object.values(enter).flatMap((e) => Object.values(e)), ...(life?.clips ?? [])]), edges = {};
+  const taken = new Set([...Object.values(rest), ...Object.values(moods), ...Object.values(gestures), ...chained, ...Object.values(enter).flatMap((e) => Object.values(e)), ...(life?.clips ?? [])]), edges = {};
   for (const a of poses) for (const b of poses) {
     if (a === b) continue;
     const named = `${a}_to_${b}`, free = names.filter((n) => !taken.has(n) && ends.get(n)[0] === a && ends.get(n)[1] === b);
@@ -112,6 +126,33 @@ export function check(dir) {
     else if (free.length) bad(where(doc, 'poses'), `${free.length} actions go from ${a} to ${b} (${list(free)}): name the one to use ${named}`);
   }
   for (const m of Object.keys(moods)) { const b = baked.get(moods[m]), gap = far(b.first, b.last); if (gap > 0.5) warn(where(doc.moods, m), `mood ${m}: its action ${moods[m]} loops, but ends far from the pose it starts in`); }
+  // a chain's joins: each action starts in the pose the one before it ends in (the body; where it stands and the way it
+  // faces carry on, so the root is left out, and a prop is held to where it is from the root)
+  const joinGap = (p, q) => {
+    let d = 0;
+    const rootQ = (P) => P.slice(3, 7);
+    const local = (P, n) => {   // a prop's place seen from the root, its turn about up taken back
+      const [rx, ry, rz, rw] = nodes[0].r, [x, y, z, w] = rootQ(P);
+      const dy = w * -ry + y * rw + z * -rx - x * -rz, dw = w * rw + x * rx + y * ry + z * rz;   // (q times the rest undone).y, .w
+      const a = 2 * Math.atan2(dw < 0 ? -dy : dy, Math.abs(dw)), o = n * 10, dx = P[o] - P[0], dz = P[o + 2] - P[2];
+      return [Math.cos(a) * dx - Math.sin(a) * dz, P[o + 1] - P[1], Math.sin(a) * dx + Math.cos(a) * dz, P[o + 7]];
+    };
+    for (let n = 1; n < nodes.length; n++) {
+      const o = n * 10;
+      if (nodes[n].parent < 0) { const a = local(p, n), b = local(q, n); if (a[3] > 0.01 || b[3] > 0.01) d += a.slice(0, 3).reduce((s, v, i) => s + (v - b[i]) ** 2, 0) * 100; continue; }
+      for (let c = 0; c < 3; c++) d += (p[o + c] - q[o + c]) ** 2;
+      let dot = 0; for (let c = 3; c < 7; c++) dot += p[o + c] * q[o + c]; d += 1 - dot * dot;
+    }
+    return d;
+  };
+  for (const [g, h] of Object.entries(chains)) {
+    const pairs = [...(h.first ?? []).flatMap((a) => h.then.map((b) => [a, b])), ...h.then.flatMap((a) => h.then.filter((b) => b !== a).map((b) => [a, b])), ...h.then.flatMap((a) => (h.last ?? []).map((b) => [a, b]))];
+    for (const [a, b] of pairs) {
+      if (!baked.has(a) || !baked.has(b)) continue;
+      const gap = joinGap(baked.get(a).last, baked.get(b).first);
+      if (gap > 0.02) bad(where(doc.gestures, g), `gesture ${g}: ${a} ends ${gap.toFixed(3)} away from the pose ${b} starts in: a chain's actions must join (the same body pose, the props where they were)`);
+    }
+  }
 
   const clips = {};
   for (const a of body.actions) {
@@ -121,7 +162,9 @@ export function check(dir) {
   }
   const hold = Object.fromEntries(Object.entries(doc.gestures ?? {}).filter(([, v]) => said(v).hold !== undefined).map(([g, v]) => [g, v.hold]));
   const sync = Object.fromEntries(body.actions.filter((a) => a.stride !== undefined).map((a) => [a.name, a.stride]));
-  const lasts = (g) => said(doc.gestures[g]).lasts ?? Math.min(10, Math.max(0.2, Math.round(clips[gestures[g]].dur * 10) / 10));
+  const mean = (ns) => (ns?.length ? ns.reduce((s, n) => s + clips[n].dur, 0) / ns.length : 0);
+  const length = (g) => (chains[g] ? mean(chains[g].first) + mean(chains[g].then) * (chains[g].rounds[0] + chains[g].rounds[1]) / 2 + mean(chains[g].last) : clips[gestures[g]].dur);
+  const lasts = (g) => said(doc.gestures[g]).lasts ?? Math.min(10, Math.max(0.2, Math.round(length(g) * 10) / 10));
   const first = Math.max(0, nodes.findIndex((n) => n.parent === 0));
   const rig = {
     fps,
@@ -130,7 +173,8 @@ export function check(dir) {
     contacts: (doc.feet ?? []).map((n) => [node(n), (nodes[node(n)].foot ?? [0, 0, 0]).map(r6)]),
     clips,
     graph: { families: poses, rest, edges, blend: doc.blend ?? BLEND, center: doc.center ? doc.center.map(node) : [first, first], moods, gestures,
-      ...(Object.keys(hold).length ? { hold } : {}), ...(Object.keys(enter).length ? { enter } : {}), ...(Object.keys(sync).length ? { sync } : {}) },
+      ...(Object.keys(hold).length ? { hold } : {}), ...(Object.keys(enter).length ? { enter } : {}), ...(Object.keys(sync).length ? { sync } : {}),
+      ...(Object.keys(chains).length ? { chains } : {}) },
     palette: doc.colors,
     scale: SCALE,
   };

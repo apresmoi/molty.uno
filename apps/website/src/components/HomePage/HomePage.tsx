@@ -1,14 +1,15 @@
 import type { ReactNode } from "react";
-import { bridgeFlow, boards, PORTING_HREF } from "../../features/home/content";
-import { REPO_URL } from "../../config/site.mjs";
+import { bridgeFlow, boards, inkConcept, PORTING_HREF, SKILLS_HREF } from "../../features/home/content";
+import { REPO_BRANCH, REPO_URL } from "../../config/site.mjs";
 import { MoltyMark } from "../MoltyMark";
 import { WordHeading } from "../WordHeading";
 import styles from "./HomePage.module.css";
 
-/** A square for a Molty device (the island the page passes in): decoration, to tap. */
-function Slot({ device }: { device: ReactNode }) {
+/** A square for a Molty device (the island the page passes in): decoration, to tap. `fan`: bake's
+ *  row of three instead (wider than tall). */
+function Slot({ device, fan = false }: { device: ReactNode; fan?: boolean }) {
   return (
-    <div className={styles.slot} aria-hidden="true">
+    <div className={`${styles.slot} ${fan ? styles.fan : ""}`} aria-hidden="true">
       {device}
     </div>
   );
@@ -24,12 +25,14 @@ export function HomePage({
   wordTalk,
   wordMoltys,
   wordBridge,
+  wordSkills,
   wordBoards,
   reader,
   picker,
   message,
   heroDevice,
   bridgeDevice,
+  skillsWall,
   bakeDevice,
 }: {
   /** The page's water (PageWater) and its headings' words (MoltyWord islands). */
@@ -38,13 +41,16 @@ export function HomePage({
   wordTalk: ReactNode;
   wordMoltys: ReactNode;
   wordBridge: ReactNode;
+  wordSkills: ReactNode;
   wordBoards: ReactNode;
   reader: ReactNode;
   picker: ReactNode;
   message: ReactNode;
-  /** The three Molty devices (MoltyScreen islands: they turn in on first sight, then power on). */
+  /** The Molty devices (MoltyScreen islands: they turn in on first sight, then power on): the
+   *  hero's, bridge's, the skills' wall of them (SkillsWall) and bake's three (BakeFan). */
   heroDevice: ReactNode;
   bridgeDevice: ReactNode;
+  skillsWall: ReactNode;
   bakeDevice: ReactNode;
 }) {
   return (
@@ -143,10 +149,40 @@ export function HomePage({
         <Slot device={bridgeDevice} />
       </section>
 
+      <section className={`${styles.section} ${styles.skills}`} aria-labelledby="skills">
+        <div className={styles.copy}>
+          <WordHeading id="skills" text="skills" word={wordSkills} className={styles.word} />
+          <p className={styles.text}>
+            <span className={styles.wide}>
+              Skills teach your agent new things to do with Molty. Install one and the agent can put the sky on the
+              glass.
+            </span>
+            <span className={styles.phone}>Skills teach your agent new things to show. Start with the sky.</span>
+          </p>
+        </div>
+        {skillsWall}
+        <Links>
+          <a href={`${REPO_URL}/tree/${REPO_BRANCH}/skills/molty`} target="_blank" rel="noopener noreferrer">
+            [ the molty skill ↗ ]
+          </a>
+          <a href={`${REPO_URL}/tree/${REPO_BRANCH}/skills/molty-astro`} target="_blank" rel="noopener noreferrer">
+            [ the astro skill ↗ ]
+          </a>
+          <a href={SKILLS_HREF}>[ make a skill → ]</a>
+        </Links>
+      </section>
+
       <section className={`${styles.section} ${styles.split}`} aria-labelledby="boards">
         <div className={styles.copy}>
           <WordHeading id="boards" text="bake" word={wordBoards} className={styles.word} />
-          <p className={styles.text}>Flash it onto a round screen. Or port it to yours.</p>
+          <p className={styles.text}>
+            <span className={styles.wide}>
+              One creature, any screen. Flash it onto a round screen, or port it to yours: the same cat, drawn for each.
+            </span>
+            <span className={styles.phone}>
+              One creature, any screen. Flash it onto a round one, or port it to yours.
+            </span>
+          </p>
           <ul className={styles.boards}>
             {boards.map((b) => (
               <li key={b.tag}>
@@ -158,6 +194,14 @@ export function HomePage({
                 <i>{b.status}</i>
               </li>
             ))}
+            <li>
+              <b>{inkConcept.tag}</b>
+              <span>
+                {inkConcept.screen}
+                <small>{inkConcept.board}</small>
+              </span>
+              <i className={styles.concept}>{inkConcept.status}</i>
+            </li>
             <li>
               <b>yours</b>
               <span>
@@ -176,7 +220,7 @@ export function HomePage({
             </a>
           </Links>
         </div>
-        <Slot device={bakeDevice} />
+        <Slot device={bakeDevice} fan />
       </section>
 
       <footer className={styles.footer}>

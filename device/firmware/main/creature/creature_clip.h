@@ -38,6 +38,8 @@ extern "C" {
 #define CC_POSE       10          /* per node: t (3), r (4, x y z w), s (3)                          */
 #define CC_LAYERS_MAX 16          /* life layers declared                                             */
 #define CC_LAYERS_ON  8           /* ...and played in a frame (weight over 0.01), the first ones        */
+#define CC_CHAIN_MAX  4           /* gestures played as a chain of clips (graph.chains)                */
+#define CC_CHAIN_PICK 8           /* ...and clips a chain picks from at each step                      */
 
 enum { CC_BLOB, CC_ELL, CC_CAP, CC_CONE, CC_CYL, CC_PATCH };
 /* outline groups (in the depth buffer), then features */
@@ -72,6 +74,8 @@ int  cc_clip_find(const cc_t *c, const char *name);
 /** The agent's mood (idle listening thinking speaking happy sleepy surprised); a gesture by name (false: it lacks it). */
 void cc_mood(cc_t *c, const char *mood);
 bool cc_act(cc_t *c, const char *gesture);
+/** The seed a chained gesture's picks are drawn from (creature_pkg.c: the creature's); the same seed, the same plays. */
+void cc_seed(cc_t *c, uint32_t seed);
 /** Called (a tap, a shake): first its own reaction if given (a shake: "shaken"), then it walks to the front of the frame
  *  facing the viewer and sits up attending (CC_ATTEND), or, facing front near the middle already, just perks up; then
  *  back to its mood. cc_act and cc_play end a call. */

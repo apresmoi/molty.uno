@@ -15,6 +15,7 @@ import { WORDS, wordsPackage } from "../../src/config/words.mjs";
 import { TILES, readTile, renderTile } from "../dust-tile.mjs";
 import { MoltyCore, instantiate } from "../../src/services/molty-screen/core.ts";
 import { CELL, MoltyField, TILE, WATER, type FieldExports } from "../../src/services/molty-screen/field.ts";
+import { hazeWater } from "../../src/services/molty-screen/water.ts";
 
 const repo = (path: string) => readFileSync(fileURLToPath(new URL(`../../../../${path}`, import.meta.url)));
 const define = (source: string, name: string) => {
@@ -404,6 +405,52 @@ test("every heading rides the page's water: a wave loosens its lines as the fron
     for (let f = 0; f < 900; f++) frame(field, core, box, HEADING_GAIN);
     assert.ok(kept(core, at) > 0.99, `${layout}: its lines are back (${(kept(core, at) * 100).toFixed(1)}%)`);
     field.destroy();
+  }
+});
+
+test("every heading's haze lives as the page's dust: its dots come and go evenly at rest, the water moves them as far, and they settle", async () => {
+  const PX = 512;
+  const size = PX / K;
+  // the rows above and below its letters: its haze alone. How many of their pixels a frame changes
+  const band = Math.floor(PX * 0.15);
+  const changes = (core: MoltyCore, field: MoltyField, box: { left: number; top: number; size: number; px: number }, frames: number) => {
+    let last = core.pixels().slice();
+    const out: number[] = [];
+    for (let f = 0; f < frames; f++) {
+      frame(field, core, box, HEADING_GAIN);
+      const px = core.pixels();
+      let n = 0;
+      for (let y = 0; y < PX; y += y === band - 1 ? PX - 2 * band + 1 : 1)
+        for (let i = y * PX * 4; i < (y + 1) * PX * 4; i += 4) n += px[i] !== last[i] || px[i + 1] !== last[i + 1] || px[i + 2] !== last[i + 2] ? 1 : 0;
+      out.push(n);
+      last = px.slice();
+    }
+    return out;
+  };
+  const mean = (a: number[]) => a.reduce((s, v) => s + v, 0) / a.length;
+  const run = async (layout: string, moves: boolean) => {
+    const field = await openField(212, 94);
+    const core = await heading(layout, PX);
+    const [kx, ky] = hazeWater({ w: size / core.gridW, h: size / core.gridH }, { w: CELL.w / K, h: CELL.h / K }, HEADING_GAIN);
+    if (moves) core.hazeWater(kx, ky);
+    const box = { left: 500, top: 200, size, px: PX };
+    for (let f = 0; f < 240; f++) frame(field, core, box, HEADING_GAIN);
+    const rest = changes(core, field, box, 180);
+    field.tap((box.left - 0.3 * size) * K, (box.top + size / 2) * K, WATER.tap, WATER.tapRadius * (WATER.panel / 2));
+    const wave = mean(changes(core, field, box, 240));
+    for (let f = 0; f < 900; f++) frame(field, core, box, HEADING_GAIN);
+    const calm = mean(changes(core, field, box, 180));
+    field.destroy();
+    return { rest, wave, calm };
+  };
+  for (const [layout] of WORDS) {
+    const { rest, wave, calm } = await run(layout, true);
+    const r = mean(rest);
+    // a dot reseeded at its own moment, not a row a second at once (that came in bursts of 6 or 7 times the mean)
+    assert.ok(Math.max(...rest) < 2.5 * r, `${layout}: at rest its haze changes evenly (${Math.max(...rest)} px in a frame at the most, ${r.toFixed(0)} a frame on average)`);
+    const still = await run(layout, false);
+    assert.ok(wave > 2 * r && wave > 2 * still.wave, `${layout}: the water moves its haze (${wave.toFixed(0)} px a frame under the front, ${still.wave.toFixed(0)} with its dots held still, ${r.toFixed(0)} at rest)`);
+    assert.ok(calm < 1.25 * r, `${layout}: its haze is back as it was (${calm.toFixed(0)} px a frame against ${r.toFixed(0)})`);
   }
 });
 

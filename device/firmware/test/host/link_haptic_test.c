@@ -45,7 +45,8 @@ esp_err_t ledc_update_duty(int m, int c) { (void)m; (void)c; return ESP_OK; }
 esp_err_t ledc_stop(int m, int c, uint32_t i) { (void)m; (void)c; (void)i; return ESP_OK; }
 static int timer;
 esp_err_t esp_timer_create(const esp_timer_create_args_t *a, esp_timer_handle_t *h) { (void)a; *h = &timer; return ESP_OK; }
-esp_err_t esp_timer_start_once(esp_timer_handle_t h, uint64_t us) { (void)h; (void)us; return ESP_OK; }
+static uint64_t armed_us;   /* the last segment's length */
+esp_err_t esp_timer_start_once(esp_timer_handle_t h, uint64_t us) { (void)h; armed_us = us; return ESP_OK; }
 esp_err_t esp_timer_stop(esp_timer_handle_t h) { (void)h; return ESP_OK; }
 bool esp_timer_is_active(esp_timer_handle_t h) { (void)h; return false; }
 int gpio_set_level(int p, int l) { (void)p; (void)l; return 0; }
@@ -109,6 +110,10 @@ int main(void) {
     mic_open = false;
     assert(haptic_cue("double") == ESP_OK && ons == on0 + 1);   /* nothing was kept for later: this is a new one */
     assert(haptic_cue("bogus") == ESP_ERR_INVALID_ARG);
+    /* the touch feedback: its own length and strength (HAPTIC_TOUCH_*), apart from the agent's tick (30 ms, full) */
+    assert(haptic_touch() == ESP_OK && ons == on0 + 2 && armed_us == HAPTIC_TOUCH_MS * 1000u && duty == HAPTIC_TOUCH_STRENGTH * 1024u / 100u);
+    assert(haptic_cue("tick") == ESP_OK && armed_us == 30000 && duty == 1024);
+    mic_open = true; assert(haptic_touch() == ESP_ERR_INVALID_STATE); mic_open = false;
 
     /* HTTP: the answers as before, and a name too */
     assert(!strcmp(post("{\"ms\":300,\"strength\":100}"), "{\"ok\":true,\"ms\":300,\"strength\":100}"));
@@ -117,6 +122,6 @@ int main(void) {
     assert(!strcmp(post("{\"pattern\":\"nope\"}"), "{\"ok\":false,\"error\":\"unknown_pattern\"}"));
     assert(!strcmp(post("{\"ms\":-1}"), "{\"ok\":false,\"error\":\"invalid_args\"}"));
     assert(!strcmp(post("not json"), "{\"ok\":false,\"error\":\"invalid_args\"}"));
-    printf("LINK HAPTIC PASS: buzz args (names, ms, pattern, strength), unknown_pattern, invalid_args, no_motor, listening drops it, HTTP answers\n");
+    printf("LINK HAPTIC PASS: buzz args (names, ms, pattern, strength), unknown_pattern, invalid_args, no_motor, listening drops it, HTTP answers, the touch feedback at HAPTIC_TOUCH_* apart from the agent's tick\n");
     return 0;
 }

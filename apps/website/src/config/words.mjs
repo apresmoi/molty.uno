@@ -14,6 +14,7 @@ export const WORDS = [
   ['talk', 'talk', '#9cb8ac'],
   ['moltys', 'moltys', '#a99be8'],
   ['bridge', 'bridge', '#c6a8f2'],
+  ['skills', 'skills', '#9fc0ff'],
   ['bake', 'bake', '#ffdf5a'],
   ['showcase', 'showcase', '#a99be8'],
   ['build', 'build', '#3ccf96'],

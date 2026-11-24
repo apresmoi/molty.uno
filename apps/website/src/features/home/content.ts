@@ -40,20 +40,34 @@ export const boards = [
     board: "Waveshare ESP32-S3-Touch-LCD-1.46",
     screen: "412×412 round · mic · speaker",
     status: "reference",
+    px: 412,
   },
   {
     tag: "1.75C",
     board: "Waveshare ESP32-S3-Touch-AMOLED-1.75C",
     screen: "466×466 AMOLED · mic · speaker",
     status: "experimental",
+    px: 466,
   },
   {
     tag: "1.28",
     board: "Waveshare ESP32-S3-Touch-LCD-1.28",
     screen: "240×240 round · no audio",
     status: "experimental",
+    px: 240,
   },
 ] as const;
+
+/** The ink screen bake shows beside the boards: an idea, not a board. */
+export const inkConcept = {
+  tag: "ink",
+  screen: "square e-paper, 1-bit",
+  board: "an idea: no ink board yet",
+  status: "concept",
+};
+
+/** How a skill that draws is made (docs/DISPLAY.md, synced to this slug). */
+export const SKILLS_HREF = "/moltys/draw/";
 
 /** Porting guide (docs/PORTING.md, synced to this slug). */
 export const PORTING_HREF = "/getting-started/porting/";

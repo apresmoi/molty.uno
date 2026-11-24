@@ -121,6 +121,14 @@ static void test_lift(void)
     assert(!feed(&l, 23040, 200, 40.f, 0.f, 0.f));
     assert(!feed(&l, 23240, 1000, 0.f, 0.f, 0.f));
     assert(!feed(&l, 24240, 10000, 20.f, 0.05f, 8.f));
+    /* the motor's tick (30 ms: two samples at most), worst case 4 g one way across it (z lost): no pick-up, so the IMU need not
+     * be deaf to it (haptic_quiet gates only the shake). Nor one on the very sample the nap starts from (the switch's
+     * click turned the screen off) */
+    for (uint32_t k = 0; k < 2; k++) assert(!nap_lift_feed(&l, 4.f, 0.f, 0.f, 34240 + 20 * k));
+    assert(!feed(&l, 34280, 2000, 0.f, 0.f, 0.f));
+    nap_lift_reset(&l);
+    for (uint32_t k = 0; k < 2; k++) assert(!nap_lift_feed(&l, 4.f, 4.f, -3.f, 20 * k));
+    assert(!feed(&l, 40, 3000, 0.f, 0.f, 0.f));
     /* the rest it compares with is the one after it went off: a Molty that napped leaning wakes when it turns more */
     nap_lift_reset(&l);
     assert(!feed(&l, 0, 2000, 60.f, 0.f, 0.f));
@@ -136,6 +144,6 @@ int main(void)
     test_wakes();
     test_hand_on_restarts();
     test_lift();
-    printf("NAP PASS: the screen naps after the set time asleep, never while busy, wakes for the right things; a pick-up wakes it, a bump does not\n");
+    printf("NAP PASS: the screen naps after the set time asleep, never while busy, wakes for the right things; a pick-up wakes it, a bump or the motor's tick does not\n");
     return 0;
 }

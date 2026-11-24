@@ -34,6 +34,9 @@ typedef struct {
 } clip_t;
 typedef struct { char name[CC_NAME_MAX + 1]; int16_t clip; float hold; } gest_t;
 typedef struct { int16_t target, fam, clip; } enter_t;
+/* a gesture played as a chain of clips (graph.chains): one of `first`, then `rounds` (a random count in [rmin, rmax]) of
+ * `then`, never the same one twice in a row, then one of `last`; each pick from the creature's seed */
+typedef struct { int16_t gest; uint8_t rmin, rmax, n[3]; int16_t pick[3][CC_CHAIN_PICK]; } chain_t;
 typedef struct {
     int16_t clip;                       /* a pose clip, or -1: a turn of its nodes                           */
     float zero, rot[3], sq;             /* the clip's neutral place (0..1); a turn's degrees and squash a unit */
@@ -55,11 +58,14 @@ struct cc {
     int16_t mood_clip[7];
     int ngest; gest_t gest[CC_GEST_MAX];
     int nenter; enter_t enter[8];
+    int nchain; chain_t chain[CC_CHAIN_MAX];
     int16_t center[2];
     int nlay; layer_t lay[CC_LAYERS_MAX];
     /* play state (the JS player's s) */
     int cur_clip; double t; float blendT, blendD; float ox, oz, lockX, lockZ;
     int queue[16], nq;
+    float oyaw;                         /* the heading carried between clips (rad, about up), as ox, oz carry the place */
+    int chain_on, chain_left, chain_prev, chain_stage; uint32_t rng;   /* the chain playing (-1: none), its draws */
     int mood; int gesture; float gestureT; bool gstarted, pending;
     float camx, camz, camyaw; bool snap;
     float hd, hbase, px, pz, tx, tz, cx0, cz0, sense;   /* the body turned to its clip's side (hd, rad) and where it is
@@ -298,6 +304,31 @@ static const char *parse(cc_t *c, const cJSON *rig) {
         if (k < 0 || !cJSON_IsNumber(s) || s->valuedouble <= 0) return "rig: sync";
         c->clip[k].sync = (float)s->valuedouble;
     }
+    const cJSON *chains = cJSON_GetObjectItemCaseSensitive(graph, "chains");
+    if (chains) for (const cJSON *h = chains->child; h; h = h->next) {
+        static const char *const PART[3] = { "first", "then", "last" };
+        chain_t *x = &c->chain[c->nchain];
+        int g = -1;
+        for (int i = 0; i < c->ngest; i++) if (!strcmp(c->gest[i].name, h->string)) g = i;
+        const cJSON *r = cJSON_GetObjectItemCaseSensitive(h, "rounds");
+        if (c->nchain >= CC_CHAIN_MAX || g < 0 || !cJSON_IsArray(r) || cJSON_GetArraySize(r) != 2) return "rig: chain";
+        const cJSON *r0 = cJSON_GetArrayItem(r, 0), *r1 = cJSON_GetArrayItem(r, 1);
+        if (!cJSON_IsNumber(r0) || !cJSON_IsNumber(r1) || r0->valueint < 0 || r1->valueint < r0->valueint || r1->valueint > 16) return "rig: chain rounds";
+        x->gest = (int16_t)g; x->rmin = (uint8_t)r0->valueint; x->rmax = (uint8_t)r1->valueint;
+        for (int q = 0; q < 3; q++) {
+            const cJSON *a = cJSON_GetObjectItemCaseSensitive(h, PART[q]);
+            x->n[q] = 0;
+            if (!a) continue;
+            if (!cJSON_IsArray(a) || cJSON_GetArraySize(a) > CC_CHAIN_PICK) return "rig: chain";
+            for (const cJSON *v = a->child; v; v = v->next) {
+                const int k = cJSON_IsString(v) ? cc_clip_find(c, v->valuestring) : -1;
+                if (k < 0 || c->clip[k].loop) return "rig: a chain's clip";
+                x->pick[q][x->n[q]++] = (int16_t)k;
+            }
+        }
+        if (!x->n[1] || (!x->n[0] && !x->rmin)) return "rig: chain then";
+        c->nchain++;
+    }
     return NULL;
 }
 
@@ -378,7 +409,14 @@ static void forward(const cc_t *c, const float *pose, float ox, float oz, float 
             (2 * (x * z - y * w)) * sx, (2 * (y * z + x * w)) * sy, (1 - 2 * (x * x + y * y)) * sz, p[2] };
         float *W = world + i * 12;
         const int pa = c->node[i].parent;
-        if (pa < 0) { memcpy(W, L, sizeof(L)); W[3] += ox; W[11] += oz; continue; }
+        if (pa < 0) {
+            memcpy(W, L, sizeof(L));
+            if (c->oyaw != 0.f) {                       /* the carried heading: turned about up, through the origin */
+                const float cs = cosf(c->oyaw), sn = sinf(c->oyaw);
+                for (int col = 0; col < 4; col++) { W[col] = cs * L[col] + sn * L[8 + col]; W[8 + col] = -sn * L[col] + cs * L[8 + col]; }
+            }
+            W[3] += ox; W[11] += oz; continue;
+        }
         const float *P = world + pa * 12;
         for (int r = 0; r < 3; r++) for (int col = 0; col < 4; col++)
             W[r * 4 + col] = P[r * 4] * L[col] + P[r * 4 + 1] * L[4 + col] + P[r * 4 + 2] * L[8 + col] + (col == 3 ? P[r * 4 + 3] : 0.f);
@@ -532,6 +570,7 @@ int cc_route(const cc_t *c, int a, int b, int *out, int max) {
 #define CC_COME_S 8.f                   /* ...or after walking this long                                              */
 #define CC_FRONT 0.15f                  /* facing front this near the middle (across the frame) it only perks up       */
 static void attend(cc_t *c);
+#define CC_AWAY 1.75f                   /* a chain that leaves it facing further from the viewer than this (rad) calls it */
 #define CC_PACE 0.6f                    /* the most it moves a second (world units): above a walk's 0.36           */
 #define CC_EDGE 0.25f                   /* walking past this far from the frame's centre (world units, across) turns it */
 static void turn(cc_t *c, float dt) {
@@ -565,11 +604,11 @@ static void turn(cc_t *c, float dt) {
             if ((fabsf(lat) < CC_COME_R && sinf(c->hd) * fx + cosf(c->hd) * fz > 0.9f) || c->comeT > CC_COME_S) {
                 attend(c);                             /* its stop still walks on toward the viewer */
             } else {                                   /* its way: the walk's travel (+z of the clip) along v */
-                c->hbase = atan2f(vx, vz) - (c->camyaw - cc->view) * D2R; c->sense = 0.f;
+                c->hbase = atan2f(vx, vz) - c->oyaw - (c->camyaw - cc->view) * D2R; c->sense = 0.f;
             }
         }
         if (c->come == 2 && cc->to != wf && cc->from != wf) {   /* out of the walk: it turns to face the viewer */
-            c->hbase = 6.28318530718f * floorf((c->hd - (c->camyaw - cc->view) * D2R) / 6.28318530718f + 0.5f); c->sense = 0.f;
+            c->hbase = 6.28318530718f * floorf((c->hd + c->oyaw - (c->camyaw - cc->view) * D2R) / 6.28318530718f + 0.5f) - c->oyaw; c->sense = 0.f;
             c->come = 3;
         }
         if (walking && !c->come && fabsf(lat) > CC_EDGE && lat * vlat > 0.05f * dt * fabsf(lat) && fabsf(gap) < 0.3f) {
@@ -616,17 +655,58 @@ static double best_phase(cc_t *c, int ci, const float *target) {
     return (double)best / c->fps;
 }
 
+/* the root's turn about up from its rest (rad; 0 for a clip that never turns it) */
+static float root_yaw(const cc_t *c, const float *pose) {
+    const float rc[4] = { -c->rest[3], -c->rest[4], -c->rest[5], c->rest[6] };
+    float d[4]; qmul(pose + 3, rc, d);
+    const float a = 2.f * atan2f(d[3] < 0.f ? -d[1] : d[1], fabsf(d[3]));
+    return fabsf(a) < 1e-4f ? 0.f : a;
+}
+
 static void start(cc_t *c, int ci, float blend) {
     const clip_t *k = &c->clip[ci];
-    const float rx = c->cur[0], rz = c->cur[2];
+    const float rx = c->cur[0], rz = c->cur[2], ry = root_yaw(c, c->cur);
     memcpy(c->from, c->cur, sizeof(float) * CC_POSE * (size_t)c->nn);
     memcpy(c->fromWorld, c->world, sizeof(float) * 12 * (size_t)c->nn);
     double t0 = 0;
     if (k->loop && k->sync > 0.f) t0 = best_phase(c, ci, c->cur);
     float nx, nz;
     root_at(c, ci, t0, &nx, &nz);
-    c->ox += rx - nx; c->oz += rz - nz;
+    const float ny = root_yaw(c, c->tmp);
+    if (ry == 0.f && ny == 0.f && c->oyaw == 0.f) { c->ox += rx - nx; c->oz += rz - nz; }
+    else {                                    /* the heading carries too: the new clip goes on facing the way this one ended */
+        const float y0 = c->oyaw, y1 = remainderf(y0 + ry - ny, 6.28318530718f), c0 = cosf(y0), s0 = sinf(y0), c1 = cosf(y1), s1 = sinf(y1);
+        const float ox = c->ox + c0 * rx + s0 * rz - (c1 * nx + s1 * nz), oz = c->oz - s0 * rx + c0 * rz - (-s1 * nx + c1 * nz);
+        const float hq[4] = { 0.f, sinf((y0 - y1) / 2), 0.f, cosf((y0 - y1) / 2) };
+        for (int i = 0; i < c->nn; i++) {      /* the crossfade's start, seen in the new frame: where it was */
+            if (c->node[i].parent >= 0) continue;
+            float *p = c->from + i * CC_POSE, q[4];
+            const float wx = c0 * p[0] + s0 * p[2] + c->ox - ox, wz = -s0 * p[0] + c0 * p[2] + c->oz - oz;
+            p[0] = c1 * wx - s1 * wz; p[2] = s1 * wx + c1 * wz;
+            qmul(hq, p + 3, q); memcpy(p + 3, q, sizeof(q));
+        }
+        c->ox = ox; c->oz = oz; c->oyaw = y1;
+    }
     c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend;
+}
+
+/* a draw from the creature's seed, 0..n-1, never `avoid` (when it is one of the n and there is another) */
+static int draw(cc_t *c, const int16_t *k, int n, int avoid) {
+    int m = n, skip = -1;
+    for (int i = 0; i < n && n > 1; i++) if (k[i] == avoid) { skip = i; m = n - 1; }
+    c->rng = c->rng * 1664525u + 1013904223u;
+    int r = (int)((c->rng >> 8) % (uint32_t)m);
+    if (skip >= 0 && r >= skip) r++;
+    return k[r];
+}
+/* a chain's next clip (-1: it is done) */
+static int chain_next(cc_t *c) {
+    if (c->chain_on < 0) return -1;
+    const chain_t *h = &c->chain[c->chain_on];
+    if (c->chain_left > 0) { c->chain_left--; return c->chain_prev = draw(c, h->pick[1], h->n[1], c->chain_prev); }
+    if (!c->chain_stage && h->n[2]) { c->chain_stage = 1; return draw(c, h->pick[2], h->n[2], -1); }
+    c->chain_on = -1;
+    return -1;
 }
 
 static int target(const cc_t *c) { return c->gesture >= 0 ? c->gest[c->gesture].clip : c->mood_clip[c->mood]; }
@@ -668,7 +748,7 @@ cc_t *cc_create(const void *crv, const char **err) {
     if (e) { cc_destroy(c); *err = e; return NULL; }
     const int sit = fam_of(c, "sit");
     c->cur_clip = c->rest_clip[sit >= 0 ? sit : 0];
-    c->gesture = -1;
+    c->gesture = -1; c->chain_on = -1; cc_seed(c, 1);
     sample_pose(c, c->cur_clip, 0, c->cur);
     c->blendT = c->blendD = 1.f;
     forward(c, c->cur, 0, 0, c->world);
@@ -704,6 +784,10 @@ int cc_families(const cc_t *c) { return c->nfam; }
 const char *cc_family_name(const cc_t *c, int f) { return c->fam[f]; }
 int cc_clip_from(const cc_t *c, int k) { return c->clip[k].from; }
 int cc_clip_to(const cc_t *c, int k) { return c->clip[k].to; }
+void cc_seed(cc_t *c, uint32_t seed) {   /* mixed, so near seeds draw far apart */
+    seed ^= seed >> 16; seed *= 0x7feb352du; seed ^= seed >> 15; seed *= 0x846ca68bu; seed ^= seed >> 16;
+    c->rng = seed;
+}
 bool cc_clip_loop(const cc_t *c, int k) { return c->clip[k].loop; }
 
 void cc_mood(cc_t *c, const char *mood) {
@@ -731,7 +815,7 @@ bool cc_come(cc_t *c, const char *first) {
     if (first && act(c, first)) { interrupt(c); c->come = 4; return true; }   /* its own reaction first (a shake's) */
     const clip_t *cc = &c->clip[c->cur_clip];
     const float D2R = 3.14159265358979f / 180.f, Y = c->camyaw * D2R, TAU = 6.28318530718f;
-    float f = c->hd - (c->camyaw - cc->view) * D2R; f -= TAU * floorf(f / TAU + 0.5f);
+    float f = c->hd + c->oyaw - (c->camyaw - cc->view) * D2R; f -= TAU * floorf(f / TAU + 0.5f);
     const float ox = c->px - c->camx, oz = c->pz - c->camz;
     const int wf = fam_of(c, "walk");
     if (fabsf(f) < 0.4f && fabsf(ox * cosf(Y) - oz * sinf(Y)) < CC_FRONT && cc->to != wf && cc->from != wf) { attend(c); return c->come != 0; }   /* it perks up */
@@ -756,6 +840,15 @@ static bool act(cc_t *c, const char *name) {
         snprintf(c->gest[g].name, sizeof(c->gest[g].name), "%s", name); c->gest[g].clip = (int16_t)k; c->gest[g].hold = 0.f;
     }
     c->gesture = g; c->gestureT = 0.f; c->gstarted = false; c->pending = true;
+    c->chain_on = -1;
+    for (int i = 0; i < c->nchain; i++) if (c->chain[i].gest == g) {   /* a chain: its first clip now, the rest as each ends */
+        const chain_t *h = &c->chain[i];
+        c->chain_on = i; c->chain_stage = 0; c->chain_prev = -1;
+        c->rng = c->rng * 1664525u + 1013904223u;
+        c->chain_left = h->rmin + (int)((c->rng >> 8) % (uint32_t)(h->rmax - h->rmin + 1));
+        if (h->n[0]) c->gest[g].clip = (int16_t)draw(c, h->pick[0], h->n[0], -1);
+        else { c->gest[g].clip = (int16_t)(c->chain_prev = draw(c, h->pick[1], h->n[1], -1)); c->chain_left--; }
+    }
     return true;
 }
 
@@ -765,7 +858,7 @@ void cc_play(cc_t *c, const char *clip) {
     const int k = cc_clip_find(c, clip);
     if (k < 0) return;
     c->come = 0;
-    c->gesture = -1; c->nq = 0;
+    c->gesture = -1; c->nq = 0; c->chain_on = -1;
     start(c, k, 0.f);
 }
 
@@ -787,15 +880,32 @@ void cc_update(cc_t *c, float dt) {
         if (c->cur_clip == ci && c->t >= k->dur - EPS) {                       /* wrap: the root's travel carries on */
             float ax, az, bx, bz;
             root_at(c, ci, k->dur - 1e-6, &ax, &az); root_at(c, ci, 0, &bx, &bz);
+            if (c->oyaw != 0.f) {                                               /* along the way it faces */
+                const float cs = cosf(c->oyaw), sn = sinf(c->oyaw), dx = ax - bx, dz = az - bz;
+                ax = bx + cs * dx + sn * dz; az = bz - sn * dx + cs * dz;
+            }
             c->ox += ax - bx; c->oz += az - bz; c->t -= k->dur;
         }
     } else if (c->t >= k->dur - EPS) {
-        if (c->gesture >= 0 && c->gstarted && c->gest[c->gesture].clip == c->cur_clip && !c->clip[c->cur_clip].loop) c->gesture = -1;
-        c->t = k->dur; c->pending = false; advance(c);
+        int nx = -1; bool chained = false;
+        if (c->gesture >= 0 && c->gstarted && c->gest[c->gesture].clip == c->cur_clip && !c->clip[c->cur_clip].loop) {
+            chained = c->chain_on >= 0;
+            if ((nx = chain_next(c)) < 0) c->gesture = -1;
+        }
+        c->t = k->dur;
+        const float D2R = 3.14159265358979f / 180.f;
+        if (nx >= 0) { c->gest[c->gesture].clip = (int16_t)nx; start(c, nx, 0.f); }   /* the chain's next: it starts where this ended */
+        else if (chained && fabsf(remainderf(c->hd + c->oyaw - (c->camyaw - k->view) * D2R, 6.28318530718f)) > CC_AWAY) cc_come(c, NULL);
+        else { c->pending = false; advance(c); }   /* a chain that left it facing away: it comes round to the front on its feet */
     }
     sample_pose(c, c->cur_clip, c->t, c->pose);
     const float w = ease(c->blendD > 0.f ? c->blendT / c->blendD : 1.f);
-    if (w < 1.f) blend_pose(c->from, c->pose, w, c->cur, c->nn);
+    if (w < 1.f) {
+        blend_pose(c->from, c->pose, w, c->cur, c->nn);
+        for (int i = 1; i < c->nn; i++)          /* a prop (a root-level node but the first) is never cross-faded: it is where
+                                                  * the clip puts it, so a bowl leaving never sweeps across to where it rests */
+            if (c->node[i].parent < 0) memcpy(c->cur + i * CC_POSE, c->pose + i * CC_POSE, sizeof(float) * CC_POSE);
+    }
     else memcpy(c->cur, c->pose, sizeof(float) * CC_POSE * (size_t)c->nn);
     const float *P = layers(c) ? c->laid : c->cur;   /* cur stays the base: the next crossfade starts from it */
     forward(c, P, c->ox, c->oz, c->world);

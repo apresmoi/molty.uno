@@ -56,6 +56,7 @@ export interface Exports {
   wm_cat_pixels(): number;
   wm_world_pixels(): number;
   wm_haze(): void;
+  wm_haze_water(kx: number, ky: number): void;
   wm_couple(r0: number, r1: number): number;
   wm_couple_xy(): number;
   wm_couple_in(): number;
@@ -74,6 +75,7 @@ export interface Exports {
   wm_pick(i: number): void;
   wm_package(json: number, len: number): number;
   wm_scene(layout: number, params: number, ttl: number): number;
+  wm_scene_op(layout: number, params: number, ttl: number, queue: number): number;
   wm_scene_clear(): void;
   wm_time(unixS: number): void;
   wm_time_now(): number;
@@ -267,6 +269,11 @@ export class MoltyCore {
   haze() {
     this.x.wm_haze();
   }
+  /** The haze's dots ride the water as the page's dust does: the water's slope under them taken
+   *  `kx` times across and `ky` times down (so they move as far as the page's dust). After haze(). */
+  hazeWater(kx: number, ky: number) {
+    this.x.wm_haze_water(kx, ky);
+  }
   /** The grid's width in cells (a 466 px panel: 59). */
   get gridW(): number {
     return this.x.wm_grid_w();
@@ -353,9 +360,11 @@ export class MoltyCore {
   pack(file: Uint8Array): boolean {
     return this.lend(file, (p, len) => this.x.wm_package(p, len) === 0);
   }
-  /** scene.play: a layout of the package in hand, with its params. */
-  scene(layout: string, params?: Record<string, unknown>, ttlS = 0): boolean {
-    const play = (q: number) => this.lendText(layout, (l) => this.x.wm_scene(l, q, ttlS) === 0);
+  /** scene.play: a layout of the package in hand, with its params; `queue`: scene.queue, after
+   *  the scenes already playing or queued. */
+  scene(layout: string, params?: Record<string, unknown>, ttlS = 0, queue = false): boolean {
+    const play = (q: number) =>
+      this.lendText(layout, (l) => (queue ? this.x.wm_scene_op(l, q, ttlS, 1) : this.x.wm_scene(l, q, ttlS)) === 0);
     return params ? this.lendText(JSON.stringify(params), play) : play(0);
   }
   sceneClear() {

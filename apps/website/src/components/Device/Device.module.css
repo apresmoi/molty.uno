@@ -107,3 +107,33 @@
 .device[data-turning] .face {
   backface-visibility: hidden;
 }
+
+/* the ink screen's board (shape "ink", a concept): a rounded square frame round a square of paper
+   (the slot), in the bezel's satin, lit up-left; no lip, no glass. Its wall (puck.ts INK_BOARD)
+   stands a little inside the frame, which reaches 1.44 × the paper's half-side. Off, its screen
+   is blank paper, not a dark disc */
+.device[data-shape="ink"] .face,
+.device[data-shape="ink"] .cover,
+.device[data-shape="ink"] .lid {
+  border-radius: 4%;
+}
+.device[data-shape="ink"] .shadow,
+.device[data-shape="ink"] .bezel {
+  inset: -22%;
+  border-radius: 16%;
+}
+.device[data-shape="ink"] .bezel {
+  background:
+    linear-gradient(135deg, var(--m-bezel-hi) 8%, transparent 46%, transparent 58%, var(--m-bezel-lo) 92%),
+    var(--m-bezel);
+  box-shadow:
+    inset 0 0 0 1px var(--m-bezel-out),
+    inset 1.2cqw 1.2cqw 0 var(--m-glass-hairline);
+  mask-image: none;
+}
+.device[data-shape="ink"] .lip {
+  display: none;
+}
+.device[data-shape="ink"] .cover {
+  background: var(--m-paper);
+}

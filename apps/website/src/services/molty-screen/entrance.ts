@@ -13,12 +13,17 @@ export const ENTER = {
   nose: 0.85,
   /** Played unseen first: it gets up. */
   lead: 1.0,
-  /** Its clock runs this much faster while it walks in ... */
+  /** Its clock runs this much faster while it walks in (its own walk's cadence and ground speed
+   *  together: its feet stay planted) ... */
   rate: 2.2,
   /** ... and this much once it is at its place (it stops, turns to you and sits). */
   settle: 4.5,
   /** At its place: this near the frame's middle. */
   near: 0.12,
+  /** The most it moves a firmware second (creature_clip.c CC_PACE). */
+  pace: 0.6,
+  /** Its picture touches the glass from no farther across than this (measured: 1.52 to 1.56). */
+  glass: 1.5,
 };
 /** Walking in, the cat also drifts toward the viewer: starting [across, back] it ends at its own
  *  place. Measured for each start; a start in between takes the next one further out. */
@@ -39,8 +44,8 @@ const SETTLE_STEP_MS = 1000 / 30;
 /** `us` of the firmware's clock: a sped-up clock goes in steps no longer than a device frame (the
  *  creature's player takes no more than that of one frame's time). */
 export function play(us: number, frame: (us: number) => void) {
-  const steps = Math.ceil(us / 30000);
-  for (let i = 0; i < steps; i++) frame(us / steps);
+  const n = Math.ceil(us / 30000);
+  for (let i = 0; i < n; i++) frame(us / n);
 }
 
 /** The cat walking in on the screen's Molty and, when there is one, on the window beside it: the
@@ -55,8 +60,8 @@ export class Entrance {
   aside = 0;
 
   /** `aside`: world units from the screen's middle to the window's right edge. The creature is
-   *  on screen after a few frames; then it is put beyond that edge and called, its getting up
-   *  played unseen. */
+   *  on screen after a few frames; then it is put beyond that edge and called. Its getting up is
+   *  played unseen (`lead`) before the first step. */
   constructor(core: MoltyCore, twin: MoltyCore | null, aside: number) {
     this.core = core;
     this.twin = twin;
@@ -67,7 +72,17 @@ export class Entrance {
       ok = c.enter(across, back) && ok;
     }
     this.walking = ok;
-    if (ok) for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) this.advance(SETTLE_STEP_MS * 1000);
+  }
+
+  /** Its getting up, played unseen: a yield a step (the screen spreads them over the page's frames). */
+  *lead() {
+    if (!this.walking) return;
+    for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) yield this.advance(SETTLE_STEP_MS * 1000);
+  }
+
+  /** Page seconds it takes at the least to touch the glass from where it is. */
+  glassS(): number {
+    return Math.max(0, (this.core.across() - ENTER.glass) / (ENTER.pace * ENTER.rate));
   }
 
   private cores() {

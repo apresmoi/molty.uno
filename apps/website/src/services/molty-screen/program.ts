@@ -13,8 +13,16 @@ export type Program =
       wait: number;
       rest: number;
     }
-  /** A scene plays after `after` s for `ttl` s, and again `rest` s after the cat is back. */
-  | { kind: "scene"; layout: string; params: Record<string, unknown>; ttl: number; after: number; rest: number };
+  /** Scenes after `after` s, the first played and the rest queued behind it, as a skill sends
+   *  them; again every `every` s. */
+  | {
+      kind: "scenes";
+      scenes: Array<{ layout: string; params: Record<string, unknown>; ttl: number }>;
+      after: number;
+      every: number;
+    }
+  /** Words, one at a time at `wpm`, after `after` s, and again `rest` s after the last. */
+  | { kind: "say"; text: string; wpm: number; after: number; rest: number };
 
 export interface ProgramRun {
   /** Every frame, with the screen's seconds. */
@@ -24,19 +32,29 @@ export interface ProgramRun {
 }
 
 export function runProgram(p: Program, screen: MoltyScreenHandle): ProgramRun {
-  let on = false; // the question stands / the scene plays
+  let on = false; // the question stands
   let at = p.after; // when the next thing happens
   let now = 0;
   return {
     frame(seconds) {
       now = seconds;
       if (now < at) return;
-      if (!on) {
-        on = p.kind === "ask" ? screen.ask(p.question) : screen.scene(p.layout, p.params, p.ttl);
-        at = now + (p.kind === "ask" ? p.wait : p.ttl + 1);
+      if (p.kind === "say") {
+        screen.state({ state: "text", text: p.text, wpm: p.wpm });
+        at = now + (p.text.split(/\s+/).length * 60) / p.wpm + p.rest;
         return;
       }
-      if (p.kind === "ask") screen.askEnd();
+      if (p.kind === "scenes") {
+        p.scenes.forEach((s, i) => screen.scene(s.layout, s.params, s.ttl, i > 0));
+        at = now + p.every;
+        return;
+      }
+      if (!on) {
+        on = screen.ask(p.question);
+        at = now + p.wait;
+        return;
+      }
+      screen.askEnd();
       on = false;
       at = now + p.rest;
     },

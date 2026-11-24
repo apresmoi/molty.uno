@@ -27,7 +27,7 @@ const ratio = (a: string, b: string) => {
 };
 
 test("light text tokens hold AA (4.5:1) on bg, panel and glass", () => {
-  for (const text of ["ink", "dim", "accent", "warn"])
+  for (const text of ["ink", "dim", "accent", "warn", "sky"])
     for (const surface of ["bg", "panel", "glass"]) {
       const fg = read(light, text),
         bg = read(light, surface);

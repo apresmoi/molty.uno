@@ -12,7 +12,7 @@
  *             those after it dropped.
  *   named     a few patterns by name (the link's buzz {pattern:"double"}, the device's own moments), each
  *             at most HAPTIC_NAMED_MAX_MS:
- *               tick    30            touch feedback, barely there (an answer tapped)
+ *               tick    30            barely there (an agent's buzz; the device's own touch feedback is HAPTIC_TOUCH_*)
  *               tap     60            a light touch
  *               double  60, 90, 60    look at me (a question with buttons, a pairing code)
  *               nudge   350           a longer push, for when a tap would be missed
@@ -33,6 +33,11 @@ extern "C" {
 #define HAPTIC_MAX_MS     2000
 #define HAPTIC_SETTLE_MS  250    /* the motor spun down, the case still: chosen, not measured */
 #define HAPTIC_NAMED_MAX_MS 600  /* every named pattern is shorter */
+/* The device's touch feedback (haptic_touch): a tap on the screen that does something. Gentler than the named
+ * tick an agent asks for; tuned by feel, here only. */
+#define HAPTIC_TOUCH_MS       15
+#define HAPTIC_TOUCH_STRENGTH 35   /* percent. Measured on the 1.75C: the motor does not turn at 20 or below and starts
+                                    * at 25 held; 15 ms at 35 is the weakest pulse the IMU saw reliably. Not lower. */
 
 typedef struct {
     uint16_t seg[HAPTIC_SEGS];   /* ms: even index on, odd off */

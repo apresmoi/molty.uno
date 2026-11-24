@@ -470,6 +470,7 @@ static inline int rnd(float v) { return (int)floorf(v + 0.5f); }
 
 static void hair_put(hair_t *h, int x, int y) {
     if (h->skip) { h->skip--; return; }
+    FLUID_DOTS(FLUID_DOTS_DRAW, 1);
     if (x >= 0 && y >= 0 && x < h->s->W && y < h->s->H) paint(h->s, y * h->s->W + x, 1.f, SCENE_INK, h->rgb);
 }
 static void hair_dot(hair_t *h, int x, int y) {
@@ -510,6 +511,7 @@ static void segment(const ctx_t *c, float ax, float ay, float bx, float by, floa
     const float reach = hw + c->soft, dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy, il2 = l2 > 1e-9f ? 1.f / l2 : 0.f;
     int i0, i1, j0, j1;
     cells(s, fminf(ax, bx) - reach, fminf(ay, by) - reach, fmaxf(ax, bx) + reach, fmaxf(ay, by) + reach, &i0, &i1, &j0, &j1);
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1));
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float px = s->xs[i] - ax, py = -s->ys[j] - ay;
         float u = (px * dx + py * dy) * il2;
@@ -557,6 +559,7 @@ static void ring(const ctx_t *c, const scene_item_t *it, bool arc) {
             int a0 = (int)floorf((cx + lo + 1.f) * 0.5f * s->W - 0.5f), a1 = (int)ceilf((cx + hi + 1.f) * 0.5f * s->W - 0.5f);
             if (a0 < i0) a0 = i0;
             if (a1 > i1) a1 = i1;
+            FLUID_DOTS(FLUID_DOTS_DRAW, a1 >= a0 ? a1 - a0 + 1 : 0);
             for (int i = a0; i <= a1; i++) {
                 const float x = s->xs[i] - cx, d = fabsf(sqrtf(x * x + y * y) - it->r);
                 if (d >= reach) continue;
@@ -577,6 +580,7 @@ static void disc(const ctx_t *c, float cx, float cy, float r, uint32_t rgb) {
     if (!c->paint) return;
     int i0, i1, j0, j1;
     cells(s, cx - ro, cy - ro, cx + ro, cy + ro, &i0, &i1, &j0, &j1);
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1));
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float x = s->xs[i] - cx, y = -s->ys[j] - cy, d = sqrtf(x * x + y * y);
         if (d < ro) paint(s, j * s->W + i, 1.f - fluid_smooth(r - c->soft * 0.5f, ro, d), rgb ? SCENE_INK : 0.f, rgb);
@@ -618,6 +622,7 @@ static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img,
     const float lx = it->side * sphi, lz = cphi, turn = it->spin * t * DEG;
     int i0, i1, j0, j1;
     cells(s, it->x - ro, it->y - ro, it->x + ro, it->y + ro, &i0, &i1, &j0, &j1);
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1));
     /* light, map and colour change slowly over the face: once a cell, at its centre; only the
      * outline is per dot */
     int ckey = -1;
@@ -665,6 +670,7 @@ static bool crisp(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a, 
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + w * k) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + h * k) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1));
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) paint(s, j * s->W + i, 1.f, 0.62f, it->rgb);
     return true;
 }
@@ -681,6 +687,7 @@ static void glyph(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *a) 
     const int ns = cw * a->w > w || ch * a->h > h ? 4 : 1;
     int i0, i1, j0, j1;
     cells(s, it->x - ext, it->y - ext, it->x + ext, it->y + ext, &i0, &i1, &j0, &j1);
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1) * ns);     /* (ns samples a dot) */
     /* (u, v) is linear in the dot's position: stepped along each row, offset per sample */
     const float ux = co / w, uy = si / w, vx = si / h, vy = -co / h;
     float qu[4], qv[4];
@@ -726,6 +733,7 @@ static void text_run(const ctx_t *c, const char *str, int n, float x, float y, f
     const float cwp = (float)s->stage / s->W, chp = (float)s->stage / s->H;
     int i0 = (int)floorf(x0 / cwp), i1 = (int)ceilf((x0 + n * adv) / cwp), j0 = (int)floorf(y0 / chp), j1 = (int)ceilf((y0 + lh) / chp);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 >= s->W ? s->W - 1 : i1; j1 = j1 >= s->H ? s->H - 1 : j1;
+    FLUID_DOTS(FLUID_DOTS_DRAW, (j1 - j0 + 1) * (i1 - i0 + 1));
     for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) {
         const float px = (i + 0.5f) * cwp, py = (j + 0.5f) * chp;
         if (py <= y0 || py >= y0 + lh) continue;
@@ -938,6 +946,7 @@ static void letter_dots(const fluid_sim_t *s, const fluid_letter_t *L, uint8_t *
  * Bayer (kept: those a ball or an image left); dots, keep may be NULL */
 static void fold(const canvas_t *cv, int W, int j0, int j1, int16_t *T, uint32_t *tcol, uint8_t *dots, uint8_t *keep) {
     const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+    FLUID_DOTS(FLUID_DOTS_PASS, 8 * (j1 - j0 + 1) * W);
     for (int j = j0; j <= j1; j++) for (int i = 0; i < W; i++) {
         int tmax = 0, bits = 0, kept = 0;
         float wr = 0.f, wg = 0.f, wb = 0.f, w = 0.f;
@@ -1070,6 +1079,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
     if (!key || key != s_fc.key) {
         /* the items on the canvas, their dots following a growth halfway or whole */
         const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
+        FLUID_DOTS(FLUID_DOTS_PASS, cv->N);
         for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
         const ctx_t c = { cv, soft, NULL, true };
         s_fc.nl = 0;

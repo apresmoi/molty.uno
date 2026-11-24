@@ -54,21 +54,32 @@
 }
 /* the entrance: the cat alone, on a clear canvas the screen's size that the screen service moves
    to where the cat stands (beyond the window's edge at first: the page clips it, no scrollbar).
-   Under the screen and the bezel, so the cat goes in under the rim; only while the screen is live */
+   Under the screen and the bezel, so the cat goes in under the rim. It shows the cat outside the
+   glass (it is clear but for the cat) until it sits */
 .outside {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
-  opacity: 0;
   pointer-events: none;
 }
-.root[data-screen="live"] .outside {
-  opacity: 1;
-}
-.root .outside[data-gone] {
+.outside[data-gone] {
   opacity: 0;
 }
 :global(:root[data-theme="light"]) .outside {
   filter: invert(1) hue-rotate(180deg);
+}
+/* the hero's screen, when its picture was not ready as it turned in: it comes on quickly */
+.root:has([data-device="arrive"]) .canvas {
+  transition-duration: 0.45s;
+}
+/* a device whose picture was ready as it turned in: its screen rides the turning face from the
+   first frame, one thing arriving (Device hands over the face's transform and opacity; both
+   unset at rest). The panel too, once on: it is flat under the canvas otherwise */
+.root[data-lit] .canvas,
+.root[data-lit]:not([data-screen="off"]) .panel {
+  transform: var(--face);
+  opacity: var(--face-opacity);
+  transition: none;
+  backface-visibility: hidden;
 }

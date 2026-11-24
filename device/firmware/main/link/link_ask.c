@@ -178,7 +178,7 @@ void link_ask_tick(void)
                     ? link_ask_pick(&s_ask.hit, (float)(t >> 44 & 4095u) - 2048.f, (float)(t >> 32 & 4095u) - 2048.f) : -1;
     if (index >= 0) {
         mole_fluid_ask_pick(index);   /* the screen first: the send may block on a slow socket */
-        haptic_cue("tick");           /* the tap was taken */
+        haptic_touch();               /* the tap was taken */
         close_ask();
         mole_diag_event(false, "ask.answer job=%s index=%d", s_ask.job, index);
         emit_answer(index, NULL);

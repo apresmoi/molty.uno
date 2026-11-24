@@ -171,7 +171,7 @@ void link_pair_tick(void)
     bool reject = (power && s_power_released) || tap == 1;
     bool expired = esp_timer_get_time() >= s_deadline;
     if (accept || expired || reject) {
-        if (tap >= 0) haptic_cue("tick");   /* the tap on accept / reject was taken */
+        if (tap >= 0) haptic_touch();   /* the tap on accept / reject was taken (a button clicks by itself) */
         result(s_req, accept && !expired && !reject, expired ? "timeout" : "rejected", s_name);
         end_pair(tap >= 0 ? tap : accept && !expired && !reject ? 0 : -1);   /* a tap or the button: from that answer */
     }

@@ -2,11 +2,13 @@
 // outward (polycss culls back faces, so a flipped one silently vanishes) and hides behind the
 // bezel face on; every reveal is ≤ 1.2 s, starts away from rest, moves without jumps, swings
 // past rest once (a small overshoot, then nothing visible) and ends exactly at rest with the
-// screen lit; the glass's glare rests up-left and slides against a turn.
+// screen lit; the glass's glare rests up-left and slides against a turn. The ink board (a concept)
+// winds the same, and its screen's picture is ink or paper, never a grey.
 // Run: pnpm test (node --test; Node 22 strips the types).
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PUCK, normalOf, puckPolygons } from "../../src/features/device/puck.ts";
+import { INK_BOARD, PUCK, normalOf, outline, puckPolygons } from "../../src/features/device/puck.ts";
+import { INK_SCREEN, toInk } from "../../src/features/device/ink.ts";
 import { REST, REVEAL_SECONDS, glareOf, revealFrame, spring, type RevealKind } from "../../src/features/device/reveal.ts";
 
 const COLORS = { wall: "#333333", back: "#444444" };
@@ -36,6 +38,19 @@ test("the wall is rectangles, hidden behind the bezel face on, the back plate on
       assert.ok(v[0] <= PUCK.front, "behind the face");
     }
   }
+});
+
+test("the ink board's wall winds outward and hides behind its frame face on", () => {
+  for (const p of puckPolygons(COLORS, { shape: "ink" })) {
+    const n = normalOf(p);
+    if (p.color === COLORS.back) assert.ok(n[0] < -0.99, "the back faces away (-X)");
+    else {
+      const c = p.vertices.reduce((s, v) => [s[0] + v[0], s[1] + v[1], s[2] + v[2]], [0, 0, 0]).map((x) => x / 4);
+      assert.ok(n[1] * c[1]! + n[2] * c[2]! > 0, "the wall faces out");
+    }
+    for (const v of p.vertices) assert.ok(Math.max(Math.abs(v[1]), Math.abs(v[2])) < INK_BOARD.frame - 0.01, "inside the frame");
+  }
+  assert.equal(outline("ink").length, 4 * (INK_BOARD.per + 1));
 });
 
 test("the spring is the closed form of a damped oscillator", () => {
@@ -111,4 +126,15 @@ test("the glare rests up-left and slides against the turn", () => {
   assert.ok(glareOf(-20, 0).dx < 0);
   assert.ok(glareOf(0, -20).dy < 0, "the face tipped down slides it up");
   assert.ok(glareOf(50, 0).fade < 0.5, "turned far, it has slid off the glass");
+});
+
+test("the ink screen's picture is ink where the screen is lit and paper where it is dark", () => {
+  const lit = [200, 220, 210, 255],
+    dim = [40, 40, 60, 255],
+    clear = [255, 255, 255, 0];
+  const out = toInk(new Uint8ClampedArray([...lit, ...dim, ...clear]));
+  const ink = INK_SCREEN.ink;
+  assert.deepEqual([...out], [ink, ink, ink, 255, 255, 255, 255, 255, 255, 255, 255, 255]);
+  for (const v of toInk(new Uint8ClampedArray(Array.from({ length: 4096 }, (_, i) => (i * 37) % 256))))
+    assert.ok(v === ink || v === 255, "1-bit: no greys");
 });

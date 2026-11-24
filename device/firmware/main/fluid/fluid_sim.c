@@ -56,6 +56,9 @@ void fluid_sim_allow_internal(bool on) { s_internal_ok = on; }
 #define INV_U    (1.f / FQ_U)
 
 uint32_t fluid_prof[FP_N];
+#ifdef FLUID_WORK_COUNT
+unsigned long fluid_dot_visits[2];
+#endif
 const char *const FLUID_PROF_NAMES[FP_N] = {
     "target", "bg", "swirl", "wave", "demand", "flow", "advect", "relax", "color", "view",
     "c_update", "c_raster", "c_clear", "c_vert", "c_samples", "c_agg", "c_fill",
