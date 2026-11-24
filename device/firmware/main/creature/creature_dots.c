@@ -50,7 +50,7 @@ static inline uint32_t cycles(void) { return 0; }
                                              * scattered (clip-dots.js TWINKLE): a few rows a frame for the panel to resend */
 #define NLINE  128                          /* the outline's shades by depth (palette 0..NLINE-1)                    */
 enum { FR = 1, FE = 2, FH = 4, FA = 8, FB = 16 };   /* flags: region, eye, halo, and the halo's two scratch rows */
-enum { C_IRIS = NLINE, C_PUPIL, C_SHINE, C_NOSE, C_EAR, C_BELLY, C_WHISKER, C_BOWL, C_N, C_LINE = 255 };
+enum { C_IRIS = NLINE, C_PUPIL, C_SHINE, C_NOSE, C_EAR, C_BELLY, C_WHISKER, C_BOWL, C_YARN, C_N, C_LINE = 255 };
 enum { ST_PROJ, ST_SOLID, ST_LINES, ST_FEAT, ST_HALO, ST_CELLS, ST_WAIT, ST_BAND };
 #define FON    0x1000000u                   /* the floor layer: a dot's colour, this bit when it is on               */
 
@@ -192,6 +192,7 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
         d->pal[C_IRIS] = cc_color(c, "iris"); d->pal[C_PUPIL] = pack(pup); d->pal[C_SHINE] = cc_color(c, "shine");
         d->pal[C_NOSE] = cc_color(c, "nose"); d->pal[C_EAR] = cc_color(c, "ear"); d->pal[C_BELLY] = cc_color(c, "belly");
         d->pal[C_WHISKER] = pack(wh); d->pal[C_BOWL] = cc_color(c, "bowl");
+        d->pal[C_YARN] = cc_color(c, "yarn") ? cc_color(c, "yarn") : d->pal[C_BOWL];   /* the ball's own, else the bowl's (0: none given) */
     }
     d->thigh[0] = cc_node_find(c, "thigh.L"); d->thigh[1] = cc_node_find(c, "thigh.R");
     {
@@ -479,7 +480,7 @@ static void ph_lines(cd_t *d, int part) {
             if ((g == CG_HINDL + 1 || g == CG_HINDR + 1) && h == CG_TORSO + 1 && dot_v(d, Y) > d->hip[g == CG_HINDL + 1 ? 0 : 1]) continue;
             line = true; break;
         }
-        if (line) set_dot(p, g == CG_BOWL + 1 || g == CG_YARN + 1 ? C_BOWL : C_LINE, 2);
+        if (line) set_dot(p, g == CG_BOWL + 1 ? C_BOWL : g == CG_YARN + 1 ? C_YARN : C_LINE, 2);
     }
     d->zlo[part] = zlo; d->zhi[part] = zhi;
 }
