@@ -3,7 +3,8 @@
  * reference (device/creatures/js/clip-player.js, clip-dots.js): the goldens tools/creatures/clip-golden.mjs writes, frame
  * by frame (what plays, the world matrices, the camera, and every 10th frame's braille cells). Also: every ordered pair of
  * pose families has an authored route, a broken rig is refused, and the cost of a frame. Packed clips play exactly as their
- * plain form (the same world matrices, bit for bit).
+ * plain form (the same world matrices, bit for bit); a gesture cut short (cc_stop: a habit when someone comes) goes home
+ * through the ways between poses with no jump.
  * Build + run: test/host/clip_build.sh
  */
 #include "creature_clip.h"
@@ -310,6 +311,54 @@ static void test_packed(const char *pkgdir, const char *plain) {
     cc_destroy(pa); cc_destroy(pb); cJSON_Delete(ja); cJSON_Delete(jb); free(a); free(b);
 }
 
+/* a gesture cut short (cc_stop) at many places: from that frame on no node but the root moves more in a frame than the
+ * gesture itself ever does (no pop), and it is soon back in its mood's loop, sitting */
+static void test_stop(const char *pkgdir) {
+    static const char *const G[] = { "groom", "wash", "leg_up" };   /* the cat's habits: what a touch or an agent cuts short */
+    cc_t *probe = load(pkgdir, "cat", NULL);
+    if (!probe) return;
+    const int N = cc_nodes(probe), sit = cc_clip_find(probe, "idle");
+    cc_destroy(probe);
+    float *prev = malloc(sizeof(float) * 12 * (size_t)N);
+    for (int gi = 0; gi < 3; gi++) {
+        float own = 0.f, cut = 0.f, home = 0.f; int tries = 0, stuck = 0;
+        for (int at = 0; at < 12; at++) {
+            cc_t *c = load(pkgdir, "cat", NULL);
+            cc_seed(c, 500u + (uint32_t)at);
+            for (int f = 0; f < 10; f++) cc_update(c, 1.f / 30.f);
+            if (!cc_act(c, G[gi])) { cc_destroy(c); break; }
+            const int stop_at = 20 + at * 17;             /* frames into it: routing in, links, handing over */
+            int f = 0, back = -1; bool stopped = false;
+            for (; f < 30 * 60; f++) {
+                memcpy(prev, cc_world(c), sizeof(float) * 12 * (size_t)N);
+                if (f == stop_at) { if (!(stopped = cc_stop(c))) break; tries++; }
+                cc_update(c, 1.f / 30.f);
+                const float *w = cc_world(c);
+                float worst = 0.f;
+                for (int i = 1; i < N; i++) {
+                    if (cc_node_find(c, "bowl") == i || cc_node_find(c, "yarn") == i) continue;   /* props come and go */
+                    const float d = fabsf(w[i * 12 + 3] - prev[i * 12 + 3]) + fabsf(w[i * 12 + 7] - prev[i * 12 + 7]) + fabsf(w[i * 12 + 11] - prev[i * 12 + 11]);
+                    if (d > worst) worst = d;
+                }
+                if (f > 0 && f < stop_at) own = fmaxf(own, worst);
+                if (f >= stop_at && back < 0) cut = fmaxf(cut, worst);
+                /* home: its mood's loop playing, the crossfade into it over */
+                if (f > stop_at && back < 0 && cc_free(c) && cc_clip(c, NULL) == sit) {
+                    float t; cc_clip(c, &t);
+                    if (t > 0.35f) { back = f; home = fmaxf(home, (float)(f - stop_at) / 30.f); break; }
+                }
+            }
+            if (stopped && back < 0) stuck++;
+            cc_destroy(c);
+        }
+        if (!tries) continue;
+        printf("  stop %s: cut %d times, a node moves at most %.3f a frame after (%.3f in the gesture), home in %.1f s at most\n", G[gi], tries, cut, own, home);
+        CHECK(cut <= fmaxf(own * 1.25f, 0.02f), "stop %s: a pop (%.3f a frame, the gesture's own %.3f)", G[gi], cut, own);
+        CHECK(!stuck && home < 6.f, "stop %s: %d of %d never home, %.1f s", G[gi], stuck, tries, home);
+    }
+    free(prev);
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) { printf("usage: clip_test <packages dir> <golden dir> [plain cat]\n"); return 2; }
     printf("rigged creature host test\n");
@@ -318,6 +367,7 @@ int main(int argc, char **argv) {
     test_chains(argv[1]);
     test_props(argv[1]);
     if (argc > 3) test_packed(argv[1], argv[3]);
+    test_stop(argv[1]);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

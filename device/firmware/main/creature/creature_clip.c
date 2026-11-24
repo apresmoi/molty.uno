@@ -44,6 +44,8 @@ typedef struct {
     float *ref;                         /* each channel at zero, 4 floats                                    */
     float by, w;                        /* this frame's place and weight                                     */
 } layer_t;
+/* a moment (life.moments): its wait, lo..hi s, and the gestures it picks among, by weight */
+typedef struct { float lo, hi; int n; int16_t gest[CC_PICKS_MAX]; float w[CC_PICKS_MAX]; } moment_t;
 
 struct cc {
     int nn; struct { int16_t parent; char id[CC_NAME_MAX + 1]; } node[CC_NODES_MAX];
@@ -61,6 +63,7 @@ struct cc {
     int nchain; chain_t chain[CC_CHAIN_MAX];
     int16_t center[2];
     int nlay; layer_t lay[CC_LAYERS_MAX];
+    int nmom; moment_t mom[CC_MOMENTS_MAX];
     /* play state (the JS player's s) */
     int cur_clip; double t; float blendT, blendD; float ox, oz, lockX, lockZ;
     int queue[16], nq;
@@ -586,6 +589,40 @@ static bool layers(cc_t *c) {
     return on > 0;
 }
 
+/* creature.life.moments: [{ every: [lo, hi], pick: [[gesture, weight], ...] }] (the Molty tools compile them); the clock
+ * is the device's (fluid_director.c), the gestures are the rig's own (graph.gestures, habits included) */
+static const char *parse_moments(cc_t *c, const cJSON *a) {
+    if (!a) return NULL;
+    if (!cJSON_IsArray(a) || cJSON_GetArraySize(a) > CC_MOMENTS_MAX) return "life: moments";
+    for (const cJSON *j = a->child; j; j = j->next) {
+        const cJSON *ev = cJSON_GetObjectItemCaseSensitive(j, "every"), *pk = cJSON_GetObjectItemCaseSensitive(j, "pick");
+        if (!cJSON_IsObject(j) || cJSON_GetArraySize(j) != 2 || !cJSON_IsArray(pk) || !cJSON_GetArraySize(pk) || cJSON_GetArraySize(pk) > CC_PICKS_MAX) return "life: a moment";
+        float e[2];
+        if (!num3(ev, e, 2) || e[0] < 5.f || e[1] < e[0] || e[1] > 3600.f) return "life: a moment's every";
+        moment_t *m = &c->mom[c->nmom++];
+        m->lo = e[0]; m->hi = e[1]; m->n = 0;
+        for (const cJSON *p = pk->child; p; p = p->next) {
+            const cJSON *g = cJSON_GetArrayItem(p, 0), *w = cJSON_GetArrayItem(p, 1);
+            int gi = -1;
+            if (cJSON_IsArray(p) && cJSON_GetArraySize(p) == 2 && cJSON_IsString(g))
+                for (int i = 0; i < c->ngest; i++) if (!strcmp(c->gest[i].name, g->valuestring)) gi = i;
+            if (gi < 0 || !cJSON_IsNumber(w) || !(w->valuedouble > 0)) return "life: a moment's pick";
+            m->gest[m->n] = (int16_t)gi; m->w[m->n++] = (float)w->valuedouble;
+        }
+    }
+    return NULL;
+}
+int cc_moments(const cc_t *c) { return c->nmom; }
+int cc_moment(const cc_t *c, int i, float *lo, float *hi, float *w) {
+    if (i < 0 || i >= c->nmom) return 0;
+    *lo = c->mom[i].lo; *hi = c->mom[i].hi;
+    for (int j = 0; j < c->mom[i].n; j++) w[j] = c->mom[i].w[j];
+    return c->mom[i].n;
+}
+const char *cc_moment_name(const cc_t *c, int i, int j) {
+    return i >= 0 && i < c->nmom && j >= 0 && j < c->mom[i].n ? c->gest[c->mom[i].gest[j]].name : NULL;
+}
+
 int  cc_layers(const cc_t *c) { return c->nlay; }
 void cc_layer(cc_t *c, int i, float by, float w) { if (i >= 0 && i < c->nlay) { c->lay[i].by = by; c->lay[i].w = w; } }
 
@@ -747,8 +784,12 @@ static void start(cc_t *c, int ci, float blend) {
     c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend;
 }
 
-/* a draw from the creature's seed, 0..n-1, never `avoid` (when it is one of the n and there is another) */
-static int draw(cc_t *c, const int16_t *k, int n, int avoid) {
+/* a draw from the creature's seed among the clips that start in family fam (all of them: fam < 0), never `avoid` (when
+ * it is one of them and there is another); -1 when none starts there */
+static int draw(cc_t *c, const int16_t *all, int na, int avoid, int fam) {
+    int16_t k[CC_CHAIN_PICK]; int n = 0;
+    for (int i = 0; i < na; i++) if (fam < 0 || c->clip[all[i]].from == fam) k[n++] = all[i];
+    if (!n) return -1;
     int m = n, skip = -1;
     for (int i = 0; i < n && n > 1; i++) if (k[i] == avoid) { skip = i; m = n - 1; }
     c->rng = c->rng * 1664525u + 1013904223u;
@@ -756,12 +797,18 @@ static int draw(cc_t *c, const int16_t *k, int n, int avoid) {
     if (skip >= 0 && r >= skip) r++;
     return k[r];
 }
-/* a chain's next clip (-1: it is done) */
+/* a chain's next clip (-1: it is done): each a pick among those that start in the pose the clip playing ends in */
 static int chain_next(cc_t *c) {
     if (c->chain_on < 0) return -1;
     const chain_t *h = &c->chain[c->chain_on];
-    if (c->chain_left > 0) { c->chain_left--; return c->chain_prev = draw(c, h->pick[1], h->n[1], c->chain_prev); }
-    if (!c->chain_stage && h->n[2]) { c->chain_stage = 1; return draw(c, h->pick[2], h->n[2], -1); }
+    const int fam = c->clip[c->cur_clip].to;
+    if (c->chain_left > 0) {
+        c->chain_left--;
+        const int k = draw(c, h->pick[1], h->n[1], c->chain_prev, fam);
+        if (k >= 0) return c->chain_prev = k;
+        c->chain_left = 0;
+    }
+    if (!c->chain_stage && h->n[2]) { c->chain_stage = 1; const int k = draw(c, h->pick[2], h->n[2], -1, fam); if (k >= 0) return k; }
     c->chain_on = -1;
     return -1;
 }
@@ -802,6 +849,7 @@ cc_t *cc_create(const void *crv, const char **err) {
     memset(c, 0, sizeof(*c));
     const char *e = parse(c, rig);
     if (!e) e = parse_layers(c, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "layers"));
+    if (!e) e = parse_moments(c, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "moments"));
     if (e) { cc_destroy(c); *err = e; return NULL; }
     const int sit = fam_of(c, "sit");
     c->cur_clip = c->rest_clip[sit >= 0 ? sit : 0];
@@ -903,13 +951,20 @@ static bool act(cc_t *c, const char *name) {
         c->chain_on = i; c->chain_stage = 0; c->chain_prev = -1;
         c->rng = c->rng * 1664525u + 1013904223u;
         c->chain_left = h->rmin + (int)((c->rng >> 8) % (uint32_t)(h->rmax - h->rmin + 1));
-        if (h->n[0]) c->gest[g].clip = (int16_t)draw(c, h->pick[0], h->n[0], -1);
-        else { c->gest[g].clip = (int16_t)(c->chain_prev = draw(c, h->pick[1], h->n[1], -1)); c->chain_left--; }
+        if (h->n[0]) c->gest[g].clip = (int16_t)draw(c, h->pick[0], h->n[0], -1, -1);
+        else { c->gest[g].clip = (int16_t)(c->chain_prev = draw(c, h->pick[1], h->n[1], -1, -1)); c->chain_left--; }
     }
     return true;
 }
 
 bool cc_act(cc_t *c, const char *name) { c->come = 0; return act(c, name); }   /* the agent's: it ends a call */
+
+bool cc_stop(cc_t *c) {   /* clip-player.js stop() */
+    if (c->gesture < 0 || c->come) return false;
+    c->gesture = -1; c->chain_on = -1; c->pending = true;
+    interrupt(c);
+    return true;
+}
 
 void cc_play(cc_t *c, const char *clip) {
     const int k = cc_clip_find(c, clip);

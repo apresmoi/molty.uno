@@ -1358,7 +1358,7 @@ static int terms_cost(const cp_t *c, terms_t t) { int n = 0; for (int k = 0; k <
 static int life_c(cx_t *x, const cJSON *lj) {
     cp_t *c = x->c;
     if (!lj) return 0;
-    static const char *const LK[] = { "ch", "events", "layers", NULL };
+    static const char *const LK[] = { "ch", "events", "layers", "moments", NULL };   /* (moments: creature_clip.c's) */
     TRY(keys_only(x, lj, LK, "creature: life"));
     if (!c->rigged) FAIL(x, "creature: life needs a rig");
     static const char *const IN[] = { "free", "idle_time", "life" };

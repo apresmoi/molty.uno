@@ -21,6 +21,13 @@
  *                (sleepy); a touch, button, shake or command wakes it. A say that played
  *                to its end, the creature back and idle within 8 s: one happy flash (at
  *                most one a minute). "off": none of it (it still dozes off, unyawning).
+ *   moments      a creature whose package lists moments (its habits, docs/CREATURES.md section 12) lives
+ *                its own idle life instead of the library: each moment waits a random time from its
+ *                range (calm: twice as long; off: never), counted only while the library could play
+ *                and the creature plays nothing else, then plays one of its gestures (weighted, never
+ *                the same twice running). A touch, a shake, an agent's command or anything taking the
+ *                screen cuts it at once (fd_take_stop) and every clock waits at least moment_rest_s
+ *                again. Never a sound, never the motor.
  *   actions      an agent's `act` (or a say's action mark) plays once on the creature as
  *                soon as it is on screen, uncovered — waiting up to 3 s, then dropped.
  *   agent moods  quick moods (happy, surprised) revert to idle after a hold; the others
@@ -94,7 +101,15 @@ typedef struct {
     float work_gap_min_s, work_gap_max_s; /* between two work actions: 0.5..1.6        */
     float boot_word_s;                /* boot screen: the word condenses, holds, melts: 2.8 */
     float bye_word_s;                 /* power off: "bye!" comes and holds: 1.5, then dark */
+    float moment_rest_s;              /* after anything cut in, no moment for this long: 10 */
+    float moment_calm;                /* calm: a moment's wait times this: 2                */
+    float moment_scale;               /* every moment's wait times this: 1 (a preview speeds it up) */
 } fd_cfg_t;
+
+/* A creature's moment (fd_set_moments): its wait, a random time in [lo, hi] s, and its picks' weights. */
+#define FD_MOMENTS_MAX 16
+#define FD_PICKS_MAX   16
+typedef struct { float lo, hi; int n; float w[FD_PICKS_MAX]; } fd_moment_t;
 extern const fd_cfg_t FD_CFG_DEFAULT;
 
 typedef struct {
@@ -136,6 +151,18 @@ typedef struct {
     float boot_t;                     /* s into it                                     */
     bool  bye;                        /* fd_bye: saying goodbye, the power goes off after */
     float bye_t;                      /* s into it                                     */
+    /* moments (fd_set_moments): none = the idle library */
+    int   nmom;
+    fd_moment_t mom[FD_MOMENTS_MAX];
+    float mom_left[FD_MOMENTS_MAX];   /* s each waits still (counted only while it may) */
+    int   mom_last[FD_MOMENTS_MAX];   /* its last pick (no immediate repeat)           */
+    int   mom_on;                     /* 1 handed out, 2 seen playing, 0 none          */
+    float mom_on_t;                   /* s since handed out                            */
+    int   mom_m, mom_j;               /* the one to start now (fd_take_moment), -1     */
+    int   mom_req_m, mom_req_j;       /* asked for now (fd_moment_now), -1             */
+    float mom_req_ttl;
+    bool  mom_stop;                   /* one was cut: stop it (fd_take_stop)           */
+    bool  cr_free;                    /* the creature plays nothing but its mood (fd_set_creature_free) */
 } fluid_director_t;
 
 /** Boot: the creature wanted (shown once fd_set_creature(true), the boot word till then). cfg NULL =
@@ -185,6 +212,19 @@ void  fd_set_own_work(fluid_director_t *d, bool own);
 void  fd_turn_spoken(fluid_director_t *d);
 /** The action to start on the creature now (an agent's, or idle life's), -1 = none. */
 int   fd_take_act(fluid_director_t *d);
+/** The creature's moments (its package's life.moments; n 0: none, the idle library plays). Their clocks start over. */
+void  fd_set_moments(fluid_director_t *d, const fd_moment_t *m, int n);
+/** Each frame: the creature plays nothing but its mood (a rigged one: no gesture, call, way between poses or walk). */
+void  fd_set_creature_free(fluid_director_t *d, bool free);
+/** The moment to start now, and which of its picks: false = none. Never a sound, never the motor. */
+bool  fd_take_moment(fluid_director_t *d, int *m, int *pick);
+/** The moment playing was cut short (a touch, a shake, a command, the screen taken): stop it now. Once. */
+bool  fd_take_stop(fluid_director_t *d);
+/** Play moment m's pick now (a preview's button): cuts the one playing, starts once the creature is free (or dropped
+ *  after act_ttl_s * 4 if idle life cannot play). */
+void  fd_moment_now(fluid_director_t *d, int m, int pick);
+/** A moment plays (handed out and not yet over). */
+bool  fd_moment_on(const fluid_director_t *d);
 /** Whether the scene player has a scene, once per frame: the scene state with none left
  *  goes back to the creature on the next fd_tick. */
 void  fd_set_scene(fluid_director_t *d, bool playing);

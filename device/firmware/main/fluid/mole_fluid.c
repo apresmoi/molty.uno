@@ -1174,13 +1174,16 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     fd_set_scene(&s_dir, scene_playing(&s_sp));
     fd_set_busy(&s_dir, s_listen || s_follow, covered);
+    fd_set_creature_free(&s_dir, cpk_free(s_cpk));
     if (atomic_load(&s_bye) && !s_dir.bye) fd_bye(&s_dir);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);
     if (scene_playing(&s_sp) && !fd_scene_wanted(&s_dir)) scene_clear(&s_sp);   /* another state took the screen */
     {   /* an action to start: an agent's, or idle life's (never a sound) */
-        int a = fd_take_act(&s_dir);
+        if (fd_take_stop(&s_dir)) cpk_moment_stop(s_cpk);   /* a moment cut short: home through its ways */
+        int a = fd_take_act(&s_dir), m, j;
         if (a >= 0) { motion(); cr_act(a); }
+        if (fd_take_moment(&s_dir, &m, &j)) { motion(); cpk_moment(s_cpk, m, j); }   /* a habit: never a sound, nor the motor */
     }
 
     const bool asking = s_ask.scr.phase == FLUID_ASK_SHOW;
@@ -1596,7 +1599,11 @@ static void adopt_creature(cr_job_t *j) {
         s_req_act = -1;                                /* an id meant for the creature that was */
     }
     xSemaphoreGive(s_mutex);
-    if (rt || k) fd_set_own_work(&s_dir, k != NULL);
+    if (rt || k) {
+        fd_set_own_work(&s_dir, k != NULL);
+        fd_moment_t mom[FD_MOMENTS_MAX];   /* its own habits, or the idle library (none) */
+        fd_set_moments(&s_dir, mom, k ? cpk_moments(k, mom, FD_MOMENTS_MAX) : 0);
+    }
     heap_caps_free(spec);
 }
 

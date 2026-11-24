@@ -26,6 +26,7 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
     .boot_word_s = 2.8f,
     .bye_word_s = 1.5f,
+    .moment_rest_s = 10.f, .moment_calm = 2.f, .moment_scale = 1.f,
 };
 
 /* flashes: a say that ended well (happy), a shake (surprised) */
@@ -79,6 +80,90 @@ static int idle_pick(fluid_director_t *d) {
     return pick;
 }
 
+/* ── moments ─────────────────────────────────────────────────────────────── */
+
+static float moment_gap(fluid_director_t *d, int i) {
+    const fd_moment_t *m = &d->mom[i];
+    const float k = (d->idle_life == FD_IDLE_CALM ? d->cfg.moment_calm : 1.f) * d->cfg.moment_scale;
+    return (m->lo + (m->hi - m->lo) * frand(d)) * k;
+}
+/* every clock new, and none under rest s */
+static void moments_wait(fluid_director_t *d, float rest) {
+    for (int i = 0; i < d->nmom; i++) { const float g = moment_gap(d, i); d->mom_left[i] = g > rest ? g : rest; }
+}
+/* weighted, never its last pick again */
+static int moment_pick(fluid_director_t *d, int i) {
+    const fd_moment_t *m = &d->mom[i];
+    float sum = 0.f;
+    for (int j = 0; j < m->n; j++) if (m->n == 1 || j != d->mom_last[i]) sum += m->w[j];
+    float r = frand(d) * sum;
+    int pick = -1;
+    for (int j = 0; j < m->n; j++) {
+        if (m->n > 1 && j == d->mom_last[i]) continue;
+        pick = j;
+        if ((r -= m->w[j]) < 0.f) break;
+    }
+    return pick;
+}
+/* something cut in: the moment playing stops, and every clock waits again (at least moment_rest_s) */
+static void moments_cut(fluid_director_t *d) {
+    if (!d->nmom) return;
+    if (d->mom_on) { d->mom_stop = true; d->mom_on = 0; }
+    d->mom_m = -1;
+    moments_wait(d, d->cfg.moment_rest_s * d->cfg.moment_scale);
+}
+
+void fd_set_moments(fluid_director_t *d, const fd_moment_t *m, int n) {
+    if (n < 0) n = 0;
+    if (n > FD_MOMENTS_MAX) n = FD_MOMENTS_MAX;
+    d->nmom = 0; d->mom_on = 0; d->mom_m = d->mom_req_m = -1; d->mom_stop = false;
+    for (int i = 0; i < n; i++) {
+        d->mom[i] = m[i];
+        if (d->mom[i].n > FD_PICKS_MAX) d->mom[i].n = FD_PICKS_MAX;
+        d->mom_last[i] = -1;
+    }
+    d->nmom = n;
+    moments_wait(d, 0.f);
+}
+void fd_set_creature_free(fluid_director_t *d, bool free) { d->cr_free = free; }
+bool fd_take_moment(fluid_director_t *d, int *m, int *pick) {
+    if (d->mom_m < 0) return false;
+    *m = d->mom_m; *pick = d->mom_j; d->mom_m = -1;
+    return true;
+}
+bool fd_take_stop(fluid_director_t *d) { const bool s = d->mom_stop; d->mom_stop = false; return s; }
+void fd_moment_now(fluid_director_t *d, int m, int pick) {
+    if (m < 0 || m >= d->nmom || pick < 0 || pick >= d->mom[m].n) return;
+    if (d->mom_on) { d->mom_stop = true; d->mom_on = 0; }
+    d->mom_req_m = m; d->mom_req_j = pick; d->mom_req_ttl = d->cfg.act_ttl_s * 4.f;
+}
+bool fd_moment_on(const fluid_director_t *d) { return d->mom_on != 0; }
+
+/* each frame: a moment playing is followed to its end (or cut when its ground goes); while one may start (ok), the clocks
+ * count and the first one out starts */
+static void moments_tick(fluid_director_t *d, float dt, bool ground, bool ok) {
+    if (d->mom_on) {
+        d->mom_on_t += dt;
+        if (!ground) moments_cut(d);                                   /* a mood, a flash, a listen, the screen taken */
+        else if (!d->cr_free) d->mom_on = 2;                           /* it plays */
+        else if (d->mom_on == 2 || d->mom_on_t > 1.f) d->mom_on = 0;   /* it is over (or never began) */
+        return;
+    }
+    if (d->mom_req_m >= 0) {                                           /* asked for now */
+        if (ok) { d->mom_m = d->mom_req_m; d->mom_j = d->mom_req_j; d->mom_req_m = -1; d->mom_on = 1; d->mom_on_t = 0.f; return; }
+        if ((d->mom_req_ttl -= dt) <= 0.f) d->mom_req_m = -1;
+    }
+    if (!ok) return;
+    for (int i = 0; i < d->nmom; i++) {
+        if ((d->mom_left[i] -= dt) > 0.f) continue;
+        d->mom_left[i] = moment_gap(d, i);
+        const int j = moment_pick(d, i);
+        if (j < 0) continue;
+        d->mom_last[i] = j; d->mom_m = i; d->mom_j = j; d->mom_on = 1; d->mom_on_t = 0.f;
+        return;                                                        /* one at a time; the others wait on */
+    }
+}
+
 static int work_pick(fluid_director_t *d) {
     float sum = 0.f;
     for (int i = 0; i < WORK_N; i++) if (WORK_LIB[i].act != d->work_last) sum += WORK_LIB[i].w;
@@ -130,6 +215,7 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     d->last_idle = d->act_req = d->act_start = d->work_last = -1;
     d->since_convo = 1e9f;
     d->next_idle = idle_gap(d);
+    d->mom_m = d->mom_req_m = -1; d->cr_free = true;
     go(d, FD_ST_CREATURE);              /* home: the boot word until a creature loads */
 }
 
@@ -184,6 +270,7 @@ float fd_default_hold(int mood) {
 void fd_activity(fluid_director_t *d) {
     d->asleep = false; d->quiet = 0.f; d->yawned = false;
     d->next_idle = idle_gap(d);            /* no idle action right after a command */
+    moments_cut(d);                        /* nor a moment: one playing stops */
 }
 
 void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
@@ -207,12 +294,13 @@ bool fd_working(const fluid_director_t *d) { return d->work_left > 0.f; }
 
 void fd_set_own_work(fluid_director_t *d, bool own) { d->own_work = own; }
 
-void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; }
+void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; moments_cut(d); }
 
 void fd_set_idle_life(fluid_director_t *d, int level) {
     if (level < 0 || level >= FD_IDLE_COUNT || level == d->idle_life) return;
     d->idle_life = level;
     d->next_idle = idle_gap(d);
+    if (d->nmom) moments_wait(d, 0.f);
     if (level == FD_IDLE_OFF) d->convo_left = 0.f;
 }
 
@@ -298,8 +386,10 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     if (shown && d->held == CM_IDLE) {
         if (!d->asleep && d->quiet >= d->cfg.sleep_after_s) { d->asleep = true; d->flash = -1; d->convo_left = 0.f; }
     }
-    const bool free = shown && !d->boot && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
-                      d->idle_life != FD_IDLE_OFF && d->acting_left <= 0.f && d->act_start < 0;
+    /* ground: idle life may play at all; free: and nothing plays now (a moment playing included) */
+    const bool ground = shown && !d->boot && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
+                        d->idle_life != FD_IDLE_OFF;
+    const bool free = ground && d->acting_left <= 0.f && d->act_start < 0 && !d->mom_on;
     if (free && !d->yawned && d->quiet >= d->cfg.sleep_after_s - d->cfg.yawn_lead_s) {
         d->yawned = true;                  /* dozing off: a yawn first */
         start_act(d, CA_YAWN, cute_act_dur(CA_YAWN));
@@ -309,10 +399,14 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
             d->convo_left = 0.f; d->since_convo = 0.f;
             d->next_idle = idle_gap(d);
         }
-    } else if (free && (d->next_idle -= dt) <= 0.f) {
+    } else if (free && !d->nmom && (d->next_idle -= dt) <= 0.f) {   /* (a creature with moments lives its own) */
         int a = idle_pick(d);
         if (a >= 0) { start_act(d, a, cute_act_dur(a)); d->last_idle = a; }
         d->next_idle = idle_gap(d);
+    }
+    if (d->nmom) {   /* (after the yawn and the flash: neither starts over a moment, and a moment never over them) */
+        const bool g = ground && d->act_req < 0 && d->act_start < 0;
+        moments_tick(d, dt, g, g && d->acting_left <= 0.f && d->cr_free);
     }
     if (d->convo_left > 0.f && (d->convo_left -= dt) <= 0.f) d->convo_left = 0.f;
 

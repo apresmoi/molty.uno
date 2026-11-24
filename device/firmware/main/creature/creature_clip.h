@@ -38,8 +38,10 @@ extern "C" {
 #define CC_POSE       10          /* per node: t (3), r (4, x y z w), s (3)                          */
 #define CC_LAYERS_MAX 16          /* life layers declared                                             */
 #define CC_LAYERS_ON  8           /* ...and played in a frame (weight over 0.01), the first ones        */
-#define CC_CHAIN_MAX  4           /* gestures played as a chain of clips (graph.chains)                */
-#define CC_CHAIN_PICK 8           /* ...and clips a chain picks from at each step                      */
+#define CC_CHAIN_MAX  8           /* gestures played as a chain of clips (graph.chains)                */
+#define CC_CHAIN_PICK 16          /* ...and clips a chain picks from at each step                      */
+#define CC_MOMENTS_MAX 16         /* life.moments: gestures it plays by itself (the device's clock)      */
+#define CC_PICKS_MAX  16          /* ...and gestures each picks from                                  */
 
 enum { CC_BLOB, CC_ELL, CC_CAP, CC_CONE, CC_CYL, CC_PATCH };
 /* outline groups (in the depth buffer), then features */
@@ -81,9 +83,19 @@ void cc_seed(cc_t *c, uint32_t seed);
  *  back to its mood. cc_act and cc_play end a call. */
 bool cc_come(cc_t *c, const char *first);
 bool cc_coming(const cc_t *c);
+/** End the gesture playing (a habit cut short: docs/CREATURES.md section 12, "Moments"): it goes home to its mood now,
+ *  through the authored ways between poses (a crossfade into the way back, as a call does). A call is left alone; false
+ *  when nothing was stopped. */
+bool cc_stop(cc_t *c);
 /** Play a clip at once (no route; the preview's player and the tests). */
 void cc_play(cc_t *c, const char *clip);
 
+/** Its moments (creature.life.moments, docs/CREATURES.md section 12): how many; moment i's wait (seconds, lo..hi) and its
+ *  picks' weights into w (CC_PICKS_MAX), returning how many; pick j's gesture by name (cc_act plays it). The clock is the
+ *  device's (fluid_director.h). */
+int  cc_moments(const cc_t *c);
+int  cc_moment(const cc_t *c, int i, float *lo, float *hi, float *w);
+const char *cc_moment_name(const cc_t *c, int i, int j);
 /** Its life layers: how many; layer i's place (the signal it is moved by) and weight this frame, set before cc_update. */
 int  cc_layers(const cc_t *c);
 void cc_layer(cc_t *c, int i, float by, float w);

@@ -16,6 +16,9 @@
  * (no idle life) until the link is ready, the ttl, or at once without Wi-Fi, then dissolves into
  * the human's creature (or carries on when it is theirs); anything wanting the screen ends it;
  * a creature made late (or never): the word stays in its place, never the blob.
+ * Moments (a creature's own habits): their spacing per idle life, the same seed the same schedule, never over anything
+ * else, cut at once by a touch, a shake, a command or the screen taken (and none for moment_rest_s after), the library
+ * off for such a creature.
  *
  * Build + run: test/host/director_build.sh
  */
@@ -656,6 +659,138 @@ static void test_replay(void) {
     CHECK(fd_solidity(&D, 1.f) > 0.99f, "replayed creature settles again: %f", fd_solidity(&D, 1.f));
 }
 
+/* ── moments: a creature that plays each handed-out habit for PLAY_S (cr_free false), or ~1 s more once cut ── */
+#define PLAY_S 12.f
+#define MLOG 512
+static int s_nm, s_mm[MLOG], s_mj[MLOG], s_stops;
+static double s_mt[MLOG];
+static float s_busy_left;                 /* the creature playing a habit (or going home) */
+static void mframe(bool text_done) {
+    fd_set_creature_free(&D, s_busy_left <= 0.f);
+    fd_tick(&D, DT, text_done);
+    fd_take(&D, NULL);
+    if (fd_take_stop(&D)) { s_stops++; if (s_busy_left > 1.f) s_busy_left = 1.f; }
+    int a = fd_take_act(&D), m, j;
+    if (a >= 0 && s_nact < ACT_LOG) { s_act[s_nact] = a; s_act_t[s_nact++] = s_now; }
+    if (fd_take_moment(&D, &m, &j)) { if (s_nm < MLOG) { s_mm[s_nm] = m; s_mj[s_nm] = j; s_mt[s_nm++] = s_now; } s_busy_left = PLAY_S; }
+    if (s_busy_left > 0.f) s_busy_left -= DT;
+    s_now += DT;
+}
+static void mrun(float s) { for (int n = (int)lrintf(s / DT); n > 0; n--) mframe(false); }
+/* the same, with a touch whenever it would soon doze off and nothing plays (someone near: it stays awake) */
+static void mawake(float s) {
+    for (int n = (int)lrintf(s / DT); n > 0; n--) { if (D.quiet > 240.f && s_busy_left <= 0.f) fd_user(&D); mframe(false); }
+}
+static const fd_moment_t HABITS[2] = { { 40.f, 90.f, 4, { 3.f, 2.f, 2.f, 1.f } }, { 300.f, 600.f, 1, { 1.f } } };
+static void mboot(int level, uint32_t seed) {
+    fd_init(&D, NULL, seed);
+    fd_set_creature(&D, true);
+    fd_set_moments(&D, HABITS, 2);
+    fd_set_idle_life(&D, level);
+    s_melts = s_nact = s_nm = s_stops = 0; s_now = 0.f; s_busy_left = 0.f;
+}
+/* a long quiet stretch with a touch now and then (no dozing off): the gaps between one habit's end and the next */
+static void mspan(int level, uint32_t seed, float span, float *lo, float *hi, float *mean) {
+    mboot(level, seed);
+    *lo = 1e9f; *hi = 0.f; *mean = 0.f;
+    double end = 0.0; int n = 0;
+    for (int i = 0; i < (int)(span / DT); i++) {
+        if (D.quiet > 240.f && s_busy_left <= 0.f) { fd_user(&D); end = s_now + DT; }   /* a touch, so it never dozes off */
+        const int before = s_nm;
+        mframe(false);
+        if (s_nm > before) {
+            const float g = (float)(s_now - DT - end);
+            if (s_nm > 1 || end > 0.0) { if (g < *lo) *lo = g; if (g > *hi) *hi = g; *mean += g; n++; }
+            end = s_now - DT + PLAY_S;
+        }
+    }
+    *mean = n ? *mean / (float)n : 0.f;
+}
+static void test_moments(void) {
+    float lo, hi, mean;
+    mspan(FD_IDLE_LIVELY, 4242, 3600.f, &lo, &hi, &mean);
+    printf("  moments, lively: %d in an hour, a wait %.1f..%.1f s (mean %.1f)\n", s_nm, lo, hi, mean);
+    CHECK(s_nm >= 30 && lo >= 10.f - 0.1f && hi <= 90.f + 0.2f, "lively: %d moments, waits %.1f..%.1f s", s_nm, lo, hi);
+    CHECK(s_nact == 0, "a creature with moments: no idle library (%d actions)", s_nact);
+    int repeats = 0, picks[4] = { 0 };
+    for (int i = 1; i < s_nm; i++) if (s_mm[i] == 0 && s_mm[i - 1] == 0 && s_mj[i] == s_mj[i - 1]) repeats++;
+    for (int i = 0; i < s_nm; i++) if (s_mm[i] == 0) picks[s_mj[i]]++;
+    CHECK(repeats == 0, "never the same habit twice running: %d", repeats);
+    CHECK(picks[0] > picks[3] && picks[1] > 0 && picks[2] > 0 && picks[3] > 0, "weighted: %d %d %d %d", picks[0], picks[1], picks[2], picks[3]);
+    const int lively = s_nm;
+    mspan(FD_IDLE_CALM, 4242, 3600.f, &lo, &hi, &mean);
+    printf("  moments, calm: %d in an hour, a wait %.1f..%.1f s (mean %.1f)\n", s_nm, lo, hi, mean);
+    CHECK(s_nm > 0 && s_nm < lively && hi <= 180.f + 0.2f && mean > 60.f, "calm: %d moments (lively %d), waits %.1f..%.1f", s_nm, lively, lo, hi);
+    mspan(FD_IDLE_OFF, 4242, 3600.f, &lo, &hi, &mean);
+    CHECK(s_nm == 0 && s_nact == 0, "off: %d moments, %d actions", s_nm, s_nact);
+
+    /* the same seed, the same schedule; another seed, another */
+    mboot(FD_IDLE_LIVELY, 99); mawake(900.f);
+    int n1 = s_nm, m1[MLOG], j1[MLOG]; double t1[MLOG];
+    for (int i = 0; i < n1; i++) { m1[i] = s_mm[i]; j1[i] = s_mj[i]; t1[i] = s_mt[i]; }
+    mboot(FD_IDLE_LIVELY, 99); mawake(900.f);
+    bool same = n1 == s_nm && n1 > 3;
+    for (int i = 0; same && i < n1; i++) same = m1[i] == s_mm[i] && j1[i] == s_mj[i] && t1[i] == s_mt[i];
+    CHECK(same, "the same seed, the same habits at the same times (%d)", n1);
+    mboot(FD_IDLE_LIVELY, 100); mawake(900.f);
+    bool other = n1 != s_nm;
+    for (int i = 0; !other && i < n1; i++) other = t1[i] != s_mt[i] || j1[i] != s_mj[i];
+    CHECK(other, "another seed, another schedule");
+
+    /* never while anything else goes on */
+    mboot(FD_IDLE_LIVELY, 7);
+    fd_set_busy(&D, true, false); mawake(200.f);
+    CHECK(s_nm == 0, "listening or speaking: %d", s_nm);
+    fd_set_busy(&D, false, true); mawake(200.f);
+    CHECK(s_nm == 0, "a question up: %d", s_nm);
+    fd_set_busy(&D, false, false);
+    fd_agent_mood(&D, CM_THINKING, 0.f); mawake(200.f);
+    CHECK(s_nm == 0, "thinking: %d", s_nm);
+    fd_agent_work(&D, 110.f); mawake(100.f);
+    CHECK(s_nm == 0, "working: %d", s_nm);
+    fd_agent_mood(&D, CM_IDLE, -1.f);
+    fd_set_scene(&D, true); request(FD_ST_SCENE, false); mawake(200.f);
+    CHECK(D.cur == FD_ST_SCENE && s_nm == 0, "a scene up: %d", s_nm);
+    fd_set_scene(&D, false); request(FD_ST_CREATURE, false);
+    s_busy_left = 1e9f; mawake(200.f);          /* the creature busy with something of its own (an agent's gesture, a call) */
+    CHECK(s_nm == 0, "while another gesture plays: %d", s_nm);
+    s_busy_left = 0.f; mawake(95.f);
+    CHECK(s_nm == 1, "then it comes: %d", s_nm);
+
+    /* cut at once, then a rest */
+    static const char *const WHAT[5] = { "a touch", "a shake", "an agent's mood", "an agent's gesture", "a listen" };
+    for (int w = 0; w < 5; w++) {
+        mboot(FD_IDLE_LIVELY, 31 + (uint32_t)w);
+        while (s_nm == 0 && s_now < 200.0) mframe(false);
+        mrun(2.f);
+        CHECK(fd_moment_on(&D), "%s: a habit plays", WHAT[w]);
+        const int stops = s_stops;
+        if (w == 0) fd_user(&D);
+        else if (w == 1) fd_shake(&D);
+        else if (w == 2) fd_agent_mood(&D, CM_HAPPY, -1.f);
+        else if (w == 3) fd_agent_act(&D, CA_NOD, 2.f);
+        else fd_set_busy(&D, true, false);
+        mframe(false);
+        CHECK(s_stops == stops + 1 && !fd_moment_on(&D), "%s cuts it at once (stops %d)", WHAT[w], s_stops - stops);
+        if (w == 4) fd_set_busy(&D, false, false);
+        const int n = s_nm; const double t0 = s_now;
+        while (s_nm == n && s_now - t0 < 300.0) mframe(false);
+        CHECK(s_now - t0 >= 10.0 - DT, "%s: none for %.1f s after", WHAT[w], s_now - t0);
+    }
+
+    /* asked for now (a preview's button): it plays that one, cutting the one playing */
+    mboot(FD_IDLE_LIVELY, 5);
+    mrun(3.f);
+    fd_moment_now(&D, 0, 2); mrun(1.f);
+    CHECK(s_nm == 1 && s_mm[0] == 0 && s_mj[0] == 2, "asked for: %d (%d %d)", s_nm, s_nm ? s_mm[0] : -1, s_nm ? s_mj[0] : -1);
+    fd_moment_now(&D, 0, 1); mrun(3.f);
+    CHECK(s_stops == 1 && s_nm == 2 && s_mj[1] == 1, "asked over one playing: cut (%d), then it (%d)", s_stops, s_nm);
+
+    /* no moments: the library as before */
+    mboot(FD_IDLE_LIVELY, 12345); fd_set_moments(&D, NULL, 0); mrun(120.f);
+    CHECK(s_nm == 0 && s_nact >= 2, "no moments: the library plays (%d actions)", s_nact);
+}
+
 int main(void) {
     printf("director host test\n");
     test_boot();
@@ -676,6 +811,7 @@ int main(void) {
     test_status();
     test_bye();
     test_replay();
+    test_moments();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }

@@ -13,6 +13,7 @@
 #include "creature_body.h"
 #include "creature_player.h"
 #include "mood_engine.h"
+#include "fluid_director.h"   /* fd_moment_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -58,6 +59,15 @@ void   cpk_weather_dots(const cpk_t *k, int out[4]);
 /** A rigged creature plays a gesture of its own by name now, only if nothing but its mood plays (cc_free): true if it
  *  started. */
 bool   cpk_gesture(cpk_t *k, const char *name);
+/** It plays nothing but its mood (a channel creature: always). */
+bool   cpk_free(const cpk_t *k);
+/** Its moments (life.moments, docs/CREATURES.md section 12) for the director (fd_set_moments): how many, at most max. */
+int    cpk_moments(const cpk_t *k, fd_moment_t *out, int max);
+/** Play moment m's pick (the director's fd_take_moment): never a sound, never the motor. False when it has none such. */
+bool   cpk_moment(cpk_t *k, int m, int pick);
+/** Cut the moment playing short (fd_take_stop): it goes home to its mood through its ways between poses. An agent's
+ *  gesture or a call playing instead is left alone. */
+void   cpk_moment_stop(cpk_t *k);
 /** A rigged creature's dots: the share of their rows' work on the calling core (cd_set_share), the rest on the other. */
 void   cpk_set_share(cpk_t *k, int pct);
 /** The listen ring over a rigged creature, given directly (creature_ring.h cr_listen): its colour (0xRRGGBB, -1: the
