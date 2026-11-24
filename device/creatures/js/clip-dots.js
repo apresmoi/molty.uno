@@ -162,7 +162,7 @@ export function clipDots(rig, W, H) {
           if ((g === gid.hindL || g === gid.hindR) && h === gid.torso && dotUV(X, Y)[1] > hip[STRUCT[g]]) continue;   // no line over the rump
           line = true; break;
         }
-        if (line) set(i, g === gid.bowl || g === gid.yarn ? pal.bowl : shade(z[i]), 2);
+        if (line) set(i, g === gid.bowl ? pal.bowl : g === gid.yarn ? pal.yarn ?? pal.bowl : shade(z[i]), 2);   // the ball's own colour, else the bowl's
       }
       // 4. features, where they are seen
       const visible = (i, zz) => zz >= z[i] - 0.02;

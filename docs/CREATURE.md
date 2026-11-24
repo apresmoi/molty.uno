@@ -74,7 +74,8 @@ its parent. A shape sits `on` a bone and moves with it.
 Every shape names a `color` (one of `colors`) and an `outline`: the part it belongs to. Shapes of one part are
 drawn as one outlined form. A Molty has these parts, outlined: `torso` `head` `tail` `legF.L` `legF.R` `hindL`
 `hindR` `bowl` `yarn`; and these features: `eye` `nose` `maw` `tongue` `earIn` `whisker` `chest` `milk` `yarnline`.
-Outlined parts are painted from the color `body`, eyes from `iris` and `shine`; `check` says which colors you need.
+Outlined parts are painted from the color `body`, eyes from `iris` and `shine`, the bowl from `bowl` and the yarn from
+`yarn` (or `bowl` when it has none); `check` says which colors you need.
 
 ## Actions
 

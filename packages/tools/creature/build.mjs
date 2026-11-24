@@ -25,6 +25,7 @@ const KIND = { blob: 'blob', ellipsoid: 'ell', capsule: 'cap', cone: 'cone', cyl
 const kb = (n) => `${(n / 1024).toFixed(1)} KB`, list = (names) => names.join(', ') || 'none';
 const said = (v) => (typeof v === 'string' ? { about: v } : v);
 // the colors the device paints a part with, whatever color its shapes name (clip-dots.js)
+// (the yarn is painted with colors.yarn when the Molty gives one, else with bowl)
 const PAINTS = { eye: ['iris', 'shine'], nose: ['nose'], tongue: ['nose'], maw: ['nose'], milk: ['belly'], chest: ['belly'], earIn: ['ear'], whisker: ['whisker'], bowl: ['bowl'], yarn: ['bowl'] };
 
 /** A shape as the device takes it. The fields' order is the one each kind has always had in the cat's package. */
