@@ -114,7 +114,8 @@ export function checkPackage(pkg, id) {
   const bad = [];
   const top = ['v', 'id', 'name', 'version', 'kind', 'assets', 'layouts', 'creature'];
   for (const k of Object.keys(pkg)) if (!top.includes(k)) bad.push(`unknown top-level field ${k}`);
-  if (pkg.v !== 'molty-pkg/1') bad.push('v must be "molty-pkg/1"');
+  // molty-pkg/2: a creature whose rig packs its clips (docs/CREATURES.md section 12); firmware before it refuses the file
+  if (pkg.v !== 'molty-pkg/1' && !(pkg.v === 'molty-pkg/2' && pkg.creature?.rig)) bad.push('v must be "molty-pkg/1" ("molty-pkg/2" for a creature with a rig)');
   if (!ID_RE.test(pkg.id ?? '') || (id && pkg.id !== id)) bad.push(`id must be ${id ?? '[a-z0-9-]{1,32}'}`);
   if (typeof pkg.name !== 'string' || !pkg.name || pkg.name.length > 32) bad.push('name must be 1..32 characters');
   if (!/^\d+\.\d+\.\d+$/.test(pkg.version ?? '')) bad.push('version must be X.Y.Z');

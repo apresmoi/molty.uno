@@ -43,7 +43,7 @@ export function limits(cr) {
 }
 
 for (const { id, file, pkg } of creatures) test(`creature package ${id}`, () => {
-  assert.equal(pkg.v, 'molty-pkg/1'); assert.equal(pkg.id, id);
+  assert.equal(pkg.v, pkg.creature.rig ? 'molty-pkg/2' : 'molty-pkg/1'); assert.equal(pkg.id, id);   // 2: a rig's clips packed (docs/CREATURES.md section 12)
   const max = pkg.creature.rig ? 256 * 1024 : 40 * 1024;   // a rigged creature carries its baked clips (docs/CREATURES.md section 12)
   assert.ok(statSync(file).size <= max, `${id} is ${statSync(file).size} bytes, over ${max / 1024} KB`);
   for (const [v, max, what] of limits(pkg.creature)) assert.ok(v <= max, `${id}: ${v} ${what}, limit ${max}`);

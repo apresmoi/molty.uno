@@ -14,6 +14,8 @@
 // crossfades (graph.blend seconds, eased) only between clips of the same family. A loop listed in graph.sync (the walk) is
 // left and joined at the phase that matches, so a stepping paw is never cut mid-stride.
 
+import { unpackClip } from './clip-pack.js';
+
 export const MOODS = ['idle', 'listening', 'thinking', 'speaking', 'happy', 'sleepy', 'surprised'];
 
 const b64 = (s) => (typeof atob === 'function' ? Uint8Array.from(atob(s), (c) => c.charCodeAt(0)) : new Uint8Array(Buffer.from(s, 'base64')));
@@ -33,9 +35,11 @@ const EPS = 1e-5;   // a clip's end, against float clocks (the C player's time i
 /** Decode a clip's channels: per channel the node, path, keys (frames) and float outputs. */
 const INTERP = { S: 'STEP', L: 'LINEAR', C: 'CUBICSPLINE' };
 export function decodeClip(c, scale) {
-  return { ...c, ch: c.ch.map((h) => {
-    if (Array.isArray(h)) h = { node: h[0], path: h[1], interp: INTERP[h[2]], ct: h[3] === 1 ? 'i8' : 'i16', in: h[4], out: h[5] };   // the package's compact form
-    const b8 = h.ct === 'i8', k = b8 ? 127 : scale[h.path], keys = c.frames < 256 ? b64(h.in) : u16(h.in), raw = b8 ? i8(h.out) : i16(h.out), out = new Float32Array(raw.length);
+  const ch = c.pk !== undefined ? unpackClip(c.pk).map((h) => ({ node: h.node, path: h.path, interp: INTERP[h.interp], ct: h.b8 ? 'i8' : 'i16', keys: h.keys, raw: h.vals }))   // packed
+    : c.ch.map((h) => (Array.isArray(h) ? { node: h[0], path: h[1], interp: INTERP[h[2]], ct: h[3] === 1 ? 'i8' : 'i16', in: h[4], out: h[5] } : h));   // the plain compact form
+  const { pk, ...rest } = c;
+  return { ...rest, ch: ch.map((h) => {
+    const b8 = h.ct === 'i8', k = b8 ? 127 : scale[h.path], keys = h.keys ?? (c.frames < 256 ? b64(h.in) : u16(h.in)), raw = h.raw ?? (b8 ? i8(h.out) : i16(h.out)), out = new Float32Array(raw.length);
     for (let i = 0; i < raw.length; i++) out[i] = raw[i] / k;
     return { node: h.node, path: h.path, cubic: h.interp === 'CUBICSPLINE', linear: h.interp === 'LINEAR', keys, out, w: WIDTH[h.path] };
   }) };

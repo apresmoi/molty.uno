@@ -226,8 +226,8 @@ device installs; `preview` shows every mood, gesture and action moving, on your 
 
 | what | limit |
 |---|---|
-| bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 64, 8, 32; 24 |
-| the built Molty | 256 KB, as every file in this repo, which is also the agents' plugin (its loaders refuse a file of 256 KB or more); the cat, with 54 actions, is 255 KB |
+| bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 96, 8, 32; 24 |
+| the built Molty | 256 KB, as every file in this repo, which is also the agents' plugin (its loaders refuse a file of 256 KB or more); `build` packs the actions' keys, so the cat, with 54 actions, is 158 KB |
 | life: signals, layers; its work a frame | 64, 16; 600 steps (`build` says how many; the cat's are 44) |
 | words in `about`, `look`, a mood's or a gesture's line | plain ASCII; 160, 240, 100 letters |
 | action keys in a body file | straight-line or held keys; curve keys are refused: save one key a frame |

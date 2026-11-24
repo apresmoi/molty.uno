@@ -69,7 +69,7 @@
       "properties": {
         "bones": { "type": "array", "minItems": 1, "maxItems": 80, "items": { "$ref": "#/$defs/bone" }, "description": "The skeleton, each bone after its parent. Units are the body's own (a cat stands about 0.6 high); y is up, it faces +z, its left is +x." },
         "shapes": { "type": "array", "minItems": 1, "maxItems": 128, "items": { "$ref": "#/$defs/shape" }, "description": "What is drawn: rounded shapes, each on a bone." },
-        "actions": { "type": "object", "minProperties": 1, "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/action" }, "description": "What it can do, by name." }
+        "actions": { "type": "object", "minProperties": 1, "maxProperties": 96, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "$ref": "#/$defs/action" }, "description": "What it can do, by name." }
       },
       "description": "A body written by hand."
     },

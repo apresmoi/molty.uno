@@ -304,6 +304,24 @@ per output component.
   0.008 (other quaternions), 0.02 (the int8 tail, ears and face), 0.02 (scale; 0.05 for eyelids and mouth) of every
   sample; each channel takes LINEAR or CUBICSPLINE, whichever is smaller.
 
+**Packed clips** (`"v": "molty-pkg/2"`). A clip may hold `pk` instead of `ch`: the same channels, the same keys and the same
+integers, written as one base64 string of bits (least significant first in each byte), so it plays exactly as its plain
+form (the clip test plays every frame of every clip both ways and wants the same world matrices, bit for bit). It is how
+the Molty tools write every rig: the cat 2.2.0's channels take 130 KB instead of 227 KB.
+
+```
+clip      count of channels (16 bits), then each channel
+channel   node (8), path (2: t r s), interp (2: S L C), one byte a value (1: the int8 rotations), keys n (16)
+          keys: the first (16), then if n > 1 a width w (5) and the n - 1 steps less one (w bits each)
+          each value component (3 for t and s, 4 for r; three times that for C): the first (16, or 8, two's complement),
+          then if n > 1 a width w (5) and the n - 1 steps (w bits each, zigzag: 0, -1, 1, -2, ...)
+```
+
+A series costs the bits of its largest step, and a turn moves little from one key to the next. `device/creatures/js/clip-pack.js`
+writes and reads it (the JS player's decoder; the C one is `creature_clip.c` `unpack_clip`). A package with packed clips says
+`"v": "molty-pkg/2"`: firmware before it refuses the file at install ("package: v", answered as `bad_package`), so it is never
+stored, and never fails at a boot. A plain clip (`ch`) still plays, in either version.
+
 **Shape** `{ k, b, g, c, p, ... }`: `k` the kind, `b` the node, `g` the outline group, `c` a palette name, `p` its centre:
 - `blob` (`q`, `r` radii, `st` stiffness): one element of the merged body: a metaball field st (1 - q)^3, threshold 0.6
   (Blender's), so the back, rump and legs are one smooth shape in every pose;
@@ -384,6 +402,7 @@ existed (the creature test pins the duck, the octopus and the cat 2.0.0 frame fo
   multiplied; only its `nodes` (all when left out), and only channels that move. A turn layer turns its `nodes` by
   `rot` degrees a unit of `by` (as a bone's turn) and stretches them by `sq` a unit (up, thinner across). The clips'
   own pose stays apart, so a crossfade never starts from a layered pose.
+
 
 ### Drawing (the device's look)
 
@@ -498,8 +517,8 @@ is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge,
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | 255 KB |
-| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
+| file (rigged) | 256 KB | 158 KB (its clips packed) |
+| nodes, shapes, clips | 80, 128, 96 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
 | families, edges, gestures, chains | 8, 64, 32, 4 (8 clips a step) | 5, 16, 18, 2 |
 | channels (all clips) | | 2046 (1368 LINEAR, 678 STEP, no CUBICSPLINE) |
 | life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
@@ -520,7 +539,7 @@ steps, six layers over about 40 channels) adds about 0.15 ms a frame by the same
 | The creature packages and their build scripts | `packages/duck/`, `packages/cat/`, `packages/octopus/` |
 | The cat's Blender sources | `moltys/cat/` (`cat.blend`, exported by `tools/blender/molty_export.py`) |
 | The shared kit and the player tests | `tools/creatures/` |
-| Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js`, `clip-dots.js` |
+| Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js` (its clips packed by `clip-pack.js`), `clip-dots.js` |
 | Players on the device (C) | `device/firmware/main/creature/` |
 | Host tests and goldens | `device/firmware/test/host/` |
 | The package check | `packages/tools/format.mjs` |

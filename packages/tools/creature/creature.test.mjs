@@ -13,10 +13,11 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { clipDots } from '../../../device/creatures/js/clip-dots.js';
-import { clipPlayer } from '../../../device/creatures/js/clip-player.js';
+import { packClip, unpackClip } from '../../../device/creatures/js/clip-pack.js';
+import { clipPlayer, decodeClip } from '../../../device/creatures/js/clip-player.js';
 import { ANNOTATIONS, KEYWORDS, validate } from '../display/schema.mjs';
 import { checkPackage } from '../format.mjs';
-import { r6 } from './bake.mjs';
+import { bakeAction, r6 } from './bake.mjs';
 import { readGltf } from './body.mjs';
 import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
@@ -245,6 +246,31 @@ test('chains: a gesture strung from actions picked at random, checked to join', 
   });
 });
 
+test('packed clips: the same keys and numbers as the plain form, about half the room', () => {
+  const r = check(CAT), nodes = r.body.nodes;
+  let plain = 0, packed = 0;
+  for (const a of r.body.actions) {
+    const c = r.pkg.creature.rig.clips[a.name], b = bakeAction(nodes, a, 24, c.loop, !!r.life?.clips.has(a.name) && !Object.values(r.pkg.creature.rig.graph.gestures).includes(a.name) && !Object.values(r.pkg.creature.rig.graph.moods).includes(a.name) && !Object.values(r.pkg.creature.rig.graph.rest).includes(a.name));
+    assert.equal(c.pk, packClip(b.ch, b.frames), `${a.name}: packed from its bake`);
+    const x = decodeClip({ ...c, pk: undefined, ch: b.ch }, r.pkg.creature.rig.scale), y = decodeClip(c, r.pkg.creature.rig.scale);
+    assert.equal(x.ch.length, y.ch.length);
+    x.ch.forEach((h, i) => {
+      const g = y.ch[i];
+      assert.deepEqual([h.node, h.path, h.cubic, h.linear, [...h.keys]], [g.node, g.path, g.cubic, g.linear, [...g.keys]], `${a.name} channel ${i}`);
+      assert.ok(h.out.every((v, k) => Object.is(v, g.out[k])), `${a.name} channel ${i}: the same numbers`);
+    });
+    plain += JSON.stringify(b.ch).length; packed += c.pk.length;
+  }
+  assert.ok(packed < plain * 0.62, `${packed} of ${plain} bytes`);
+  const wild = new Int16Array(Array.from({ length: 36 }, (_, i) => (i * 7919) % 65536 - 32768));   // cubic: 3 x 4 a key, every step size
+  const odd = [[3, 'r', 'C', 2, Buffer.from([0, 5, 9]).toString('base64'), Buffer.from(wild.buffer).toString('base64')],
+    [7, 'r', 'S', 1, Buffer.from([0]).toString('base64'), Buffer.from(new Int8Array([127, -127, 0, 5]).buffer).toString('base64')]];
+  const back = unpackClip(packClip(odd, 10));
+  assert.deepEqual(back.map((h) => [h.node, h.path, h.interp, h.b8, [...h.keys], [...h.vals]]),
+    [[3, 'r', 'C', false, [0, 5, 9], [...wild]], [7, 'r', 'S', true, [0], [127, -127, 0, 5]]], 'cubic, int8, extremes');
+  assert.throws(() => unpackClip(packClip(odd, 10).slice(0, 8)), /ends early/);
+});
+
 test('chains: the cat plays a different game each seed, the same game for the same seed, no link twice running', () => {
   const rig = check(CAT).pkg.creature.rig, ch = rig.graph.chains.yarn;
   const game = (seed) => {
@@ -290,7 +316,7 @@ test('props: a bowl or a ball is never dragged by a crossfade, and is gone once 
   assert.equal(after, 0, 'no prop shows once the cat is back in its mood');
 });
 
-test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
+test('limits: 80 bones, 128 shapes, 96 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
   const lacks = (r, want) => assert.ok(r.errors.some((e) => e.message.includes(want)), `${want}: got ${JSON.stringify(r.errors).slice(0, 600)}`);
   const bones = (n) => (d) => { for (let i = d.body.bones.length; i < n; i++) d.body.bones.push({ name: `b${i}`, parent: 'body' }); };
   const shapes = (n) => (d) => { for (let i = d.body.shapes.length; i < n; i++) d.body.shapes.push({ ...d.body.shapes[0], at: [0, i / 1000, 0] }); };
@@ -301,13 +327,13 @@ test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 2
   lacks(checked(shapes(LIMITS.shapes + 1)), 'body.shapes holds at most 128 (it has 129)');
   assert.deepEqual(checked(actions(33)).errors, [], '32 gestures and idle');
   lacks(checked(actions(34)), 'gestures holds at most 32 (it has 33)');
-  lacks(checked((d) => { for (let i = 0; i < 63; i++) d.body.actions[`a${i}`] = d.body.actions.hop; }), 'body.actions holds at most 64 (it has 65)');
+  lacks(checked((d) => { for (let i = 0; i < 95; i++) d.body.actions[`a${i}`] = d.body.actions.hop; }), 'body.actions holds at most 96 (it has 97)');
   lacks(checked((d) => { d.poses = 'abcdefghi'.split(''); }), 'poses holds at most 8 (it has 9)');
   lacks(checked((d) => { d.body.bones[3].name = 'a'.repeat(25); }), 'must be 1 to 24 of letters, digits, _ . and -');
   // the size: many long actions on many bones
   const heavy = (n) => (d) => { bones(60)(d); for (let i = 0; i < n; i++) { d.body.actions[`a${i}`] = { keys: Array.from({ length: 240 }, (_, k) => ({ time: k / 24, ...Object.fromEntries(d.body.bones.slice(4).map((b, j) => [b.name, { turn: [Math.sin(k * 0.7 + j + i) * 40, Math.cos(k * 1.3 + j) * 40, 0] }])) })) }; d.gestures[`a${i}`] = 'wriggles'; } };
   assert.deepEqual(checked(heavy(1)).errors, []);
-  lacks(checked(heavy(6)), 'KB: the device takes 256.0 KB. Its largest actions: a');
+  lacks(checked(heavy(12)), 'KB: the device takes 256.0 KB. Its largest actions: a');
 });
 
 // ---- life (docs/CREATURE.md, "Life")
@@ -332,7 +358,7 @@ test('life: a layer\'s clip keeps only what moves, and counts as played', () => 
     d.life.layers.push({ layer: 'nodding', clip: 'nod_pose', by: 'breath', zero: 0.5, weight: 'free' });
   });
   assert.deepEqual([r.errors, r.warnings], [[], []], 'no "nothing plays the action nod_pose"');
-  assert.deepEqual(r.pkg.creature.rig.clips.nod_pose.ch.map((c) => c[0]), [2], 'the head only: the held tail is left out');
+  assert.deepEqual(unpackClip(r.pkg.creature.rig.clips.nod_pose.pk).map((c) => c.node), [2], 'the head only: the held tail is left out');
   assert.deepEqual(r.pkg.creature.life.layers[1], { by: 'breath', w: '_lw.nodding', clip: 'nod_pose', zero: 0.5 });
   assert.deepEqual(r.pkg.creature.life.ch.at(-1), ['_lw.nodding', [[1, '@free']], { sp: [36, 12], keep: 1 }], 'its weight eased');
 });

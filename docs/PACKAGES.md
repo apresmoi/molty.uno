@@ -85,7 +85,7 @@ and the `skills` that play it. A check validates every package and the index (si
 
 ```jsonc
 {
-  "v": "molty-pkg/1",
+  "v": "molty-pkg/1",             // "molty-pkg/2": a creature whose rig packs its clips (CREATURES.md section 12)
   "id": "astrology",              // [a-z0-9-]{1,32}; the file name and the install id
   "name": "Astrology",            // shown in the install prompt and the console
   "version": "1.5.0",             // [0-9A-Za-z.-], at most 15 characters
