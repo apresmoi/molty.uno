@@ -106,3 +106,26 @@ for (const [name, aside] of WINDOWS) {
     assert.ok(Math.abs(core.across()) < 1e-3 && Math.abs(core.back()) < 1e-3, "it sits at its place");
   });
 }
+
+test("its preparing is spread: no call when it is made, at most one frame or call a step", async () => {
+  const seed = 7;
+  const cores = [await molty(seed), await molty(seed)];
+  let calls = 0;
+  for (const core of cores)
+    for (const name of ["frame", "enter"] as const) {
+      const call = core[name].bind(core) as (...a: number[]) => unknown;
+      (core as unknown as Record<string, unknown>)[name] = (...a: number[]) => (calls++, call(...a));
+    }
+  const walk = new Entrance(cores[0]!, cores[1]!, 1.5);
+  assert.equal(calls, 0, "nothing played when it is made");
+  const lead = walk.lead();
+  // each instance: three frames and its call, one a step (the first frame of each is the costly one)
+  for (let step = 0; step < 8; step++) {
+    const before = calls;
+    lead.next();
+    assert.ok(calls - before <= 1, `step ${step}: ${calls - before} calls`);
+  }
+  assert.equal(calls, 8, "both on screen and called");
+  for (const _ of lead);
+  assert.ok(walk.walking, "it walks");
+});
