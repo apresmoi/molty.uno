@@ -662,6 +662,8 @@ typedef struct {
     const uint8_t *still;              /* W x H: cells the water never breaks (a tapped spot's drawing), or NULL */
     unsigned cap_word;                 /* the caption's word: a new number each word, 0 none (it dissolves)   */
     float cap_unformed;                /* how much of it has not formed from the dust yet, 0 (whole) .. 1    */
+    bool  haze_water;                  /* the braille haze takes the water: denser and brighter where a wave's slope
+                                        * moves dots (a heading on the website, wm_haze; never the device)    */
 } fluid_draw_opts_t;
 
 /* crisp dots' interlace: frame n of the dots' maker, its water's rows taking turns over m frames (2..9) */

@@ -202,7 +202,7 @@ WM_API int wm_start(int px, uint32_t seed, int boot) {
 /** Scenes on the braille haze from now on (mole_fluid.c: what a board without the fine dust's memory shows): their
  *  dust is the lattice's own dots, a steep wave loosens their lines into it and calm water sharpens them back. A
  *  heading on the page is one: its dust is the page's grain, and the page's water moves it. Before the first frame. */
-WM_API void wm_haze(void) { if (s_up) { fluid_fine_destroy(s_fine); s_fine = NULL; } }
+WM_API void wm_haze(void) { if (s_up) { fluid_fine_destroy(s_fine); s_fine = NULL; s_haze_water = true; } }
 
 /** One frame, dt_us after the last: the sim task's pass, then the drawer's. The panel is then wm_pixels. */
 WM_API void wm_frame(uint32_t dt_us) {

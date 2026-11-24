@@ -83,6 +83,11 @@ static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MON
 #define HAZE_JITTER   0.5f    /* ...its dither thresholds this noisy (a dust, not a lattice)  */
 #define HAZE_HZ       1.f     /* ...each cell row reseeded this often, rows at their own moments:
                                * a slow shimmer that redraws a row or so a frame             */
+#define HAZE_CREST0   0.5f    /* with haze_water: where the wave shifts dots this many sub-dots the dust gathers (a dot
+                               * shifts at all: web_field.c WF_CREST_MIN, the page's own dust) ...            */
+#define HAZE_CREST1   1.f     /* ... all of it at this many (WF_CREST) ...                                   */
+#define HAZE_CREST_INK   0.18f /* ... this much more ink ...                                                  */
+#define HAZE_CREST_LEVEL 0.2f  /* ... and this much brighter                                                 */
 #define CAP_FADE      3.f     /* the subtitle sits on dark: the dust thins to none this many dots
                                * from its letters                                        */
 #define HALO_REACH    3       /* ...and denser and brighter this many dots from the drawing: the
@@ -678,11 +683,16 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
         if (!dots && o->shapes && !o->fine && o->dust <= 0.f && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1) {
             /* around the drawing (not while it breaks into dust or forms: the effect stays light), a faint dust, denser and brighter close to it (d->halo), never on
              * it, thinning to dark round the subtitle (d->cap), reseeded slowly (haze_seed) */
-            float sub[8];
+            float sub[8], crest = 0.f;
+            if (o->haze_water) {                        /* where the wave moves dots the dust gathers, as the page's does */
+                float fx, fy;
+                wave_shift(s, k, &fx, &fy);
+                crest = fluid_clamp01((sqrtf(fx * fx + fy * fy) - HAZE_CREST0) * (1.f / (HAZE_CREST1 - HAZE_CREST0)));
+            }
             int near = HALO_REACH + 1, on = 0;
             for (int q = 0; q < 8; q++) {
                 const int x = 2 * i + (q >> 2), y = 4 * j + (q & 3), dd = d->halo[y * 2 * W + x];
-                sub[q] = HAZE_AMBIENT + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
+                sub[q] = HAZE_AMBIENT + HAZE_CREST_INK * crest + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
                 if (d->cap[0] <= d->cap[1]) {
                     const int e = x < d->cap[0] ? d->cap[0] - x : x > d->cap[1] ? x - d->cap[1] : 0, f = y < d->cap[2] ? d->cap[2] - y : y > d->cap[3] ? y - d->cap[3] : 0;
                     sub[q] *= fluid_clamp01(((float)(e > f ? e : f) - 1.f) / CAP_FADE);
@@ -693,7 +703,7 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
             const int hz = fluid_braille_dither(sub, i, j, HAZE_JITTER, haze_seed(o, j)) & on;
             if (hz) {
                 const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
-                const float lv = near <= HALO_REACH ? HALO_LEVEL[near] : HAZE_LEVEL;
+                const float lv = (near <= HALO_REACH ? HALO_LEVEL[near] : HAZE_LEVEL) + HAZE_CREST_LEVEL * crest;
                 const float *lo = PAL[pal][0], *hi = PAL[pal][1], f = lv * (255.f / 65535.f);
                 int kc2 = k, most = 0;                       /* near it: the drawing's colour */
                 for (int q = 0; near <= HALO_REACH && q < 9; q++) {
@@ -913,6 +923,7 @@ static inline bool hd_still(const fluid_frame_t *s, const fluid_draw_opts_t *o, 
     wave_shift(s, k, &fx, &fy);
     const float m2 = fx * fx + fy * fy;
     if (m2 < 0.25f) return true;
+    if (o->haze_water) return false;                    /* (its haze gathers under the wave: HAZE_CREST0, half a sub-dot) */
     if (m2 >= (HD_CALM + 0.5f * HD_FADE) * (HD_CALM + 0.5f * HD_FADE)) return false;   /* (hd_dust >= 0.5, without its root) */
     for (int q = 0; o->kdots && q < 9; q++) if (o->kdots[k + (q / 3 - 1) * W + q % 3 - 1]) return false;
     return true;
