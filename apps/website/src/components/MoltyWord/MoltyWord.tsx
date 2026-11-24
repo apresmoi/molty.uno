@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { mountMoltyScreen, type MoltyScreenHandle } from "../../services/molty-screen";
 import { grain } from "../../services/page-water";
 import { WORDS_URL, WORD_PX, WORD_PX_MAX } from "../../features/molty/content";
-import { titleForming } from "../../features/home/opening";
+import { heroReady, titleForming } from "../../features/home/opening";
 import styles from "./MoltyWord.module.css";
 
 /** A heading's word as the device draws a scene: thin sharp lines the dust gathers along, on a
@@ -40,6 +40,8 @@ export function MoltyWord({ word, forms = false }: { word: string; forms?: boole
         scene: { layout: word },
         heading: true,
         forming: first,
+        // the opening starts once the hero's screen is ready too (features/home/opening.ts)
+        shown: first ? heroReady() : undefined,
         reducedMotion,
       }).then(
         (h) => {
@@ -55,6 +57,8 @@ export function MoltyWord({ word, forms = false }: { word: string; forms?: boole
         },
         () => {
           busy = false;
+          if (first) titleForming(); // no word to wait for: the opening goes on without it
+          first = false;
           if (alive) setState("off");
         },
       );
@@ -63,6 +67,8 @@ export function MoltyWord({ word, forms = false }: { word: string; forms?: boole
       (entries) => {
         near = entries[entries.length - 1]!.isIntersecting;
         if (near) return up();
+        if (first) titleForming(); // far from the view at first: the opening does not wait for it
+        first = false;
         handle?.destroy();
         handle = null;
         setState((s) => (s === "live" ? undefined : s));

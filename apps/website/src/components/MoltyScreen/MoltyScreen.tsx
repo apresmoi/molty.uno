@@ -10,7 +10,7 @@ import {
 } from "../../services/molty-screen";
 import { CAT, CAT_STILL, SCENES_URL } from "../../features/molty/content";
 import type { RevealKind } from "../../features/device/reveal";
-import { afterHeroUp, afterTitle, catSetsOff, heroCue, heroStandsIn } from "../../features/home/opening";
+import { afterHeroUp, afterTitle, catSetsOff, heroCue, heroPrepared, heroStandsIn } from "../../features/home/opening";
 import { Device } from "../Device";
 import styles from "./MoltyScreen.module.css";
 
@@ -32,8 +32,8 @@ import styles from "./MoltyScreen.module.css";
  *  `px`: the panel's pixels a side (a smaller board's: its picture as coarse as that board's).
  *  `pace`: it takes one of every `pace` of the page's frames (a small screen among many).
  *  `onReady` hands the running screen over (null when it goes); `onAnswer` and `onFrame` are the screen's own. The hero ("arrive", the page's opening:
- *  features/home/opening.ts): its renderer mounts as soon as it is near and draws its picture as
- *  the title starts forming, before the device turns in (just after), so its scene rides the
+ *  features/home/opening.ts): its renderer mounts as soon as it is near, the title waits for it
+ *  to be prepared (heroPrepared), and it draws its picture as the title starts forming, before the device turns in (just after), so its scene rides the
  *  turning face. Its clock starts as its cat sets off, a second after the title starts and
  *  late enough that it touches the glass only once the device stands (catSetsOff): the turning
  *  face never carries it. Any other is prepared before it is seen: once the hero stands with its
@@ -112,6 +112,7 @@ export function MoltyScreen({
         waited: () => state.current.wanted,
         scene,
         shown,
+        onPrepared: early ? heroPrepared : undefined,
         entrance: enter ? { outside: outside.current, go: early ? catSetsOff : undefined } : undefined,
         reducedMotion,
         onEntered: () => alive && setEntered(true),
@@ -136,7 +137,8 @@ export function MoltyScreen({
           if (reducedMotion) run?.frame(Infinity); // no clock: its one thing, as a still
         },
         () => {
-          // the still stands in (the service marked the page)
+          // the still stands in (the service marked the page); the opening does not wait for it
+          if (early) heroPrepared();
           state.current.failed = true;
           show();
           if (alive) setPicture("dark");
@@ -145,7 +147,10 @@ export function MoltyScreen({
     };
     const watch = new IntersectionObserver(
       (entries) => {
-        if (!entries[entries.length - 1]!.isIntersecting) return;
+        if (!entries[entries.length - 1]!.isIntersecting) {
+          if (early) heroPrepared(); // far from the view: the opening does not wait for it
+          return;
+        }
         near = true;
         warmMoltyScreen(needs);
         power.current();

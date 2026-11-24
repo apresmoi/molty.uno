@@ -93,6 +93,8 @@ export interface MoltyScreenOptions {
   /** The screen is shown (drawn, its clock running) once this settles, and what it plays unseen
    *  is played before (a device that turns in: it settles when the device stands). */
   shown?: Promise<unknown>;
+  /** What it plays unseen is played: it waits only for `shown` now (the hero: the opening may start). */
+  onPrepared?: () => void;
   /** Every frame drawn, with the seconds this screen has run (they stop while it is unseen). */
   onFrame?: (seconds: number) => void;
   /** The entrance is over: the creature sits. */
@@ -158,6 +160,7 @@ export async function mountMoltyScreen(
     const twin = entering && options.entrance!.outside ? await make() : null;
     const screen = new Screen(canvas, core, options);
     await sliced(screen.unseen(twin), canvas, options.waited);
+    options.onPrepared?.();
     await options.shown;
     screen.show();
     pageState("live");
