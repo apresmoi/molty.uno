@@ -22,7 +22,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'c8c25b9c871c701fed6444145a4a2a3b8b9ac7e4cea5c4c843bc47068b5c73bd';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '523db6d98ff9594f2a1344205452bf613f2ca611b5f5fc0004f3cce9558da481';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +62,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 250083);
+  assert.equal(bytes.length, 255582);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -74,7 +74,7 @@ test('the cat: what its names wire up, with nothing said about it in molty.json'
   assert.deepEqual([g.edges['sit>stand'], g.edges['sit>walk'], g.edges['walk>sit'], g.edges['sit>loaf'], g.edges['loaf>sit']], ['sit_to_stand', 'walk_start', 'walk_stop', 'lie_down', 'get_up'], 'a way is <a>_to_<b>, or the one free action that goes that way');
   assert.equal(Object.keys(g.edges).length, 16);
   assert.deepEqual(g.enter, { surprised: { sit: 'sit_surprised', stand: 'stand_surprised' } }, '<pose>_<mood> is the way into a mood');
-  assert.deepEqual([clips.yarn.from, clips.yarn.to, clips.sleepy.from, clips.surprised.to, clips.walk_stop.from], ['sit', 'crouch', 'loaf', 'stand', 'walk'], 'the pose an action starts and ends in is worked out');
+  assert.deepEqual([clips.bounce.from, clips.bounce.to, clips.sleepy.from, clips.surprised.to, clips.walk_stop.from], ['sit', 'crouch', 'loaf', 'stand', 'walk'], 'the pose an action starts and ends in is worked out');
   assert.deepEqual(Object.keys(clips).filter((n) => clips[n].loop).sort(), ['crouch_idle', 'happy', 'idle', 'listening', 'loaf_idle', 'sleepy', 'speaking', 'stand_idle', 'surprised', 'thinking', 'walk'], 'moods and resting actions loop');
 });
 
