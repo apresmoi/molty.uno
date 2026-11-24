@@ -22,7 +22,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '7f036c404221744209b92f76a4f99134648d83c442a6ea2e85830c06e96c1e08';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '2cf30d3039e8668121cc91028adc8b7e3d582b14f5c271ecfd6663c039c57350';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +62,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 261002);
+  assert.equal(bytes.length, 261218);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -265,6 +265,29 @@ test('chains: the cat plays a different game each seed, the same game for the sa
   }
   assert.ok(new Set(games.map((g) => g.join())).size >= 3, 'different seeds, different games');
   assert.deepEqual(game(7919), games[0], 'the same seed, the same game');
+});
+
+test('props: a bowl or a ball is never dragged by a crossfade, and is gone once the cat is back in its mood', () => {
+  const rig = check(CAT).pkg.creature.rig, props = rig.nodes.map((n, i) => (i > 0 && n.parent < 0 ? i : -1)).filter((i) => i >= 0);
+  let worst = 0, after = 0;
+  for (const g of ['eat', 'yarn']) for (const seed of [3, 5, 8, 13]) {
+    const p = clipPlayer(rig, { seed }), prev = new Map();
+    for (let f = 0; f < 30; f++) p.update(1 / 30);
+    p.act(g);
+    let back = -1;
+    for (let f = 0; f < 30 * 40 && (back < 0 || f < back + 45); f++) {
+      p.update(1 / 30);
+      for (const i of props) {
+        const w = p.world, m = i * 12, now = [w[m + 3], w[m + 7], w[m + 11], Math.hypot(w[m], w[m + 4], w[m + 8])], was = prev.get(i);
+        if (was && now[3] > 0.05 && was[3] > 0.05) worst = Math.max(worst, Math.hypot(now[0] - was[0], now[1] - was[1], now[2] - was[2]));
+        if (back >= 0 && f > back + 15 && now[3] > 1e-4) after++;
+        prev.set(i, now);
+      }
+      if (back < 0 && !p.clip.startsWith(`${g}_`) && f > 30) back = f;
+    }
+  }
+  assert.ok(worst < 0.25, `a showing prop jumps ${worst.toFixed(3)} in a frame`);
+  assert.equal(after, 0, 'no prop shows once the cat is back in its mood');
 });
 
 test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
