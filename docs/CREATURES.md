@@ -356,8 +356,14 @@ chains: { gesture: { first: [clip], then: [clip], rounds: [min, max], last: [cli
 - **Chains.** A gesture in `chains` plays one clip of `first`, then `rounds` (a count drawn between min and max) clips of
   `then`, never the same one twice running, then one of `last`; then it routes back to its mood as any gesture does. Each
   pick is a draw from the creature's seed (`cc_seed`: the same seed as the life's), so the same seed plays the same game
-  and two boots differ. A chain's clips join without a crossfade: the tools check that each starts in the pose the one
-  before ends in (the body, and each prop where it was from the root).
+  and two boots differ. After the first, a pick is only among the clips that start in the family the clip before ends in
+  (none of `then`: on to `last`; none of `last`: the chain is over), so a chain may walk between families: a paw raised,
+  the other paw. The first is reached by routing, as any gesture's clip is. A chain's clips join without a crossfade: the
+  tools check that each that can follow another starts in the pose that one ends in (the body, and each prop where it was
+  from the root).
+- **Cut short** (`cc_stop`: a habit when someone comes, "Moments" below): the gesture and its chain end now and the player
+  goes home to its mood as a call does: a clip of one family (a lick with the paw up) crossfades into the authored way back
+  (paw down), a way between families with more than 1.2 s to go likewise, a shorter one finishes first. A call is left alone.
 - **The heading carries** between clips as the place does: a clip that turns its root about up (a turn on its feet)
   leaves the creature facing that way, and the next clip, whatever it is, starts from there (`oyaw`, turning the root and
   the props about up through the origin before `ox, oz`). No clip before the cat 2.2.0 turns its root, so they play as
@@ -403,6 +409,30 @@ existed (the creature test pins the duck, the octopus and the cat 2.0.0 frame fo
   `rot` degrees a unit of `by` (as a bone's turn) and stretches them by `sq` a unit (up, thinner across). The clips'
   own pose stays apart, so a crossfade never starts from a layered pose.
 
+### Moments
+
+A Molty's habits: gestures it plays by itself now and then, while it is idle and left alone.
+
+```jsonc
+"life": { ..., "moments": [ { "every": [40, 90], "pick": [["groom", 3], ["wash", 2], ["stretch", 1]] } ] }
+```
+
+Each moment waits a time drawn from `every` (seconds), then plays one of its picks by weight (never its last one again),
+by name among the rig's gestures (`graph.gestures`: a habit the Molty keeps to itself, which `creature.gestures` and
+`about` leave out, so agents never see it, or any other). The clock is the device's (`fluid_director.c`): the creature
+parses the list (`cc_moments`), the director keeps the time and hands one out, the player plays it (`cpk_moment`), never
+with a sound or the motor. A creature that lists moments lives its own idle life: the director's library of small actions
+(glances, a blink, a wobble) stops for it; the yawn before dozing off and the happy flash after a good conversation stay.
+
+- **When.** A clock counts only while the library could play (the creature on screen in the idle mood, nothing owning
+  the screen: no question, listen, say, scene, agent mood, working, flash or sleep; idle life not off) and the creature
+  plays nothing else (`cc_free`: no gesture, call, way between poses or walk). One moment at a time; the others wait on.
+- **The owner's setting.** `idle_life` lively: the wait as written; calm: twice as long; off: never.
+- **Cut short.** A touch, a shake, any agent command (a mood, a gesture, a say, a scene) or anything taking the screen
+  stops the habit at once (`cc_stop`, above), and every clock waits again, at least 10 s (`moment_rest_s`).
+- **Randomness**: the director's seed draws the waits and the picks, the creature's seed the chain inside a habit, so the
+  same seeds play the same schedule (the director test) and two boots differ.
+- Old firmware refuses `moments` ("creature: life"); the format version (`molty-pkg/2`) stops it at install first.
 
 ### Drawing (the device's look)
 
@@ -519,9 +549,10 @@ is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge,
 |---|---|---|
 | file (rigged) | 256 KB | 158 KB (its clips packed) |
 | nodes, shapes, clips | 80, 128, 96 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
-| families, edges, gestures, chains | 8, 64, 32, 4 (8 clips a step) | 5, 16, 18, 2 |
+| families, edges, gestures, chains | 8, 64, 32, 8 (16 clips a step) | 5, 16, 18, 2 |
 | channels (all clips) | | 2046 (1368 LINEAR, 678 STEP, no CUBICSPLINE) |
 | life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
+| moments, picks each | 16, 16 | |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.

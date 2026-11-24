@@ -221,8 +221,11 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
     s.clip = ci; s.t = t0; s.blendT = 0; s.blendD = blend;
   }
 
-  // chained gestures (graph.chains): one of first, then rounds of then (never the same twice running), then one of last
-  const draw = (list, avoid = null) => {
+  // chained gestures (graph.chains): one of first, then rounds of then (never the same twice running), then one of last;
+  // after the first, each pick is among those that start in the pose the clip before ends in (none: that stage is over)
+  const draw = (all, avoid = null, fam = null) => {
+    const list = fam == null ? all : all.filter((n) => clips[byName[n]].from === fam);
+    if (!list.length) return null;
     const skip = list.length > 1 ? list.indexOf(avoid) : -1, m = skip >= 0 ? list.length - 1 : list.length;
     s.rng = (Math.imul(s.rng, 1664525) + 1013904223) >>> 0;
     let r = (s.rng >>> 8) % m; if (skip >= 0 && r >= skip) r++;
@@ -239,8 +242,9 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
   }
   function chainNext() {
     const ch = s.chain; if (!ch) return null;
-    if (ch.left > 0) { ch.left--; return (ch.prev = draw(ch.h.then, ch.prev)); }
-    if (!ch.stage && ch.h.last?.length) { ch.stage = 1; return draw(ch.h.last); }
+    const fam = clips[s.clip].to;
+    if (ch.left > 0) { ch.left--; const n = draw(ch.h.then, ch.prev, fam); if (n != null) return (ch.prev = n); ch.left = 0; }
+    if (!ch.stage && ch.h.last?.length) { ch.stage = 1; const n = draw(ch.h.last, null, fam); if (n != null) return n; }
     s.chain = null; return null;
   }
 
@@ -365,6 +369,9 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
       if (clip == null) return false;
       s.gesture = { name, clip, hold: g.hold?.[name] ?? 0, started: false }; chainStart(s.gesture); s.gestureT = 0; s.pending = true; return true;
     },
+    /** End the gesture playing (a habit cut short): it goes home to its mood now through the authored ways, as a call
+     *  does (creature_clip.c cc_stop). A call is left alone. */
+    stop() { if (!s.gesture || s.come) return false; s.gesture = null; s.chain = null; s.pending = true; interrupt(); return true; },
     /** Jump straight to a clip (the preview's route player). */
     play(name) { s.come = 0; s.gesture = null; s.chain = null; s.queue = []; start(byName[name], 0); },
     /** Queue a route from the current family to clip `name` (the preview's matrix). */

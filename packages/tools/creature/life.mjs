@@ -6,7 +6,7 @@
 import { where } from '../display/load.mjs';
 
 /** What the device holds (main/creature/creature_player.h CP_LIFE_STEPS, creature_clip.h CC_LAYERS_MAX). */
-export const LIFE_LIMITS = { signals: 64, layers: 16, steps: 600 };
+export const LIFE_LIMITS = { signals: 64, layers: 16, steps: 600, moments: 16, picks: 16 };
 const MOODS = ['idle', 'listening', 'thinking', 'speaking', 'happy', 'sleepy', 'surprised'];
 // the device's signals this firmware gives, by the name a Molty reads them by, and the engine's name for each
 const DEVICE = { t: 't', free: 'free', idle_time: 'idle_time', life: 'life', working: '_working',
@@ -24,14 +24,14 @@ const list = (xs) => xs.join(', ') || 'none';
 const spring = (w, zeta = 1) => ({ sp: [+(w * w).toFixed(4), +(2 * zeta * w).toFixed(4)] });
 
 /**
- * Check and compile doc.life against the body (nodes, action names). bad(at, message) reports. Returns the package's
- * `life` ({ ch, events, layers }), its cost in engine steps, and the clips the layers play; null when there is none.
+ * Check and compile doc.life against the body (nodes, action names) and its gestures (name: the action it plays). bad(at,
+ * message) reports. Returns the package's `life` ({ ch, events, layers, moments }), its cost in engine steps, and the clips
+ * the layers play; null when there is none.
  */
-export function compileLife(doc, nodes, actions, bad) {
+export function compileLife(doc, nodes, actions, bad, gestures = {}) {
   const life = doc.life;
   if (!life) return null;
   const sigs = life.signals ?? {}, names = Object.keys(sigs), at = (n) => where(sigs, n) || where(life, 'signals') || 'molty.json:1';
-  if (life.moments) bad(where(life, 'moments'), 'life.moments: moments (gestures started by a signal) are not in Molty\'s firmware yet: leave them out');
   if (names.length > LIFE_LIMITS.signals) bad(where(life, 'signals'), `life.signals has ${names.length} signals: a Molty holds ${LIFE_LIMITS.signals}`);
   for (const n of names) if (n in DEVICE || LATER.includes(n) || ['dt', 'act', 'work'].includes(n)) bad(at(n), `signal ${n}: ${n} is a name the device uses; call yours something else`);
 
@@ -257,6 +257,23 @@ export function compileLife(doc, nodes, actions, bad) {
       layers.push(...by.values());
     } else bad(here, `layer ${name}: say what it moves: "clip" (an action, with "by": a signal) or "turn" ({ bones, x, y, z, squash })`);
   });
+  // its moments: gestures it plays by itself now and then while idle and left alone; the device keeps the clock (it
+  // counts only while nothing else is going on, scaled by the owner's idle life) and cuts one short when someone comes
+  const moments = [], gnames = Object.keys(gestures);
+  (life.moments ?? []).forEach((m, i) => {
+    const here = where(life.moments, i) || where(life, 'moments'), say = (msg) => bad(here, `life.moments[${i}]: ${msg}`);
+    if (!m || typeof m !== 'object') return say('a moment is { "every": [least, most], "pick": { gesture: weight, ... } } or { "every", "play": gesture }');
+    const ev = m.every;
+    if (!Array.isArray(ev) || ev.length !== 2 || !ev.every((x) => typeof x === 'number') || ev[0] < 5 || ev[1] < ev[0] || ev[1] > 3600) say('every must be [least, most] seconds, from 5 to 3600, the least first');
+    if ((m.play === undefined) === (m.pick === undefined)) say('say what it plays: play (a gesture) or pick ({ gesture: weight, ... })');
+    const pick = m.play !== undefined ? { [m.play]: 1 } : m.pick ?? {};
+    const odd = Object.keys(pick).filter((g) => !gnames.includes(g));
+    if (odd.length) say(`${list(odd)} is not a gesture (gestures: ${list(gnames)})`);
+    if (Object.keys(pick).length > LIFE_LIMITS.picks) say(`it picks among ${Object.keys(pick).length}: a moment holds ${LIFE_LIMITS.picks}`);
+    if (Object.values(pick).some((w) => typeof w !== 'number' || !(w > 0))) say('each weight is a number over 0');
+    moments.push({ every: Array.isArray(ev) ? ev : [60, 60], pick: Object.entries(pick).map(([g, w]) => [g, w]) });
+  });
+  if (moments.length > LIFE_LIMITS.moments) bad(where(life, 'moments'), `life.moments has ${moments.length}: a Molty holds ${LIFE_LIMITS.moments}`);
   if (eased) ch.unshift(['_working', [[1, '@work']], { lp: 4, keep: 1 }]);   // working, eased as a mood is
   if (layers.length > LIFE_LIMITS.layers) bad(where(life, 'layers'), `life.layers makes ${layers.length} layers: a Molty holds ${LIFE_LIMITS.layers}`);
 
@@ -264,7 +281,7 @@ export function compileLife(doc, nodes, actions, bad) {
   const cost = (ts) => ts.reduce((s, t) => s + t.length - 1, 0), chCost = (c) => cost(c[1]);
   const steps = ch.reduce((s, c) => s + chCost(c), 0) + Object.values(events).reduce((s, e) => s + e.ch.reduce((q, c) => q + chCost(c), 0) + cost(e.stop) + (e.gate ? cost(e.gate) : 0), 0);
   if (steps > LIFE_LIMITS.steps) bad(where(life, 'signals'), `life takes ${steps} steps a frame: the device gives it ${LIFE_LIMITS.steps}. Drop some signals`);
-  return { life: { ch, ...(Object.keys(events).length ? { events } : {}), ...(layers.length ? { layers } : {}) }, steps, clips };
+  return { life: { ch, ...(Object.keys(events).length ? { events } : {}), ...(layers.length ? { layers } : {}), ...(moments.length ? { moments } : {}) }, steps, clips };
 }
 
 /** A term's weight times k: a number, or each value of a mood table. */

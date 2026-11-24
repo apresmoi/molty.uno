@@ -186,7 +186,7 @@ test('check: a problem names molty.json, the line and the fix', () => {
     'moods needs idle': (d) => { d.moods = { happy: 'smiles' }; },
     'must be molty/2': (d) => { d.molty = 'molty/3'; },
     'must be #rrggbb in lower case': (d) => { d.colors.body = 'green'; },
-    'is one line about what it does, or { about, plays, chain, hold, lasts }': (d) => { d.gestures.hop = 5; },
+    'is one line about what it does, or { about, plays, chain, hold, lasts, habit }': (d) => { d.gestures.hop = 5; },
     'must be the name of a .glb or .gltf file in this folder, or the body written out': (d) => { d.body = 'pip.fbx'; },
     'pip.glb: does not exist': (d) => { d.body = 'pip.glb'; },
     'must be three numbers: [x, y, z]': (d) => { d.body.bones[1].at = [0, 1]; },
@@ -244,6 +244,43 @@ test('chains: a gesture strung from actions picked at random, checked to join', 
       d.gestures.hop = { about: 'x', chain: { then: ['hop', 'lean'], rounds: [2, 2] } };
     },
   });
+});
+
+test('chains: after the first link, a pick is among those that start in the pose the last one ended in', () => {
+  const two = (d) => {
+    d.poses = ['sit', 'tall'];
+    d.body.actions.tall_idle = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 1, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.sit_to_tall = { keys: [{ time: 0, body: { at: [0, 0.25, 0] } }, { time: 0.5, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.tall_to_sit = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 0.5, body: { at: [0, 0.25, 0] } }] };
+    d.body.actions.reach = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 0.3, body: { at: [0, 0.55, 0] } }, { time: 0.6, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.hop2 = structuredClone(d.body.actions.hop);
+    d.gestures.hop = { about: 'hops, stands up, reaches, sits again', habit: true, chain: { then: ['hop', 'hop2', 'sit_to_tall', 'reach', 'tall_to_sit'], rounds: [6, 10] } };
+  };
+  const r = checked(two);
+  assert.deepEqual(r.errors, [], 'links of different poses need not join each other, only those that can follow');
+  const rig = r.pkg.creature.rig, from = (n) => rig.clips[n].from, to = (n) => rig.clips[n].to;
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const p = clipPlayer(rig, { seed }), seen = [];
+    p.act('hop');
+    for (let f = 0; f < 24 * 30 && (seen.length < 2 || p.clip !== 'idle'); f++) { p.update(1 / 24); if (p.clip !== seen.at(-1)) seen.push(p.clip); }
+    const links = seen.filter((n) => n !== 'idle');
+    for (let i = 1; i < links.length; i++) assert.equal(from(links[i]), to(links[i - 1]), `${links[i]} starts where ${links[i - 1]} ends: ${links}`);
+    assert.equal(seen.at(-1), 'idle', `home to its mood: ${seen}`);
+  }
+  catches({ 'must join': (d) => { two(d); d.body.actions.reach.keys[0].body.at = [0.2, 0.5, 0]; } });
+});
+
+test('habits: a gesture only its moments play is never told to agents; moments compile for the device', () => {
+  const r = checked((d) => {
+    d.body.actions.hop2 = structuredClone(d.body.actions.hop);
+    d.gestures.groom = { about: 'washes a paw', plays: 'hop2', habit: true };
+    d.life = { moments: [{ every: [40, 90], pick: { groom: 3, hop: 1 } }, { every: [300, 600], play: 'groom' }] };
+  });
+  assert.deepEqual(r.errors, []);
+  const cr = r.pkg.creature;
+  assert.deepEqual([Object.keys(cr.gestures), Object.keys(cr.about.gestures), cr.rig.graph.gestures.groom], [['hop'], ['hop'], 'hop2'], 'the rig plays it; agents never hear of it');
+  assert.deepEqual(cr.life.moments, [{ every: [40, 90], pick: [['groom', 3], ['hop', 1]] }, { every: [300, 600], pick: [['groom', 1]] }]);
+  assert.deepEqual(checkPackage(r.pkg, 'pip'), []);
 });
 
 test('packed clips: the same keys and numbers as the plain form, about half the room', () => {
@@ -403,7 +440,10 @@ test('life: check says what is wrong in plain words', () => {
     'layer breathing: by "breth" is not a signal': (d) => { breathing(d); d.life.layers[0] = { layer: 'breathing', clip: 'hop', by: 'breth' }; },
     'layer breathing: ripple is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers[0].turn.ripple = 0.06; },
     'layer mouth: mode replace is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers.push({ layer: 'mouth', clip: 'hop', by: 'breath', mode: 'replace' }); },
-    'life.moments: moments (gestures started by a signal) are not in Molty\'s firmware yet': (d) => { breathing(d); d.life.moments = [{ on: 'breath', play: 'hop' }]; },
+    'life.moments[0] has no "on": it takes every, play, pick': (d) => { breathing(d); d.life.moments = [{ on: 'breath', every: [20, 40], play: 'hop' }]; },
+    'life.moments[0]: skip is not a gesture (gestures: hop)': (d) => { d.life = { moments: [{ every: [20, 40], pick: { hop: 1, skip: 2 } }] }; },
+    'life.moments[0]: every must be [least, most] seconds, from 5 to 3600, the least first': (d) => { d.life = { moments: [{ every: [40, 20], play: 'hop' }] }; },
+    'life.moments[0]: say what it plays: play (a gesture) or pick': (d) => { d.life = { moments: [{ every: [20, 40] }] }; },
   });
 });
 

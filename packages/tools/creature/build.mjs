@@ -97,7 +97,7 @@ export function check(dir) {
   };
   plays('moods', moods); plays('gestures', gestures);
   for (const key of ['feet', 'center']) (doc[key] ?? []).forEach((n, i) => { if (node(n) < 0) bad(where(doc[key], i), `${key}: there is no bone named ${n} (bones: ${list(nodes.map((x) => x.name))})`); });
-  const life = compileLife(doc, nodes, names, bad);
+  const life = compileLife(doc, nodes, names, bad, gestures);
   if (errors.length) return { errors, warnings, doc, body };
 
   // a clip only a life layer plays keeps only what moves in it
@@ -146,8 +146,10 @@ export function check(dir) {
     }
     return d;
   };
+  // (after the first, a pick is only among those that start in the pose the one before ends in: only those pairs join)
+  const follows = ([a, b]) => ends.has(a) && ends.has(b) && ends.get(a)[1] === ends.get(b)[0];
   for (const [g, h] of Object.entries(chains)) {
-    const pairs = [...(h.first ?? []).flatMap((a) => h.then.map((b) => [a, b])), ...h.then.flatMap((a) => h.then.filter((b) => b !== a).map((b) => [a, b])), ...h.then.flatMap((a) => (h.last ?? []).map((b) => [a, b]))];
+    const pairs = [...(h.first ?? []).flatMap((a) => h.then.map((b) => [a, b])), ...h.then.flatMap((a) => h.then.filter((b) => b !== a).map((b) => [a, b])), ...h.then.flatMap((a) => (h.last ?? []).map((b) => [a, b]))].filter(follows);
     for (const [a, b] of pairs) {
       if (!baked.has(a) || !baked.has(b)) continue;
       const gap = joinGap(baked.get(a).last, baked.get(b).first);
@@ -179,13 +181,15 @@ export function check(dir) {
     palette: doc.colors,
     scale: SCALE,
   };
+  // a habit (life.moments plays it) is the Molty's own: agents are never told of it
+  const habit = (g) => said(doc.gestures[g]).habit === true, told = Object.keys(gestures).filter((g) => !habit(g));
   const pkg = { v: 'molty-pkg/2', id: doc.id, name: doc.name, version: doc.version, kind: 'creature',
     creature: {
-      about: { look: doc.look, gestures: Object.fromEntries(Object.entries(doc.gestures ?? {}).map(([g, v]) => [g, said(v).about])), moods: Object.fromEntries(Object.entries(doc.moods).map(([m, v]) => [m, said(v).about])) },
+      about: { look: doc.look, gestures: Object.fromEntries(told.map((g) => [g, said(doc.gestures[g]).about])), moods: Object.fromEntries(Object.entries(doc.moods).map(([m, v]) => [m, said(v).about])) },
       // the channel layers stay empty: everything a rigged Molty does is in its clips
       body: { palette: doc.colors, bones: [], parts: [] },
       // a gesture every Molty shares keeps its own length; one of its own says how long it plays
-      gestures: Object.fromEntries(Object.keys(gestures).map((g) => [g, g in ACTIONS ? { ch: [] } : { dur: lasts(g), ch: [] }])),
+      gestures: Object.fromEntries(told.map((g) => [g, g in ACTIONS ? { ch: [] } : { dur: lasts(g), ch: [] }])),
       moods: Object.fromEntries(Object.keys(moods).map((m) => [m, { ch: [] }])),
       rig,
       ...(life ? { life: life.life } : {}),

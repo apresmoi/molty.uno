@@ -33,7 +33,12 @@
       "properties": {
         "signals": { "type": "object", "maxProperties": 64, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "object" }, "description": "Named numbers that move, each one kind: mood, from, sum, wave, noise, hold, every or follow. A number in one may be another signal's name or a mood table." },
         "layers": { "type": "array", "maxItems": 16, "items": { "type": "object" }, "description": "What the signals move, over the mood loops: { layer, clip, by, zero, weight, bones } plays an action at the place a signal sets; { layer, turn: { bones, x, y, z, squash } } turns bones by one." },
-        "moments": { "type": "array", "description": "Gestures started by a signal: not in Molty's firmware yet." }
+        "moments": { "type": "array", "maxItems": 16, "description": "Gestures it plays by itself now and then while idle and left alone: { every: [least, most] seconds, play: a gesture, or pick: { gesture: how likely, ... } }. Never while an agent drives it or over a scene, a question, a listen or a say; a touch, a shake or an agent ends one at once and it goes home to its mood.",
+          "items": { "type": "object", "required": ["every"], "additionalProperties": false, "properties": {
+            "every": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "number", "minimum": 5, "maximum": 3600 }, "description": "Seconds it waits, a random time from the first number to the second, counted only while it is idle and left alone (the owner's idle life lively; calm waits twice as long, off never)." },
+            "play": { "$ref": "#/$defs/name", "description": "The gesture it plays." },
+            "pick": { "type": "object", "minProperties": 1, "maxProperties": 16, "propertyNames": { "$ref": "#/$defs/name" }, "additionalProperties": { "type": "number", "exclusiveMinimum": 0, "maximum": 100 }, "description": "Or one of these gestures, each as likely as its number, never the same one twice running." }
+          } } }
       },
       "description": "How it moves on its own over its mood loops: breathing, blinks, where it looks. Guide: docs/CREATURE.md, Life."
     }
@@ -50,16 +55,17 @@
           "hold": { "type": "number", "minimum": 0, "maximum": 60, "description": "For a gesture that plays a resting action (a walk): seconds it keeps it up before settling." },
           "lasts": { "type": "number", "minimum": 0.2, "maximum": 10, "description": "Seconds the whole gesture takes, when it is not its action's own length." },
           "chain": { "type": "object", "required": ["then", "rounds"], "additionalProperties": false,
-            "description": "Played as a chain of actions, a different one each time: one of first, then rounds (a random count from the first number to the second) of then, never the same one twice running, then one of last. Each starts where the one before ended.",
+            "description": "Played as a chain of actions, a different one each time: one of first, then rounds (a random count from the first number to the second) of then, never the same one twice running, then one of last. After the first, each is picked among those that start in the pose the one before ended in, so a chain may go from pose to pose (one paw raised, then the other).",
             "properties": {
-              "first": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } }] },
-              "then": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } },
+              "first": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/name" } }] },
+              "then": { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/name" } },
               "rounds": { "type": "array", "minItems": 2, "maxItems": 2, "items": { "type": "integer", "minimum": 0, "maximum": 16 } },
-              "last": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/name" } }] }
-            } }
+              "last": { "anyOf": [{ "$ref": "#/$defs/name" }, { "type": "array", "minItems": 1, "maxItems": 16, "items": { "$ref": "#/$defs/name" } }] }
+            } },
+          "habit": { "type": "boolean", "description": "Only the Molty plays it, by itself, as one of its moments (life.moments): agents are never told of it and cannot ask for it." }
         } }
       ],
-      "errorMessage": "is one line about what it does, or { about, plays, chain, hold, lasts }"
+      "errorMessage": "is one line about what it does, or { about, plays, chain, hold, lasts, habit }"
     },
     "vec3": { "type": "array", "minItems": 3, "maxItems": 3, "items": { "type": "number" }, "errorMessage": "must be three numbers: [x, y, z]" },
     "body": {
