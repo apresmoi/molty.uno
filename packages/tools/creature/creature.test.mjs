@@ -22,7 +22,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '2cf30d3039e8668121cc91028adc8b7e3d582b14f5c271ecfd6663c039c57350';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'c3b4e1c401f386dede91a8011b89c5d206445e8433e66406acf66310339da067';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +62,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 261218);
+  assert.equal(bytes.length, 261252);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -107,7 +107,7 @@ test('a second Molty from the cat, by editing only its JSON: renamed, recoloured
   doc.gestures.wiggle = { about: 'a big stretch instead of a shimmy', plays: 'stretch' };      // remapped
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));
   const miss = check(dir);
-  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:55', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
+  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:56', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
   delete doc.gestures.inspect;
   doc.gestures.lie_down = 'folds down into a loaf';                                            // a new gesture, wired by its name alone
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));

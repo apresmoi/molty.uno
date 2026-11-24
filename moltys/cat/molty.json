@@ -18,7 +18,8 @@
     "whisker": "#6e7590",
     "maw": "#160810",
     "bowl": "#e8434f",
-    "yarnline": "#8f1f2b"
+    "yarnline": "#8f1f2b",
+    "yarn": "#ffc23d"
   },
   "poses": ["sit", "stand", "loaf", "crouch", "walk"],
   "moods": {
