@@ -900,7 +900,12 @@ void cc_update(cc_t *c, float dt) {
     }
     sample_pose(c, c->cur_clip, c->t, c->pose);
     const float w = ease(c->blendD > 0.f ? c->blendT / c->blendD : 1.f);
-    if (w < 1.f) blend_pose(c->from, c->pose, w, c->cur, c->nn);
+    if (w < 1.f) {
+        blend_pose(c->from, c->pose, w, c->cur, c->nn);
+        for (int i = 1; i < c->nn; i++)          /* a prop (a root-level node but the first) is never cross-faded: it is where
+                                                  * the clip puts it, so a bowl leaving never sweeps across to where it rests */
+            if (c->node[i].parent < 0) memcpy(c->cur + i * CC_POSE, c->pose + i * CC_POSE, sizeof(float) * CC_POSE);
+    }
     else memcpy(c->cur, c->pose, sizeof(float) * CC_POSE * (size_t)c->nn);
     const float *P = layers(c) ? c->laid : c->cur;   /* cur stays the base: the next crossfade starts from it */
     forward(c, P, c->ox, c->oz, c->world);

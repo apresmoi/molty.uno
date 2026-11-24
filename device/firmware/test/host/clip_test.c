@@ -231,12 +231,59 @@ static void test_chains(const char *pkgdir) {
     cJSON_Delete(j);
 }
 
+/* a prop (a root-level node but the first: the bowl, the ball) is never dragged by a crossfade: while it shows, from one
+ * frame to the next it moves no more than its own path does (a ball shot away: under 0.25), and once the creature is
+ * back in its mood it is gone (scaled to nothing) */
+static void test_props(const char *pkgdir) {
+    cJSON *j = NULL;
+    cc_t *probe = load(pkgdir, "cat", &j);
+    if (!probe) { cJSON_Delete(j); return; }
+    const cJSON *nodes = cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(j, "creature"), "rig"), "nodes");
+    int props[8], np = 0, i = 0;
+    for (const cJSON *n = nodes->child; n; n = n->next, i++)
+        if (i > 0 && cJSON_GetObjectItemCaseSensitive(n, "parent")->valueint < 0 && np < 8) props[np++] = i;
+    cc_destroy(probe); cJSON_Delete(j);
+    CHECK(np > 0, "props: the cat has its bowl and its ball");
+    const char *const G[] = { "eat", "yarn" };
+    float worst = 0.f; int left_over = 0;
+    for (int gi = 0; gi < 2; gi++)
+        for (int seed = 0; seed < 6; seed++) {
+            cc_t *c = load(pkgdir, "cat", NULL);
+            cc_seed(c, 31u + 97u * (uint32_t)seed);
+            for (int f = 0; f < 30; f++) cc_update(c, 1.f / 30.f);
+            cc_act(c, G[gi]);
+            float prev[8][4]; int back = -1;
+            for (int f = 0; f < 30 * 40; f++) {
+                cc_update(c, 1.f / 30.f);
+                const float *w = cc_world(c);
+                for (int q = 0; q < np; q++) {
+                    const float *m = w + props[q] * 12, now[4] = { m[3], m[7], m[11], sqrtf(m[0] * m[0] + m[4] * m[4] + m[8] * m[8]) };
+                    if (f && now[3] > 0.05f && prev[q][3] > 0.05f) {
+                        const float d = sqrtf((now[0] - prev[q][0]) * (now[0] - prev[q][0]) + (now[1] - prev[q][1]) * (now[1] - prev[q][1]) + (now[2] - prev[q][2]) * (now[2] - prev[q][2]));
+                        if (d > worst) worst = d;
+                    }
+                    if (back >= 0 && f > back + 15 && now[3] > 1e-4f) left_over++;
+                    memcpy(prev[q], now, sizeof(now));
+                }
+                const char *name = cc_clip_name(c, cc_clip(c, NULL));
+                if (back < 0 && cc_free(c) && strncmp(name, G[gi], strlen(G[gi]))) back = f;
+                if (back >= 0 && f > back + 45) break;
+            }
+            CHECK(back >= 0, "props: %s seed %d never went back to its mood", G[gi], seed);
+            cc_destroy(c);
+        }
+    printf("  props: eat and yarn, 6 seeds each: a showing prop moves at most %.3f a frame; %d frames shown after\n", worst, left_over);
+    CHECK(worst < 0.25f, "props: a showing prop jumps %.3f in a frame (dragged by a crossfade)", worst);
+    CHECK(!left_over, "props: a prop still shows %d frames after the creature is back in its mood", left_over);
+}
+
 int main(int argc, char **argv) {
     if (argc < 3) { printf("usage: clip_test <packages dir> <golden dir>\n"); return 2; }
     printf("rigged creature host test\n");
     test_golden(argv[1], argv[2], "cat");
     test_strict(argv[1]);
     test_chains(argv[1]);
+    test_props(argv[1]);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }
