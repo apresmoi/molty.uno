@@ -3,17 +3,35 @@
 // comes up in step (PageWater, keyed on <html data-hero>). Then its cat walks in from the
 // window's edge (MoltyScreen), and touches the glass only once the device stands.
 // Reduced motion: all of it shows at once.
+//
+// It starts only once all of it is ready: the title waits for the hero's screen to be prepared
+// (its module and package in, its first frames played unseen, its cat up and waiting), so a first
+// visit plays as a repeat visit does instead of preparing the hero while the title forms. Short
+// of that, the page waits with its text and dust. Last resort (a module or package that never
+// comes): the opening's clock starts OPENING_CAP_MS after the page was opened whatever is
+// ready; the device turns in and the cat sets off on that clock, a screen not ready by then
+// shows once it is (dark first, as the device stands) and the title forms when it can.
+
+/** The opening starts at the latest this long after the page was opened (ms). */
+export const OPENING_CAP_MS = 8000;
+const wait = (ms: number) => new Promise((r) => setTimeout(r, Math.max(0, ms)));
+const cap = wait(OPENING_CAP_MS - performance.now());
+
+let prepared: () => void = () => {};
+const prepare = new Promise<void>((done) => (prepared = done));
+/** The hero's screen is prepared, or will not be (it failed, or is not near the view). */
+export const heroPrepared = () => prepared();
+/** Resolves once the hero's screen is prepared (at once on a page without the hero; at the cap
+ *  at the latest): the title starts forming only then. */
+export const heroReady = (): Promise<unknown> =>
+  document.querySelector('[data-device="arrive"]') ? Promise.race([prepare, cap]) : Promise.resolve();
 
 let formed: () => void = () => {};
-const started = new Promise<void>((done) => (formed = done));
-/** The title's word started forming on screen. */
+const started = Promise.race([new Promise<void>((done) => (formed = done)), cap]);
+/** The title's word started forming on screen (or will not: it failed, or is not near the view). */
 export const titleForming = () => formed();
-/** Resolves `after` seconds once the title started forming (or 2.5 s from now if it never does). */
-export const afterTitle = (after: number) =>
-  Promise.race([
-    started.then(() => new Promise((r) => setTimeout(r, after * 1000))),
-    new Promise((r) => setTimeout(r, 2500)),
-  ]);
+/** Resolves `after` seconds once the title started forming (or the cap passed, if it never does). */
+export const afterTitle = (after: number) => started.then(() => wait(after * 1000));
 
 /** The hero's cat sets off this long after the title starts forming, at the soonest. */
 export const CAT_AFTER_S = 1;

@@ -1,11 +1,25 @@
 // The landing's opening, in order (src/features/home/opening.ts, src/services/molty-screen/forming.ts):
 // the title's window is rough dust first, then its word forms as calm spreads from the middle to
-// its ends; the hero's device and its cat wait for the title to start forming, then come in step.
+// its ends; the title waits for the hero's screen to be prepared (or the cap); the hero's device and
+// its cat wait for the title to start forming, then come in step.
 // Run: pnpm test (node --test; Node 22 strips the types).
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import assert from "node:assert/strict";
 import { FORMING_S, formingWater } from "../../src/services/molty-screen/forming.ts";
-import { CAT_AFTER_S, afterTitle, catSetsOff, heroStandsIn, titleForming } from "../../src/features/home/opening.ts";
+import {
+  CAT_AFTER_S,
+  OPENING_CAP_MS,
+  afterTitle,
+  catSetsOff,
+  heroPrepared,
+  heroReady,
+  heroStandsIn,
+  titleForming,
+} from "../../src/features/home/opening.ts";
+
+// a page with the hero's device
+(globalThis as { document?: unknown }).document = { querySelector: () => ({}) };
+const flush = () => new Promise((r) => setImmediate(r));
 
 /** The roughest the water is over the word's band, `x` from `from` to `to` (glass units). */
 const roughest = (from: number, to: number, t: number) => {
@@ -25,6 +39,16 @@ test("the title is dust first, then its word forms from the middle to its ends",
 });
 
 let formedAt = 0;
+
+test("the title never starts before the hero's screen is prepared", async () => {
+  let ready = false;
+  void heroReady().then(() => (ready = true));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(ready, false, "it waits while the hero prepares");
+  heroPrepared();
+  await flush();
+  assert.equal(ready, true, "it may start once the hero is prepared");
+});
 
 test("the hero's device and cat wait for the title, then come in step", async () => {
   const start = performance.now();
@@ -52,5 +76,28 @@ test("the hero's cat sets off a second after the title, and touches the glass no
   for (const [glassS, at] of offs) {
     assert.ok(at >= formedAt + CAT_AFTER_S * 1000 - 2, `${glassS} s out: it sets off a second after the title`);
     assert.ok(at + glassS * 1000 >= stands - 2, `${glassS} s out: at the glass ${(stands - at - glassS * 1000).toFixed(0)} ms before it stands`);
+  }
+});
+
+test("at the cap the opening starts whatever is ready, in its order", async () => {
+  mock.timers.enable({ apis: ["setTimeout"] });
+  try {
+    // a page of its own: the hero is never prepared, the title never forms
+    const fresh = "../../src/features/home/opening.ts?cap";
+    const opening = (await import(fresh)) as typeof import("../../src/features/home/opening.ts");
+    const done = { title: false, device: false };
+    void opening.heroReady().then(() => (done.title = true));
+    void opening.afterTitle(0.3).then(() => (done.device = true));
+    mock.timers.tick(OPENING_CAP_MS - performance.now() - 50);
+    await flush();
+    assert.deepEqual(done, { title: false, device: false }, "nothing before the cap");
+    mock.timers.tick(100);
+    await flush();
+    assert.deepEqual(done, { title: true, device: false }, "the title at the cap, the device not yet");
+    mock.timers.tick(300);
+    await flush();
+    assert.equal(done.device, true, "the device 0.3 s after the cap");
+  } finally {
+    mock.timers.reset();
   }
 });

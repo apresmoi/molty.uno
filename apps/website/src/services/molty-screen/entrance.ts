@@ -54,29 +54,32 @@ export function play(us: number, frame: (us: number) => void) {
 export class Entrance {
   readonly core: MoltyCore;
   readonly twin: MoltyCore | null;
-  /** False when there was no creature to call. */
-  readonly walking: boolean;
+  /** False when there was no creature to call (known once its lead is played). */
+  walking = false;
   /** How far the window beside the screen looks to the side (panel px). */
   aside = 0;
+  /** Where it starts: [across, back] (world units). */
+  private start: [number, number];
 
-  /** `aside`: world units from the screen's middle to the window's right edge. The creature is
-   *  on screen after a few frames; then it is put beyond that edge and called. Its getting up is
-   *  played unseen (`lead`) before the first step. */
+  /** `aside`: world units from the screen's middle to the window's right edge. */
   constructor(core: MoltyCore, twin: MoltyCore | null, aside: number) {
     this.core = core;
     this.twin = twin;
-    const [across, back] = enterFrom(aside);
-    let ok = true;
-    for (const c of this.cores()) {
-      for (let i = 0; i < 3; i++) c.frame(SETTLE_STEP_MS * 1000);
-      ok = c.enter(across, back) && ok;
-    }
-    this.walking = ok;
+    this.start = enterFrom(aside);
   }
 
-  /** Its getting up, played unseen: a yield a step (the screen spreads them over the page's frames). */
+  /** Played unseen, a yield a step (the screen spreads them over the page's frames, so none is
+   *  one long task): the creature is on screen after a few frames, then it is put beyond the
+   *  window's edge and called, and its getting up is played (`lead`) before the first step. */
   *lead() {
-    if (!this.walking) return;
+    let ok = true;
+    for (const c of this.cores()) {
+      for (let i = 0; i < 3; i++) yield c.frame(SETTLE_STEP_MS * 1000);
+      ok = c.enter(...this.start) && ok;
+      yield;
+    }
+    this.walking = ok;
+    if (!ok) return;
     for (let t = 0; t < ENTER.lead * 1000; t += SETTLE_STEP_MS) yield this.advance(SETTLE_STEP_MS * 1000);
   }
 
