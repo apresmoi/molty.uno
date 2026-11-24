@@ -24,8 +24,9 @@ looks like on it. The relay hands that to you:
 - **Moves**: `act` takes one of `gestures`, `mood` one of `moods` (inline cues too: `[nod]`,
   `[happy]`). Pick by the `about` line, which says what it looks like on this animal: a cat's
   `paddle` bats at something with a paw, an octopus's swirls an arm in the water. Some are its
-  own: the cat has `eat` (a bowl of milk appears and it laps from it), for when your human feeds
-  it, `yarn` (a ball of yarn rolls in and it pounces) and `walk` (it gets up and walks a few steps).
+  own: the cat has `eat` (a bowl of kibble slides in to one side, it turns to it and eats), for
+  when your human feeds it, `yarn` (a ball of yarn bounces in and it plays with it, a different game
+  each time, until it knocks it away) and `walk` (it gets up and walks a few steps).
 - **The cat comes when called.** A tap on the screen or a shake brings it to the front, facing your
   human, by itself (a shake jostles it first). You need do nothing for it.
 - **While you think or work, Molty animates itself** with the animal's own small glances, ear

@@ -800,8 +800,12 @@ static void test_own_rigged(const char *pkgdir) {
     cpk_frame(k, s, 1.f / 30, 1.f);
     me_act(e, eat);
     bool played = false;
-    for (int f = 0; f < 400; f++) { cpk_frame(k, s, 1.f / 30, 1.f); float t; played |= !strcmp(cc_clip_name(cl, cc_clip(cl, &t)), "eat"); }
-    CHECK(played, "cat: the eat clip never played");
+    int dish = 0;                                  /* eat is a chain: the bowl comes in (eat_ahead, _left, _right), then eat_dish */
+    for (int f = 0; f < 400; f++) {
+        cpk_frame(k, s, 1.f / 30, 1.f); float t; const char *n = cc_clip_name(cl, cc_clip(cl, &t));
+        played |= !strncmp(n, "eat_", 4); dish |= !strcmp(n, "eat_dish");
+    }
+    CHECK(played && dish, "cat: the eat chain never played (or never reached the dish)");
     fluid_sim_destroy(s); cpk_destroy(k); free(json);
 }
 

@@ -22,7 +22,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '523db6d98ff9594f2a1344205452bf613f2ca611b5f5fc0004f3cce9558da481';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '7f036c404221744209b92f76a4f99134648d83c442a6ea2e85830c06e96c1e08';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +62,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 255582);
+  assert.equal(bytes.length, 261002);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -80,7 +80,7 @@ test('the cat: what its names wire up, with nothing said about it in molty.json'
 
 test('the exporter (only where Blender 5.3 is): cat.blend still gives the committed cat.glb', { skip: !/^Blender 5\.3\./.test(spawnSync('blender', ['--version'], { encoding: 'utf8' }).stdout ?? '') && 'Blender 5.3 is not on the PATH' }, () => {
   // every action when MOLTY_EXPORT_ALL is set (minutes); else a few, compared key for key with the committed file's
-  const all = !!process.env.MOLTY_EXPORT_ALL, some = ['idle', 'blink', 'walk_start', 'eat'], out = join(TMP, 'cat.glb');
+  const all = !!process.env.MOLTY_EXPORT_ALL, some = ['idle', 'blink', 'walk_start', 'eat_dish'], out = join(TMP, 'cat.glb');
   const run = spawnSync('blender', ['-b', join(CAT, 'cat.blend'), '-P', EXPORTER, '--', '--out', out, ...(all ? [] : ['--actions', some.join(',')])], { encoding: 'utf8' });
   assert.equal(run.status, 0, run.stderr.slice(-2000));
   if (all) return void assert.ok(readFileSync(out).equals(readFileSync(join(CAT, 'cat.glb'))), 'the same file, byte for byte');
@@ -185,7 +185,7 @@ test('check: a problem names molty.json, the line and the fix', () => {
     'moods needs idle': (d) => { d.moods = { happy: 'smiles' }; },
     'must be molty/2': (d) => { d.molty = 'molty/3'; },
     'must be #rrggbb in lower case': (d) => { d.colors.body = 'green'; },
-    'is one line about what it does, or { about, plays, hold, lasts }': (d) => { d.gestures.hop = 5; },
+    'is one line about what it does, or { about, plays, chain, hold, lasts }': (d) => { d.gestures.hop = 5; },
     'must be the name of a .glb or .gltf file in this folder, or the body written out': (d) => { d.body = 'pip.fbx'; },
     'pip.glb: does not exist': (d) => { d.body = 'pip.glb'; },
     'must be three numbers: [x, y, z]': (d) => { d.body.bones[1].at = [0, 1]; },
@@ -228,6 +228,43 @@ test('conventions: a way between poses is found by name, or because one free act
   assert.deepEqual(checked((d) => { two(d); d.body.actions.sit_idle = d.body.actions.idle; delete d.body.actions.idle; d.moods.idle = { about: 'breathes', plays: 'sit_idle' }; }).pkg.creature.rig.graph.rest.sit, 'sit_idle');
   const sp = checked((d) => { d.moods.surprised = 'jumps'; d.body.actions.surprised = d.body.actions.idle; d.body.actions.sit_surprised = d.body.actions.hop; }).pkg.creature.rig.graph;
   assert.deepEqual(sp.enter, { surprised: { sit: 'sit_surprised' } });
+});
+
+test('chains: a gesture strung from actions picked at random, checked to join', () => {
+  const ok = checked((d) => { d.body.actions.hop2 = structuredClone(d.body.actions.hop); d.gestures.hop = { about: 'hops, now and then twice', chain: { then: ['hop', 'hop2'], rounds: [1, 3] } }; });
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.pkg.creature.rig.graph.chains.hop, { then: ['hop', 'hop2'], rounds: [1, 3] });
+  assert.equal(ok.pkg.creature.rig.graph.gestures.hop, 'hop', 'the gesture names its first action');
+  catches({
+    'which are not actions': (d) => { d.gestures.hop = { about: 'x', chain: { then: ['nope'], rounds: [1, 1] } }; },
+    'rounds from 1': (d) => { d.gestures.hop = { about: 'x', chain: { then: ['hop'], rounds: [0, 1] } }; },
+    'must join': (d) => {
+      d.body.actions.lean = { keys: [{ time: 0, body: { at: [0, 0.25, 0] } }, { time: 0.5, body: { at: [0.2, 0.25, 0], turn: [0, 0, 20] } }] };
+      d.gestures.hop = { about: 'x', chain: { then: ['hop', 'lean'], rounds: [2, 2] } };
+    },
+  });
+});
+
+test('chains: the cat plays a different game each seed, the same game for the same seed, no link twice running', () => {
+  const rig = check(CAT).pkg.creature.rig, ch = rig.graph.chains.yarn;
+  const game = (seed) => {
+    const p = clipPlayer(rig, { seed }), seen = [];
+    p.act('yarn');
+    for (let f = 0; f < 30 * 40 && (seen.length === 0 || p.clip.startsWith('yarn_') || f < 60); f++) {
+      p.update(1 / 30);
+      if (p.clip.startsWith('yarn_') && p.clip !== seen.at(-1)) seen.push(p.clip);
+    }
+    return seen;
+  };
+  const games = [1, 2, 3, 4, 5, 6, 7, 8].map((s) => game(s * 7919));
+  for (const g of games) {
+    assert.ok(ch.first.includes(g[0]) && g.at(-1) === ch.last[0], `starts with first, ends with last: ${g}`);
+    const mid = g.slice(1, -1);
+    assert.ok(mid.length >= ch.rounds[0] && mid.length <= ch.rounds[1], `rounds: ${g}`);
+    assert.ok(mid.every((c, i) => i === 0 || c !== mid[i - 1]), `no link twice running: ${g}`);
+  }
+  assert.ok(new Set(games.map((g) => g.join())).size >= 3, 'different seeds, different games');
+  assert.deepEqual(game(7919), games[0], 'the same seed, the same game');
 });
 
 test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
