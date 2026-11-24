@@ -18,7 +18,8 @@ import {
   readerAnswers,
   SKILLS_HREF,
 } from "../features/home/content";
-import { PAIR } from "../features/molty/content";
+import { CAT, PAIR, WORDS_URL } from "../features/molty/content";
+import { MODULE_URL } from "../services/molty-screen";
 import { landingActions, type CreaturePackage } from "../features/molty/actions";
 import { skillScreens } from "../features/molty/skills";
 import commands from "../../../../device/firmware/test/host/fixtures/astrology-commands.jsonl?raw";
@@ -29,10 +30,17 @@ const groups = landingActions(cat as unknown as CreaturePackage);
 const rest = (cat as unknown as CreaturePackage).creature.about.moods.idle ?? "";
 // what the two skills show, from the firmware's sample commands
 const screens = skillScreens(commands);
+// the opening's renderer and packages are preloaded from the head, with the page instead of after
+// hydration: the screens' own fetches take those responses
 ---
 
 <ContentLayout title={title} description={description} path="/" fluid>
   <script slot="head" type="application/ld+json" set:html={JSON.stringify(ldJson)} />
+  <Fragment slot="head">
+    <link rel="preload" as="fetch" type="application/wasm" crossorigin href={MODULE_URL} />
+    <link rel="preload" as="fetch" type="application/json" crossorigin href={CAT.url} />
+    <link rel="preload" as="fetch" type="application/json" crossorigin href={WORDS_URL} />
+  </Fragment>
   <HomePage>
     <PageWater slot="fluid" client:load />
     <MoltyWord slot="title" client:load word="molty-uno" forms />

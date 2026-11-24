@@ -27,7 +27,8 @@ Never deploy or publish from here; nothing in this package does.
   `device/firmware/web/built/molty.wasm` (`make web-molty`, emscripten 7.0.0; committed with its
   manifest, so this package builds with Node alone). `@molty-wasm` → that folder, `@packages` →
   `../../packages` (the cat, the astrology scenes): imported by URL, fetched when a screen nears
-  the view. A change to how a Molty looks is a firmware change plus `make web-molty`; nothing
+  the view (the landing preloads the module, the cat and its words from its head: its opening
+  waits for the hero's screen, `features/home/opening.ts`). A change to how a Molty looks is a firmware change plus `make web-molty`; nothing
   here draws one. `scripts/tests/molty.test.ts` fails when the firmware sources, a package the
   check plays or the still move on without it.
 - **One still.** `src/assets/molty/cat.webp` is a frame of that module (`pnpm molty-still`);
@@ -163,7 +164,7 @@ Never deploy or publish from here; nothing in this package does.
 - `pnpm fullpage` (`e2e/fullpage.mjs`): the whole landing, 1280 and 390 px, dark and light.
 - `pnpm first-load` (`e2e/first-load.mjs`, preview running): samples every frame of the landing's
   first load on a slow network + CPU and fails if the hero is shown and then hidden, the device
-  is not monotonic, CLS > 0.01, the renderer or the cat load before the first paint, or reduced
+  is not monotonic, CLS > 0.01, the renderer or the cat are not preloaded or fetched twice, or reduced
   motion / no JS / bundles that never load leave it hidden. Frames to `e2e-out/first-load-*.png`.
 - `pnpm theme-label` (`e2e/theme-label.mjs`, preview running): the theme button's label is
   CSS-driven off `<html data-theme>` (set before paint); fails if any frame before a click shows

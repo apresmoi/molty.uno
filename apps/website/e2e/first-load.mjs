@@ -1,8 +1,8 @@
 // First-load check against a running preview (`pnpm build && pnpm preview`): the landing's hero
 // (the wordmark the device's renderer draws, the Molty's screen and its still, the device that turns in) must
 // paint its intro's START state from the first frame and only move toward the final one; nothing
-// is shown and then hidden. The Molty's renderer (a WebAssembly module and the cat's package) must
-// load after the page, never with it. Samples every frame (requestAnimationFrame, from document start) on a slow
+// is shown and then hidden. The Molty's renderer (a WebAssembly module and the cat's package) is
+// preloaded from the page's head and downloaded once. Samples every frame (requestAnimationFrame, from document start) on a slow
 // network and CPU, and saves timed screenshots to website/e2e-out/first-load-*.png.
 //   node e2e/first-load.mjs [baseUrl=http://localhost:4330]
 import { chromium } from 'playwright';
@@ -159,15 +159,14 @@ const firstDrop = (xs) => {
     return n;
   }, SCREEN);
   check(lit > 1500, `intro: the hero's screen is on and drawing (${lit} dots' pixels lit)`);
-  // the renderer and the cat come after the page: neither is in the HTML's own requests
-  const late = await page.evaluate(() =>
+  // the renderer and the cat are asked for with the page (preloaded from its head), once each
+  const early = await page.evaluate(() =>
     performance
       .getEntriesByType('resource')
       .filter((r) => /\.wasm$|\/cat\.[^/]*\.json$/.test(r.name))
       .map((r) => ({ name: r.name.split('/').pop(), start: Math.round(r.startTime), initiator: r.initiatorType })),
   );
-  const fcp = await page.evaluate(() => performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? 0);
-  check(late.length === 2 && late.every((r) => r.initiator === 'fetch' && r.start > fcp), `intro: the renderer and the cat load after the first paint (${late.map((r) => `${r.name} at ${r.start} ms`).join(', ')}; first paint ${Math.round(fcp)} ms)`);
+  check(early.length === 2 && early.every((r) => r.initiator === 'link'), `intro: the renderer and the cat are preloaded and fetched once (${early.map((r) => `${r.name} by ${r.initiator} at ${r.start} ms`).join(', ')})`);
   check(cls < 0.01, `intro: no layout shift (CLS ${cls.toFixed(4)})`);
   await page.screenshot({ path: `${OUT}first-load-intro-end.png` });
   await ctx.close();

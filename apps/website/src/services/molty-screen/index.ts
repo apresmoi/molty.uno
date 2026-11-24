@@ -3,7 +3,7 @@ export { ENTER_STARTS } from "./entrance";
 export { runProgram } from "./program";
 export { PANEL, instantiate } from "./core";
 export { CELL, MoltyField, TILE, WATER } from "./field";
-export { loadModule } from "./module";
+export { MODULE_URL, loadModule } from "./module";
 export { onFrame } from "./clock";
 export { mountMoltySim } from "./sim";
 export { setPageWater } from "./water";

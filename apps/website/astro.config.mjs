@@ -8,6 +8,7 @@ import { existsSync } from 'node:fs';
 import { analyticsHead } from './src/config/analytics.mjs';
 import { SYNCED_DOCS, DOC_REDIRECTS } from './src/config/docs.mjs';
 import { remarkGlyphDiagrams } from './src/integrations/markdown/glyphDiagrams.ts';
+import { islandPreload } from './src/integrations/astro/islandPreload.ts';
 import { SITE_URL, SITE_NAME, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH } from './src/config/site.mjs';
 
 /** @param {string} path */
@@ -62,6 +63,8 @@ export default defineConfig({
   },
   integrations: [
     react(),
+    // the islands that hydrate at once: their modules preloaded from the page's head
+    islandPreload(),
     // the demo (/demo/), the device simulator: not listed yet
     sitemap({ filter: (page) => !page.includes('/demo/') }),
     starlight({
