@@ -10,8 +10,6 @@ export interface PageWater {
    *  while a front is out the page's water keeps its waves, else it is the device's own. */
   leak: number;
   damp: number;
-  /** It moves now (flat: nothing of it is drawn, and `under` gives null). */
-  moving: boolean;
   /** The water under a screen's cells (`xy`: x, y each, in the screen's own pixels; `box`: where
    *  the screen's canvas is in the viewport; `px`: its pixels a side): its height now and a step
    *  ago for each, or null while the page's water is flat. */

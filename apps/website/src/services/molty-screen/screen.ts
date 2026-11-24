@@ -14,7 +14,7 @@
 //              (the page then keeps its still images)
 import { onFrame } from "./clock";
 import { MoltyCore, PANEL, type MoltyQuestion, type MoltyState } from "./core";
-import { ENTER, Entrance, play, steps } from "./entrance";
+import { ENTER, Entrance, play } from "./entrance";
 import { WATER } from "./field";
 import { loadModule } from "./module";
 import { sliced } from "./slices";
@@ -289,19 +289,11 @@ class Screen implements MoltyScreenHandle {
     }
   };
 
-  /** A heading takes every other of the page's frames while the page's water moves (about the
-   *  device's own pace: its window is four panels' worth of pixels), and one in six while it is
-   *  flat (nothing of it moves then but its dust's slow shimmer). Headings take turns. A turn's
-   *  firmware frames are spread over the page's frames to the next turn, and its picture is
-   *  drawn after the last: the same pictures, a few frames later. */
-  private static headings = 0;
-  private turn = Screen.headings++;
+  /** A paced screen takes one of the page's frames in `pace`; screens are staggered so paced ones
+   *  take turns. Any other screen, a heading too, takes every frame while it is in view. */
+  private static screens = 0;
+  private turn = Screen.screens++;
   private owed = 0;
-  private spreading = false;
-  /** The turn's firmware frames still to play, the clock in each, and how many a page frame. */
-  private left = 0;
-  private dt = 0;
-  private per = 0;
 
   private tick = (ms: number) => {
     const forming = this.forming;
@@ -312,18 +304,6 @@ class Screen implements MoltyScreenHandle {
         this.forming = false;
         this.formingH = null;
       }
-    } else if (this.options.heading) {
-      this.owed += ms;
-      const every = pageWater()?.moving ? 2 : 6;
-      if (++this.turn % every) return this.spread(this.per);
-      this.spread(Infinity); // the last turn's, when the page's water changed pace mid-turn
-      this.meetPage(false);
-      this.begin(this.owed);
-      [this.left, this.dt] = steps(Math.round(this.owed * 1000));
-      this.per = Math.ceil(this.left / every);
-      this.owed = 0;
-      this.spreading = true;
-      return this.spread(this.per);
     } else if (pace) {
       this.owed += ms;
       if (++this.turn % pace) return;
@@ -377,17 +357,6 @@ class Screen implements MoltyScreenHandle {
       out[2 * i + 1] = was ? was[i]! : h[i]!;
     }
     return out;
-  }
-
-  /** `n` of a heading's turn's firmware frames; after its last, the turn's picture. */
-  private spread(n: number) {
-    if (!this.spreading) return;
-    for (; this.left > 0 && n > 0; this.left--, n--) this.core.frame(this.dt);
-    if (this.left) return;
-    this.spreading = false;
-    this.end();
-    this.draw();
-    this.options.onFrame?.(this.seconds);
   }
 
   private step(ms: number) {

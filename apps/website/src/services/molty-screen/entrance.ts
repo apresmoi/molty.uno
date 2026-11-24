@@ -44,13 +44,8 @@ const SETTLE_STEP_MS = 1000 / 30;
 /** `us` of the firmware's clock: a sped-up clock goes in steps no longer than a device frame (the
  *  creature's player takes no more than that of one frame's time). */
 export function play(us: number, frame: (us: number) => void) {
-  const [n, dt] = steps(us);
-  for (let i = 0; i < n; i++) frame(dt);
-}
-/** `play`'s steps for `us`: how many, and the firmware's clock in each. */
-export function steps(us: number): [number, number] {
   const n = Math.ceil(us / 30000);
-  return [n, us / n];
+  for (let i = 0; i < n; i++) frame(us / n);
 }
 
 /** The cat walking in on the screen's Molty and, when there is one, on the window beside it: the

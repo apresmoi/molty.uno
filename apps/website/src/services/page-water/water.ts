@@ -247,9 +247,6 @@ export function mountPageWater(
     get damp() {
       return front ? CARRY.damp : WATER.damp;
     },
-    get moving() {
-      return !!stop;
-    },
     under(xy, box, px) {
       if (!field || !stop) return null;
       const o = page.getBoundingClientRect();
