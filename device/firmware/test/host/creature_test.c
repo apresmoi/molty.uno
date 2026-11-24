@@ -279,7 +279,7 @@ static double test_render(const char *pkgdir, const char *id, const char *outdir
             fluid_sim_color(s, 1.f / 30);
             if (crisp) cpk_paint(k, s); else fluid_sim_view(s);
             fluid_sim_snapshot(s, fr, false);
-            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false };
+            fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, t, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false, { 0.f, 0.f } };
             /* the drawer's options as mole_fluid.c sets them for a rigged creature: its cells as a scene's dots, with no
              * scene held (scene_hd_t at rest) */
             const scene_hd_t hd = { 0, false, 1.f };
@@ -492,7 +492,7 @@ static void test_crisp_panel(const char *pkgdir) {
         fluid_sim_color(s, 1.f / 30);
         cpk_paint(k, s);
         fluid_sim_snapshot(s, fr, false);
-        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false };
+        fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false, { 0.f, 0.f } };
         const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.dust = scene_hd_dust(&hd);
         const bool full = f == 0;
         if (full) d->force = true;
@@ -569,7 +569,7 @@ static int ring_dots(const cpk_t *k, const fluid_sim_t *s, float r0, float r1, i
 typedef struct { fluid_draw_t *d; fluid_frame_t *fr; uint16_t *buf, *buf2; crisp_panel_t pn; } ring_panel_t;
 static double ring_send(ring_panel_t *rp, const cpk_t *k, fluid_sim_t *s, int f) {   /* this frame to the panel, ~ms (80 MHz) */
     fluid_sim_snapshot(s, rp->fr, false);
-    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false };
+    fluid_draw_opts_t o = { FLUID_PAL_PASTEL, FLUID_EDGE_ALL, 0.12f, f / 30.f, 0.f, NULL, 0, " .:-=+*#", font, NULL, false, 0.f, NULL, 0, NULL, 0, NULL, NULL, 0, 0.f, false, { 0.f, 0.f } };
     const uint32_t *cc; cpk_cells(k, &o.dots, &cc); o.scene = true; o.frame = cpk_draw_frame(k);   /* as mole_fluid.c */
     const fluid_overlay_t ov = { 0 };
     if (f == 0) rp->d->force = true;

@@ -83,11 +83,12 @@ static inline int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MON
 #define HAZE_JITTER   0.5f    /* ...its dither thresholds this noisy (a dust, not a lattice)  */
 #define HAZE_HZ       1.f     /* ...each cell row reseeded this often, rows at their own moments:
                                * a slow shimmer that redraws a row or so a frame             */
-#define HAZE_CREST0   0.5f    /* with haze_water: where the wave shifts dots this many sub-dots the dust gathers (a dot
-                               * shifts at all: web_field.c WF_CREST_MIN, the page's own dust) ...            */
+/* a website heading's haze (fluid_draw_opts_t.haze_live) lives as the page's dust does: */
+#define HAZE_CREST0   0.5f    /* the water moves its dots as a scene's (scene_dots: the page's dust, the letters), and where it
+                               * shifts them this many sub-dots the dust gathers (web_field.c WF_CREST_MIN) ...  */
 #define HAZE_CREST1   1.f     /* ... all of it at this many (WF_CREST) ...                                   */
-#define HAZE_CREST_INK   0.18f /* ... this much more ink ...                                                  */
-#define HAZE_CREST_LEVEL 0.2f  /* ... and this much brighter                                                 */
+#define HAZE_CREST_INK 0.18f  /* ... this much more ink; at rest each of its dots is reseeded HAZE_HZ times a
+                               * second at its own moment (never a whole row at once)                          */
 #define CAP_FADE      3.f     /* the subtitle sits on dark: the dust thins to none this many dots
                                * from its letters                                        */
 #define HALO_REACH    3       /* ...and denser and brighter this many dots from the drawing: the
@@ -635,6 +636,70 @@ static inline uint32_t haze_seed(const fluid_draw_opts_t *o, int j) {
     return (uint32_t)floorf(o->time * HAZE_HZ + hash_u(j, 0, 7)) % 255u;
 }
 
+/* haze_live: sub-dot (x, y)'s reseed, HAZE_HZ times a second at its own moment */
+static inline uint32_t haze_dot_seed(const fluid_draw_opts_t *o, int x, int y) {
+    return (uint32_t)floorf(o->time * HAZE_HZ + hash_u(y, x, 0x51));
+}
+/* ... and cell (i, j)'s: changes when any of its dots' does (never 255) */
+static inline uint8_t haze_cell_seed(const fluid_draw_opts_t *o, int i, int j) {
+    uint32_t sum = 0;
+    for (int q = 0; q < 8; q++) sum += haze_dot_seed(o, 2 * i + (q >> 2), 4 * j + (q & 3));
+    return (uint8_t)(sum % 255u);
+}
+
+/* haze_live: the haze's dot at sub-dot (x, y) with `more` ink: its ink as the device's haze has it (the halo's, thinned
+ * round the subtitle), none on the drawing, dithered as fluid_braille_dither with its own reseed */
+static inline bool haze_dot(const fluid_draw_t *d, const fluid_draw_opts_t *o, int x, int y, float more) {
+    const int dd = d->halo[y * 2 * d->W + x];
+    if (!dd) return false;
+    float v = HAZE_AMBIENT + more + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
+    if (d->cap[0] <= d->cap[1]) {
+        const int e = x < d->cap[0] ? d->cap[0] - x : x > d->cap[1] ? x - d->cap[1] : 0, f = y < d->cap[2] ? d->cap[2] - y : y > d->cap[3] ? y - d->cap[3] : 0;
+        v *= fluid_clamp01(((float)(e > f ? e : f) - 1.f) / CAP_FADE);
+    }
+    const uint32_t jit = (uint32_t)(hash_u(x, y, haze_dot_seed(o, x, y) * 0x2c1b3c6du + 0x297a2d39u) * 16.f) & 15u;   /* (apart from its moment's hash) */
+    const float thr = BAYER4[((y & 3) << 2) | (x & 3)] + HAZE_JITTER * (0.5f / 16.f - 0.5f) + HAZE_JITTER * (1.f / 16.f) * (float)jit;
+#if DITHER_GAMMA_IS_ONE
+    return DITHER_GAIN * v > thr;
+#else
+    return gamma_lut(v) > thr;
+#endif
+}
+
+/* haze_live: the wave's shift of the haze's dots at interior cell k, sub-dots (wave_shift, its slope as the page's dust
+ * takes it) */
+static inline void haze_shift(const fluid_frame_t *s, const fluid_draw_opts_t *o, int k, float *fx, float *fy) {
+    wave_shift(s, k, fx, fy);
+    *fx *= o->haze_water[0]; *fy *= o->haze_water[1];
+}
+
+/* haze_live: the haze's dots interior cell (i, j) shows, through the water as a scene's dots are (scene_dots: shifted by
+ * the wave, scattered where it is steep), gathering on its crest; never on the drawing. *near: the drawing's nearest */
+static int haze_live(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o, int i, int j, int *near) {
+    const int W = s->W, H = s->H;
+    float fx, fy;
+    haze_shift(s, o, j * W + i, &fx, &fy);              /* (as dust_radius: beyond DUST_CALM the dots scatter) */
+    const float m2 = fx * fx + fy * fy, steep = m2 <= DUST_CALM * DUST_CALM ? 0.f : DUST_GAIN * (sqrtf(m2) - DUST_CALM);
+    const float rad = steep > DUST_MAX ? DUST_MAX : steep, ay = 2.f * H / W, rx = rad * (1.f / 127.f), ry = rx * ay;
+    const float more = HAZE_CREST_INK * fluid_clamp01((sqrtf(m2) - HAZE_CREST0) * (1.f / (HAZE_CREST1 - HAZE_CREST0)));
+    const int ox = fx < -2.f ? -2 : fx > 2.f ? 2 : (int)lrintf(fx), oy = fy < -4.f ? -4 : fy > 4.f ? 4 : (int)lrintf(fy);
+    int out = 0;
+    for (int q = 0; q < 8; q++) {
+        const int c = q >> 2, r = q & 3, x0 = 2 * i + c, y0 = 4 * j + r, dd = d->halo[y0 * 2 * W + x0];
+        if (dd < *near) *near = dd;
+        if (!dd) continue;
+        int x = x0 + ox, y = y0 + oy;
+        if (rad >= 0.5f) {
+            const int8_t *sc = d->scat + 3 * (y0 * 2 * W + x0);
+            const float sx = sc[0] * rx, sy = sc[1] * ry;
+            x += (int)(sx + (sx < 0.f ? -0.5f : 0.5f)); y += (int)(sy + (sy < 0.f ? -0.5f : 0.5f));
+        }
+        if (x < 0 || y < 0 || x >= 2 * W || y >= 4 * H) continue;
+        if (haze_dot(d, o, x, y, more)) out |= 1 << fluid_braille_bit(c, r);
+    }
+    return out;
+}
+
 /* (key, colour) of one cell — what render.js would draw there */
 static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o,
                              int i, int j, int k, int rmax, uint32_t frame, uint16_t *key_out, uint16_t *col_out, uint8_t *hard_out, uint16_t *hcol_out) {
@@ -683,27 +748,26 @@ static inline void cell_look(const fluid_draw_t *d, const fluid_frame_t *s, cons
         if (!dots && o->shapes && !o->fine && o->dust <= 0.f && i >= 1 && j >= 1 && i < W - 1 && j < s->H - 1) {
             /* around the drawing (not while it breaks into dust or forms: the effect stays light), a faint dust, denser and brighter close to it (d->halo), never on
              * it, thinning to dark round the subtitle (d->cap), reseeded slowly (haze_seed) */
-            float sub[8], crest = 0.f;
-            if (o->haze_water) {                        /* where the wave moves dots the dust gathers, as the page's does */
-                float fx, fy;
-                wave_shift(s, k, &fx, &fy);
-                crest = fluid_clamp01((sqrtf(fx * fx + fy * fy) - HAZE_CREST0) * (1.f / (HAZE_CREST1 - HAZE_CREST0)));
-            }
-            int near = HALO_REACH + 1, on = 0;
-            for (int q = 0; q < 8; q++) {
-                const int x = 2 * i + (q >> 2), y = 4 * j + (q & 3), dd = d->halo[y * 2 * W + x];
-                sub[q] = HAZE_AMBIENT + HAZE_CREST_INK * crest + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
-                if (d->cap[0] <= d->cap[1]) {
-                    const int e = x < d->cap[0] ? d->cap[0] - x : x > d->cap[1] ? x - d->cap[1] : 0, f = y < d->cap[2] ? d->cap[2] - y : y > d->cap[3] ? y - d->cap[3] : 0;
-                    sub[q] *= fluid_clamp01(((float)(e > f ? e : f) - 1.f) / CAP_FADE);
+            int near = HALO_REACH + 1, hz = 0;
+            if (o->haze_live) hz = haze_live(d, s, o, i, j, &near);
+            else {
+                float sub[8];
+                int on = 0;
+                for (int q = 0; q < 8; q++) {
+                    const int x = 2 * i + (q >> 2), y = 4 * j + (q & 3), dd = d->halo[y * 2 * W + x];
+                    sub[q] = HAZE_AMBIENT + (dd <= HALO_REACH ? HALO_INK[dd] : 0.f);
+                    if (d->cap[0] <= d->cap[1]) {
+                        const int e = x < d->cap[0] ? d->cap[0] - x : x > d->cap[1] ? x - d->cap[1] : 0, f = y < d->cap[2] ? d->cap[2] - y : y > d->cap[3] ? y - d->cap[3] : 0;
+                        sub[q] *= fluid_clamp01(((float)(e > f ? e : f) - 1.f) / CAP_FADE);
+                    }
+                    if (dd) on |= 1 << fluid_braille_bit(q >> 2, q & 3);
+                    if (dd < near) near = dd;
                 }
-                if (dd) on |= 1 << fluid_braille_bit(q >> 2, q & 3);
-                if (dd < near) near = dd;
+                hz = fluid_braille_dither(sub, i, j, HAZE_JITTER, haze_seed(o, j)) & on;
             }
-            const int hz = fluid_braille_dither(sub, i, j, HAZE_JITTER, haze_seed(o, j)) & on;
             if (hz) {
                 const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
-                const float lv = (near <= HALO_REACH ? HALO_LEVEL[near] : HAZE_LEVEL) + HAZE_CREST_LEVEL * crest;
+                const float lv = near <= HALO_REACH ? HALO_LEVEL[near] : HAZE_LEVEL;
                 const float *lo = PAL[pal][0], *hi = PAL[pal][1], f = lv * (255.f / 65535.f);
                 int kc2 = k, most = 0;                       /* near it: the drawing's colour */
                 for (int q = 0; near <= HALO_REACH && q < 9; q++) {
@@ -923,7 +987,11 @@ static inline bool hd_still(const fluid_frame_t *s, const fluid_draw_opts_t *o, 
     wave_shift(s, k, &fx, &fy);
     const float m2 = fx * fx + fy * fy;
     if (m2 < 0.25f) return true;
-    if (o->haze_water) return false;                    /* (its haze gathers under the wave: HAZE_CREST0, half a sub-dot) */
+    if (o->haze_live) {                                 /* (its haze rides the water: a dot moves from half a sub-dot) */
+        float hx, hy;
+        haze_shift(s, o, k, &hx, &hy);
+        if (hx * hx + hy * hy >= 0.25f) return false;
+    }
     if (m2 >= (HD_CALM + 0.5f * HD_FADE) * (HD_CALM + 0.5f * HD_FADE)) return false;   /* (hd_dust >= 0.5, without its root) */
     for (int q = 0; o->kdots && q < 9; q++) if (o->kdots[k + (q / 3 - 1) * W + q % 3 - 1]) return false;
     return true;
@@ -1170,7 +1238,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             /* a scene in high definition, calm: a cell whose drawing, halo, dust seed and wave are as
              * they were is not looked at again */
             const fluid_fine_t *ff = hd ? o->fine : NULL;
-            const bool dust_same = hd && (ff ? ff->sig[k] == ff->sig0[k] : d->hde[k] == seed);
+            const uint8_t sk = hd && o->haze_live ? haze_cell_seed(o, i, j) : seed;   /* (haze_live: its dots' own) */
+            const bool dust_same = hd && (ff ? ff->sig[k] == ff->sig0[k] : d->hde[k] == sk);
             const bool look_same = hd && !d->force && o->dust <= 0.f && !d->hch[k] && s->mask[k] && !d->skip[k] && key_hd(d->key[k]) &&
                                    hd_still(s, o, i, j, k) && hd_sig(o->dots, W, H, i, j) == d->hds[k];
             if (look_same && dust_same &&
@@ -1208,7 +1277,7 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             if (d->skip[k]) key = KEY_SKIP;
             else if (s->mask[k]) cell_look(d, s, &oo, i, j, k, rmax, frame, &key, &col, &hard, &hcol);
             key |= hard;                                    /* (EXPERIMENT kind 3: the hard dots, in the key, drawn apart) */
-            d->hde[k] = hd && o->dust <= 0.f && key_hd(key) && hd_still(s, o, i, j, k) ? seed : 255;
+            d->hde[k] = hd && o->dust <= 0.f && key_hd(key) && hd_still(s, o, i, j, k) ? sk : 255;
             /* what the shapes draw in a cell changes with the dots around it */
             const uint8_t sig = key_hd(key) ? hd_sig(o->dots, W, H, i, j) : 0;
             /* a letter's cleared cell that was one last frame: sent again only if the letters changed (2: decided below) */

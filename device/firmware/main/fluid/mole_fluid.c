@@ -292,7 +292,8 @@ static fluid_text_t *s_tx   = NULL;
 static fluid_draw_t *s_draw = NULL;            /* drawer-owned while it runs        */
 static fluid_frame_t *s_frame = NULL;           /* snapshot handed to the drawer     */
 static fluid_draw_opts_t s_dopts;
-static bool s_haze_water = false;              /* the haze takes the water (a website heading: wm_haze) */
+static bool  s_haze_live;                      /* the haze lives as the page's dust (a website heading: wm_haze) ..   */
+static float s_haze_water[2];                  /* .. the water moving its dots this much (wm_haze_water)              */
 static fluid_letter_t s_dletters[FLUID_MAX_LETTERS];
 static float s_melt = 0.f, s_shimmer = 0.12f;
 static uint32_t s_frame_no = 0;
@@ -2323,7 +2324,7 @@ static void fluid_task(void *arg) {
                 /* the boot word, and its dots while it melts (each goes as the ink leaves it) */
                 .dots = s_cur == ST_SCENE || s_hd.out || s_crisp ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
                 .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd), .frame = s_crisp && s_cpk ? cpk_draw_frame(s_cpk) : 0,
-                .haze_water = s_haze_water,
+                .haze_live = s_haze_live, .haze_water = { s_haze_water[0], s_haze_water[1] },
             };
             /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
             if (s_crisp) {   /* a rigged creature's cells, as a scene's dots */
