@@ -29,7 +29,7 @@ extern "C" {
 #endif
 
 #define CC_NODES_MAX  80
-#define CC_CLIPS_MAX  64
+#define CC_CLIPS_MAX  96
 #define CC_SHAPES_MAX 128
 #define CC_FAMS_MAX   8
 #define CC_EDGES_MAX  64

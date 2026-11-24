@@ -415,7 +415,8 @@ static const char *parse_root(arena_t *a, pkg_t *p, const cJSON *j) {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "v"), *id = cJSON_GetObjectItemCaseSensitive(j, "id");
     const cJSON *name = cJSON_GetObjectItemCaseSensitive(j, "name"), *ver = cJSON_GetObjectItemCaseSensitive(j, "version");
     const cJSON *kind = cJSON_GetObjectItemCaseSensitive(j, "kind");
-    if (!cJSON_IsString(v) || strcmp(v->valuestring, "molty-pkg/1")) return "package: v";
+    /* 2: a creature's rig may pack its clips (docs/CREATURES.md section 12); an older firmware refuses it here, at install */
+    if (!cJSON_IsString(v) || (strcmp(v->valuestring, "molty-pkg/1") && strcmp(v->valuestring, "molty-pkg/2"))) return "package: v";
     if (!cJSON_IsString(id) || !pkg_id_ok(id->valuestring)) return "package: id";
     if (!cJSON_IsString(name) || !pkg_text_ok(name->valuestring, PKG_TEXT_MAX)) return "package: name";
     if (!cJSON_IsString(ver) || !version_ok(ver->valuestring)) return "package: version";

@@ -135,7 +135,8 @@ static void test_parse(void) {
     char *big = malloc(PKG_FILE_MAX + 2); memset(big, ' ', PKG_FILE_MAX + 1); memcpy(big, s_fix, s_fix_len);
     CHECK(!pkg_parse(big, PKG_FILE_MAX + 1, &err) && !strcmp(err, "package: size"), "oversized");
     free(big);
-    CHECK(IS(parse_with("\"molty-pkg/1\"", "\"molty-pkg/2\""), "package: v"), "an unknown format version");
+    CHECK(IS(parse_with("\"molty-pkg/1\"", "\"molty-pkg/3\""), "package: v"), "an unknown format version");
+    CHECK(!parse_with("\"molty-pkg/1\"", "\"molty-pkg/2\""), "molty-pkg/2: a rig that packs its clips");
     CHECK(parse_with("\"id\": \"shapes\"", "\"id\": \"Shapes!\""), "a bad id");
     CHECK(parse_with("\"kind\": \"scenes\"", "\"kind\": \"code\""), "an unknown package kind");
     /* unknown anything */

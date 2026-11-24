@@ -118,16 +118,73 @@ static void quat_mat(const float *q, float *m) {
     m[6] = 2 * (x * z - y * w); m[7] = 2 * (y * z + x * w); m[8] = 1 - 2 * (x * x + y * y);
 }
 
+/* a packed clip (clip-pack.js, docs/CREATURES.md section 12 "Packed clips"): the same keys and integers as the plain
+ * form, each series as its first number and its steps in the fewest bits that hold the largest */
+typedef struct { const uint8_t *b; size_t n, pos; bool bad; } bits_t;
+static uint32_t get_bits(bits_t *r, int n) {
+    uint32_t v = 0;
+    for (int i = 0; i < n; i++, r->pos++) {
+        if (r->pos >> 3 >= r->n) { r->bad = true; return 0; }
+        v |= (uint32_t)(r->b[r->pos >> 3] >> (r->pos & 7) & 1) << i;
+    }
+    return v;
+}
+static const char *unpack_clip(clip_t *k, const char *pk, const float scale[3]) {
+    size_t nb;
+    uint8_t *b = b64(pk, &nb);
+    if (!b) return "oom";
+    bits_t r = { b, nb, 0, false };
+    const char *e = NULL;
+    k->nch = (int)get_bits(&r, 16);
+    k->ch = CC_MALLOC(sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
+    if (!k->ch) { CC_FREE(b); return "oom"; }
+    memset(k->ch, 0, sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
+    for (int i = 0; i < k->nch && !e; i++) {
+        chan_t *x = &k->ch[i];
+        x->node = (uint8_t)get_bits(&r, 8);
+        x->path = (uint8_t)get_bits(&r, 2);
+        const uint32_t ip = get_bits(&r, 2), b8 = get_bits(&r, 1);
+        x->nk = (uint16_t)get_bits(&r, 16);
+        if (r.bad || x->path > 2 || ip > 2 || !x->nk || (b8 && x->path != 1)) { e = "rig: packed channel"; break; }
+        x->cubic = ip == 2; x->linear = ip == 1; x->w = x->path == 1 ? 4 : 3;
+        const int per = x->w * (x->cubic ? 3 : 1);
+        x->keys = (uint16_t *)CC_MALLOC(sizeof(uint16_t) * x->nk);
+        x->out = (float *)CC_MALLOC(sizeof(float) * (size_t)per * x->nk);
+        if (!x->keys || !x->out) { e = "oom"; break; }
+        x->keys[0] = (uint16_t)get_bits(&r, 16);
+        if (x->nk > 1) { const int w = (int)get_bits(&r, 5); for (int q = 1; q < x->nk; q++) x->keys[q] = (uint16_t)(x->keys[q - 1] + get_bits(&r, w) + 1); }
+        for (int cpt = 0; cpt < per; cpt++) {
+            int32_t v = (int32_t)get_bits(&r, b8 ? 8 : 16);
+            v = b8 ? (int32_t)(int8_t)(uint8_t)v : (int32_t)(int16_t)(uint16_t)v;
+            const int w = x->nk > 1 ? (int)get_bits(&r, 5) : 0;
+            for (int q = 0; q < x->nk; q++) {
+                if (q) { const uint32_t z = get_bits(&r, w); v += z & 1 ? -(int32_t)((z + 1) >> 1) : (int32_t)(z >> 1); }
+                x->out[(size_t)q * (size_t)per + (size_t)cpt] = b8 ? (float)v / 127.f : (float)v / scale[x->path];
+            }
+        }
+        if (r.bad) e = "rig: packed channel";
+        for (int q = 1; q < x->nk && !e; q++) if (x->keys[q] <= x->keys[q - 1]) e = "rig: keys out of order";
+    }
+    CC_FREE(b);
+    return e;
+}
+
 static const char *parse_clip(cc_t *c, clip_t *k, const cJSON *j, const float scale[3]) {
     const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "dur"), *lp = cJSON_GetObjectItemCaseSensitive(j, "loop"),
                 *fr = cJSON_GetObjectItemCaseSensitive(j, "from"), *to = cJSON_GetObjectItemCaseSensitive(j, "to"),
                 *vw = cJSON_GetObjectItemCaseSensitive(j, "view"), *nf = cJSON_GetObjectItemCaseSensitive(j, "frames"),
-                *ch = cJSON_GetObjectItemCaseSensitive(j, "ch");
+                *ch = cJSON_GetObjectItemCaseSensitive(j, "ch"), *pk = cJSON_GetObjectItemCaseSensitive(j, "pk");
     if (!cJSON_IsNumber(d) || !cJSON_IsBool(lp) || !cJSON_IsString(fr) || !cJSON_IsString(to) || !cJSON_IsNumber(vw) ||
-        !cJSON_IsNumber(nf) || !cJSON_IsArray(ch)) return "rig: clip fields";
+        !cJSON_IsNumber(nf) || !(cJSON_IsArray(ch) ^ cJSON_IsString(pk)) || (ch && pk)) return "rig: clip fields";
     k->dur = (float)d->valuedouble; k->loop = cJSON_IsTrue(lp); k->view = (float)vw->valuedouble; k->frames = nf->valueint;
     k->from = (int8_t)fam_of(c, fr->valuestring); k->to = (int8_t)fam_of(c, to->valuestring);
     if (k->from < 0 || k->to < 0 || k->dur <= 0.f || k->frames < 1) return "rig: clip family or length";
+    if (pk) {
+        const char *e = unpack_clip(k, pk->valuestring, scale);
+        if (e) return e;
+        for (int i = 0; i < k->nch; i++) if (k->ch[i].node >= c->nn) return "rig: channel node";
+        return NULL;
+    }
     k->nch = cJSON_GetArraySize(ch);
     k->ch = CC_MALLOC(sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
     if (!k->ch) return "oom";

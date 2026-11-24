@@ -2,7 +2,8 @@
  * clip_test.c: the rigged creature player and its dots (main/creature/creature_clip.c, creature_dots.c) against the JS
  * reference (device/creatures/js/clip-player.js, clip-dots.js): the goldens tools/creatures/clip-golden.mjs writes, frame
  * by frame (what plays, the world matrices, the camera, and every 10th frame's braille cells). Also: every ordered pair of
- * pose families has an authored route, a broken rig is refused, and the cost of a frame.
+ * pose families has an authored route, a broken rig is refused, and the cost of a frame. Packed clips play exactly as their
+ * plain form (the same world matrices, bit for bit).
  * Build + run: test/host/clip_build.sh
  */
 #include "creature_clip.h"
@@ -277,13 +278,46 @@ static void test_props(const char *pkgdir) {
     CHECK(!left_over, "props: a prop still shows %d frames after the creature is back in its mood", left_over);
 }
 
+/* the cat's clips packed (its package) and plain (the same keys written out per channel, clip_build.sh): every clip played
+ * from its start, every frame, the same world matrices bit for bit; and the time it takes to load each */
+static void test_packed(const char *pkgdir, const char *plain) {
+    size_t n1, n2;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/cat/cat.json", pkgdir);
+    char *a = slurp(path, &n1), *b = slurp(plain, &n2);
+    CHECK(a && b, "packed: the cat and its plain form");
+    if (!a || !b) { free(a); free(b); return; }
+    cJSON *ja = cJSON_ParseWithLength(a, n1), *jb = cJSON_ParseWithLength(b, n2);
+    const char *err = NULL;
+    double t0 = now_us();
+    cc_t *pa = cc_create(cJSON_GetObjectItemCaseSensitive(ja, "creature"), &err);
+    const double ta = now_us() - t0;
+    t0 = now_us();
+    cc_t *pb = cc_create(cJSON_GetObjectItemCaseSensitive(jb, "creature"), &err);
+    const double tb = now_us() - t0;
+    CHECK(pa && pb, "packed: both load (%s)", err ? err : "");
+    int frames = 0, differ = 0;
+    for (int k = 0; pa && pb && k < cc_clips(pa); k++) {
+        cc_play(pa, cc_clip_name(pa, k)); cc_play(pb, cc_clip_name(pb, k));
+        for (int f = 0; f < 120; f++, frames++) {
+            cc_update(pa, 1.f / 30.f); cc_update(pb, 1.f / 30.f);
+            if (memcmp(cc_world(pa), cc_world(pb), sizeof(float) * 12 * (size_t)cc_nodes(pa))) differ++;
+        }
+    }
+    printf("  packed: %d clips, %d frames, %d differ; %zu bytes packed (%zu plain); loads in %.1f ms (plain %.1f) on this computer\n",
+           pa ? cc_clips(pa) : 0, frames, differ, n1, n2, ta / 1000.0, tb / 1000.0);
+    CHECK(frames > 0 && !differ, "packed: %d of %d frames differ from the plain form", differ, frames);
+    cc_destroy(pa); cc_destroy(pb); cJSON_Delete(ja); cJSON_Delete(jb); free(a); free(b);
+}
+
 int main(int argc, char **argv) {
-    if (argc < 3) { printf("usage: clip_test <packages dir> <golden dir>\n"); return 2; }
+    if (argc < 3) { printf("usage: clip_test <packages dir> <golden dir> [plain cat]\n"); return 2; }
     printf("rigged creature host test\n");
     test_golden(argv[1], argv[2], "cat");
     test_strict(argv[1]);
     test_chains(argv[1]);
     test_props(argv[1]);
+    if (argc > 3) test_packed(argv[1], argv[3]);
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;
 }
