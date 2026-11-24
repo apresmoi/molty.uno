@@ -407,6 +407,48 @@ test("every heading rides the page's water: a wave loosens its lines as the fron
   }
 });
 
+test("every heading's dust rides the page's water: it moves as the front passes, and is as it was once the water is calm", async () => {
+  const PX = 512;
+  const size = PX / K;
+  // the rows above and below its letters: dust alone. How many of their pixels a frame changes (at rest: a row
+  // reseeded now and then)
+  const band = Math.floor(PX * 0.15);
+  let last: Uint8ClampedArray | null = null;
+  const moved = (core: MoltyCore) => {
+    const px = core.pixels().slice();
+    let n = 0;
+    if (last)
+      for (let y = 0; y < PX; y += y === band - 1 ? PX - 2 * band + 1 : 1)
+        for (let i = y * PX * 4; i < (y + 1) * PX * 4; i += 4) n += px[i] !== last[i] || px[i + 1] !== last[i + 1] || px[i + 2] !== last[i + 2] ? 1 : 0;
+    last = px;
+    return n;
+  };
+  const run = (field: Awaited<ReturnType<typeof openField>>, core: MoltyCore, box: { left: number; top: number; size: number; px: number }, frames: number) => {
+    let n = 0;
+    for (let f = 0; f < frames; f++) {
+      frame(field, core, box, HEADING_GAIN);
+      n += moved(core);
+    }
+    return n / frames;
+  };
+  for (const [layout] of WORDS) {
+    const field = await openField(212, 94);
+    const core = await heading(layout, PX);
+    const box = { left: 500, top: 200, size, px: PX };
+    for (let f = 0; f < 240; f++) frame(field, core, box, HEADING_GAIN);
+    last = null;
+    const rest = run(field, core, box, 240);
+    field.tap((box.left - 0.3 * size) * K, (box.top + size / 2) * K, WATER.tap, WATER.tapRadius * (WATER.panel / 2));
+    const wave = run(field, core, box, 240);
+    assert.ok(wave > 2 * rest, `${layout}: the front moves its dust (${wave.toFixed(0)} px a frame against ${rest.toFixed(0)} at rest)`);
+    for (let f = 0; f < 900; f++) frame(field, core, box, HEADING_GAIN);
+    last = null;
+    const calm = run(field, core, box, 240);
+    assert.ok(calm < 1.25 * rest, `${layout}: its dust is back as it was (${calm.toFixed(0)} px a frame against ${rest.toFixed(0)})`);
+    field.destroy();
+  }
+});
+
 test("a tap on a heading loosens it most", async () => {
   const PX = 512,
     size = PX / K;
