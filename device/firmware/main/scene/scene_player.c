@@ -121,7 +121,7 @@ static int group_of(scene_t *sc, const char *name, size_t len) {
 static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJSON *el, int eln) {
     if (sc->nitems >= SCENE_ITEMS_MAX) return false;
     scene_item_t *o = &sc->items[sc->nitems];
-    *o = (scene_item_t){ .k = it->k, .asset = -1, .rgb = 0xffffff, .lst = (int8_t)(el ? it->each : -1), .eln = (uint8_t)eln };
+    *o = (scene_item_t){ .k = it->k, .asset = -1, .rgb = 0xffffff, .lst = (int8_t)(el ? it->each : -1), .eln = (uint8_t)eln, .layer = -1 };
     const pkg_val_t *f = it->f;
     float n;
     bool ok = num(b, &f[PF_ON], el, PF_ON, 0.f, &o->on) && num(b, &f[PF_OFF], el, PF_OFF, 0.f, &o->off) &&
@@ -134,6 +134,33 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
               num(b, &f[PF_ARC], el, PF_ARC, 0.f, &o->arc) && num(b, &f[PF_R0], el, PF_R0, 0.f, &o->r0) && num(b, &f[PF_R1], el, PF_R1, 0.f, &o->r1);
     if (!ok) return false;
     o->n = (int)n;
+    if (it->k == PK_BEAT && f[PF_SIZE].src == PV_NONE) o->size = o->r * 0.057f;   /* its dots: the design's 0.038 on a 0.67 ring */
+    if (it->k == PK_DIAL || it->k == PK_CENTRE) {
+        float face = 0.f;
+        if (!num(b, &f[PF_STEP], el, PF_STEP, 12.f, &o->step) || !num(b, &f[PF_BY], el, PF_BY, 1.f, &o->by) ||
+            !num(b, &f[PF_FAST], el, PF_FAST, o->by, &o->fast) || !num(b, &f[PF_MIN], el, PF_MIN, -10000.f, &o->vmin) ||
+            !num(b, &f[PF_MAX], el, PF_MAX, 10000.f, &o->vmax) || !num(b, &f[PF_VAL], el, PF_VAL, o->vmin > 0.f ? o->vmin : 0.f, &o->val) ||
+            !num(b, &f[PF_FACE], el, PF_FACE, 0.f, &face) || !num(b, &f[PF_BACK], el, PF_BACK, 4.f, &o->back) || o->vmax < o->vmin)
+            return false;
+        o->face = (uint8_t)face;
+        if (f[PF_R].src == PV_NONE) o->r = it->k == PK_DIAL ? 0.95f : 0.26f;
+        if (f[PF_R0].src == PV_NONE) o->r0 = 0.85f;
+        const char *sets = str_of(b, &f[PF_SETS], el);
+        o->sets = sets && !strcmp(sets, "tempo") ? 1 : sets && !strcmp(sets, "pick") ? 2 : 0;
+        const char *id = str_of(b, &f[PF_ID], el);
+        if (it->k == PK_DIAL && (!id || !say_add(sc, id, PKG_STR_MAX, &o->sid, &o->nsid))) return false;
+        if (f[PF_LABELS].src == PV_PARAM) {               /* each element's label, '\n' between */
+            o->lab = (uint16_t)sc->nsay;
+            for (const cJSON *e = b->pv[f[PF_LABELS].idx]->child; e; e = e->next) {
+                const cJSON *l = cJSON_GetObjectItemCaseSensitive(e, "label");
+                const size_t n = cJSON_IsString(l) ? strlen(l->valuestring) : 0;
+                if (!n || n > PKG_KEY_MAX || sc->nsay + (int)n + 1 > SCENE_SAY_CHARS || o->nlab >= SCENE_WHEEL_LABELS) return false;
+                memcpy(sc->say + sc->nsay, l->valuestring, n); sc->nsay += (int)n;
+                sc->say[sc->nsay++] = '\n';
+                o->nlab++;
+            }
+        }
+    }
     if (it->polar) {
         float a, r;
         if (!num(b, &f[PF_PA], el, PF_PA, 0.f, &a) || !num(b, &f[PF_PR], el, PF_PR, 0.f, &r)) return false;
@@ -184,6 +211,8 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
     return true;
 }
 
+static unsigned next_serial(void) { static unsigned serial; return ++serial ? serial : ++serial; }
+
 scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float ttl_s, const char **err) {
     const pkg_layout_t *l = p && layout ? pkg_layout(p, layout) : NULL;
     if (!l) { *err = "no_layout"; return NULL; }
@@ -203,8 +232,10 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     pkg_ref(p);
     sc->pkg = p;
     sc->focus = -1; sc->grow = 1.f;
-    static unsigned serial;
-    sc->serial = ++serial ? serial : ++serial;
+    sc->serial = next_serial();
+    sc->beat = -1;
+    for (int n = 0; n < sc->nitems; n++) if (sc->items[n].k == PK_BEAT) sc->beat = n;
+    sc->nfixed = sc->nitems; sc->nchars_fixed = sc->nchars;
     snprintf(sc->pkg_id, sizeof(sc->pkg_id), "%s", p->id);
     snprintf(sc->layout, sizeof(sc->layout), "%s", l->name);
     sc->dur = l->dur;
@@ -373,7 +404,7 @@ typedef struct {
     uint32_t *tcol;
     uint8_t keep;                      /* the item painting now keeps its dots in high definition */
 } canvas_t;
-typedef struct { canvas_t *s; float soft; scene_shapes_t *hd; bool paint; } ctx_t;   /* paint: the canvas too, not just shapes */
+typedef struct { canvas_t *s; float soft; scene_shapes_t *hd; bool paint, live; } ctx_t;   /* paint: the canvas too, not just shapes; live: the live items too */
 
 /* Painter's order, as the reference player (packages/tools/play.mjs): an item covers what is
  * under it by `a` (its coverage, 0..1, the soft edge), leaving ink v in colour rgb. A black
@@ -849,7 +880,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
     const scene_item_t *fs = sc && sc->focus >= 0 && sc->focus < sc->nitems && grow != 1.f ? &sc->items[sc->focus] : NULL;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
-        if (t < it->on || (it->off > 0.f && t >= it->off)) continue;
+        if (t < it->on || (it->off > 0.f && t >= it->off) || (it->live && !c->live)) continue;
         scene_item_t g;
         float gp[GROW_PTS][2];
         const float (*pts)[2] = sc->pts + it->pts;
@@ -1004,6 +1035,7 @@ static uint32_t fill_key(const fluid_sim_t *s, const scene_t *sc, float t, float
     h = (h ^ (uint32_t)s->stage ^ (uint32_t)(sc && gq > 0.f ? sc->focus : -1) << 16 ^ (uint32_t)(gq * 4.f) << 28) * 16777619u;
     for (int n = 0; sc && n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
+        if (it->live) continue;
         const bool on = t >= it->on && !(it->off > 0.f && t >= it->off);
         if (on && it->k == PK_BALL && it->spin != 0.f) return 0;
         h = (h ^ (uint32_t)on) * 16777619u;
@@ -1054,7 +1086,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
                 fluid_letter_t *tl = s_scr_let;
                 int tn = 0;
                 scene_shapes_t th = { tmp, 0, NULL, NULL };
-                const ctx_t cs = { cv, soft, &th, false };
+                const ctx_t cs = { cv, soft, &th, false, false };
                 s_mark = hd->still;
                 paint_items(&cs, sc, t, scene_spot_grow(sc, sc->focus), 1.f, tl, &tn);
                 s_mark = NULL;
@@ -1070,7 +1102,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
             still_key = sk;
         }
     }
-    const ctx_t c = { cv, soft, hd, false };
+    const ctx_t c = { cv, soft, hd, false, true };
     paint_items(&c, sc, t, sc ? sc->grow : 1.f, glow, letters, nletters);
     /* the items' dots follow a growth halfway and whole; not in high definition with its still cells, where the grown
      * drawing never shows on the dots (the water never breaks it): a tap then repaints nothing here */
@@ -1081,7 +1113,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         const uint32_t bg = fluid_pack_rgba8(0.6f, 0.68f, 0.92f, 0.f);
         FLUID_DOTS(FLUID_DOTS_PASS, cv->N);
         for (int k = 0; k < cv->N; k++) { cv->T[k] = 0; cv->tcol[k] = bg; cv->mask[k] &= 1; }
-        const ctx_t c = { cv, soft, NULL, true };
+        const ctx_t c = { cv, soft, NULL, true, false };
         s_fc.nl = 0;
         paint_items(&c, sc, t, 1.f + (scene_spot_grow(sc, sc ? sc->focus : -1) - 1.f) * gq, gq, s_fc.letters, &s_fc.nl);
         fold(cv, s->W, 0, s->H - 1, s_fc.T, s_fc.tcol, s_fc.dots, s_fc.keep);
@@ -1123,7 +1155,7 @@ void scene_fill(fluid_sim_t *s, const scene_t *sc, float t, const scene_caption_
         memcpy(s_fc.bT, cv->T + o, sizeof(int16_t) * (size_t)nb);
         memcpy(s_fc.btcol, cv->tcol + o, sizeof(uint32_t) * (size_t)nb);
         memcpy(s_fc.bmask, cv->mask + o, (size_t)nb);
-        const ctx_t cc = { cv, soft, hd, true };
+        const ctx_t cc = { cv, soft, hd, true, false };
         caption(&cc, cap, sc ? sc->caption_y : SCENE_CAPTION_Y, letters, nletters);
         fold(cv, s->W, bj0, bj1, s->T, s->tcol, dots, hd ? hd->keep : NULL);
         for (int n = 0; dots && n < s_fc.nl; n++) letter_dots(s, &s_fc.letters[n], dots);
@@ -1150,7 +1182,7 @@ int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t 
     fluid_letter_t *tl = s_scr_let;
     int tn = 0;
     scene_shapes_t h = { out, 0, NULL, NULL };
-    const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false };
+    const ctx_t c = { &s_cv, 1.f / s_cv.H, &h, false, false };
     const bool tapped = sc->focus >= 0 && sc->glow > 0.f;
     paint_items(&c, sc, t, tapped ? scene_spot_grow(sc, sc->focus) : 1.f, tapped ? 1.f : 0.f, tl, &tn);
     /* the drawing itself: the same shapes, the same key, whichever scene they are of (back at a chart, its dust is known) */
@@ -1175,7 +1207,7 @@ uint32_t scene_full_key(const fluid_sim_t *s, const scene_t *sc, float t) {
     k = (k ^ (uint32_t)s->stage ^ (uint32_t)(tapped ? sc->focus + 1 : 0) << 20) * 16777619u;
     for (int n = 0; n < sc->nitems; n++) {
         const scene_item_t *it = &sc->items[n];
-        k = (k ^ (uint32_t)(t >= it->on && !(it->off > 0.f && t >= it->off))) * 16777619u;
+        if (!it->live) k = (k ^ (uint32_t)(t >= it->on && !(it->off > 0.f && t >= it->off))) * 16777619u;
     }
     return k ? k : 1;
 }
@@ -1248,4 +1280,162 @@ int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, 
         if (seg[q]) shp[w++] = (fluid_shape_t){ .k = FLUID_SHAPE_RING, .rgb = seg[q], .x = stage * 0.5f, .y = stage * 0.5f, .r = SCENE_RING_R * stage * 0.5f,
                                                 .hw = SCENE_RING_HW, .a0 = 90.f - (q + 1) * step, .span = step };
     return n + on;
+}
+
+/* ── a beat: the beat player's pattern as a clock ──────────────────────────────────────────────────────────────── */
+
+static const float BEAT_RING[SCENE_BEAT_LAYERS] = { 1.f, 0.75f, 0.525f, 0.3375f };   /* of the beat's r          */
+#define BEAT_GRID  0x565b72u            /* the rings                                                             */
+#define BEAT_INK   0xc8cce0u            /* the marks                                                             */
+#define BEAT_HAIR  0.012f
+#define BEAT_SWELL 1.9f                 /* a sounding hit, at its biggest, of its dot                            */
+
+static scene_item_t *beat_item(scene_t *sc, uint8_t k, bool live) {
+    if (sc->nitems >= SCENE_ITEMS_MAX + SCENE_LIVE_MAX) return NULL;
+    scene_item_t *o = &sc->items[sc->nitems++];
+    *o = (scene_item_t){ .k = k, .asset = -1, .rgb = 0xffffff, .lst = -1, .live = live, .layer = -1, .w = BEAT_HAIR, .n = 1, .lit = 1.f, .side = 1.f };
+    return o;
+}
+static void beat_disc(scene_t *sc, float x, float y, float r, uint32_t rgb, bool live, int layer) {
+    scene_item_t *o = beat_item(sc, PK_DISC, live);
+    if (o) { o->x = x; o->y = y; o->r = r; o->rgb = rgb; o->layer = (int8_t)layer; }
+}
+static void beat_spoke(scene_t *sc, float a, float r, float len, float w, uint32_t rgb, bool live) {
+    scene_item_t *o = beat_item(sc, PK_TICKS, live);
+    if (o) { o->a0 = a; o->r = r; o->len = len; o->w = w; o->rgb = rgb; }
+}
+static void beat_text(scene_t *sc, const char *str, float y, float size, uint32_t rgb, bool live) {
+    const int n = (int)strlen(str);
+    if (!n || sc->nchars + n > SCENE_LETTERS) return;
+    scene_item_t *o = beat_item(sc, PK_TEXT, live);
+    if (!o) return;
+    o->y = y; o->size = size; o->rgb = rgb; o->str = (uint16_t)sc->nchars; o->nstr = (uint16_t)n;
+    memcpy(sc->chars + sc->nchars, str, (size_t)n); sc->nchars += n;
+}
+static uint32_t scale_rgb(uint32_t rgb, float k) {
+    return (uint32_t)lrintf((rgb >> 16 & 255) * k) << 16 | (uint32_t)lrintf((rgb >> 8 & 255) * k) << 8 | (uint32_t)lrintf((rgb & 255) * k);
+}
+
+void scene_beat(scene_t *sc, const scene_beat_t *b) {
+    if (!sc) return;
+    sc->nitems = sc->nfixed; sc->nchars = sc->nchars_fixed;   /* (the wheel's follow: scene_wheel) */
+    if (sc->beat < 0) return;
+    /* what the kept part is drawn from: a change draws the dots and the fine dust once more */
+    uint32_t key = 2166136261u;
+    const uint32_t parts[] = { b->on, b->ver, (uint32_t)b->steps, b->muted, (uint32_t)b->slot, b->hide_name, b->hits[0], b->hits[1], b->hits[2], b->hits[3] };
+    for (size_t q = 0; q < sizeof(parts) / sizeof(parts[0]); q++) key = (key ^ parts[q]) * 16777619u;
+    if (key != sc->beat_key) { sc->beat_key = key; sc->serial = next_serial(); }
+    if (!b->on || b->steps < 1) return;
+    const scene_item_t B = sc->items[sc->beat];
+    const float R = B.r, dot = B.size, k = R / 0.672f;   /* the design's sizes, on its 0.672 ring */
+    const int nl = b->nlayers < SCENE_BEAT_LAYERS ? b->nlayers : SCENE_BEAT_LAYERS;
+    const int ns = b->steps < SCENE_BEAT_STEPS ? b->steps : SCENE_BEAT_STEPS;
+    /* kept: the rings, the marks, the dots, the centre */
+    for (int l = 0; l < nl; l++) {
+        scene_item_t *o = beat_item(sc, PK_RING, false);
+        if (o) { o->r = R * BEAT_RING[l]; o->rgb = BEAT_GRID; }
+    }
+    for (int s = 0; s < ns; s++) beat_spoke(sc, b->angle[s], R * 1.1f, (b->beats >> s & 1 ? 0.067f : 0.025f) * k, BEAT_HAIR, BEAT_INK, false);
+    for (int l = 0; l < nl; l++) for (int s = 0; s < ns; s++) {
+        if (!(b->hits[l] >> s & 1)) continue;
+        const float a = b->angle[s] * DEG, r = R * BEAT_RING[l];
+        beat_disc(sc, r * cosf(a), r * sinf(a), dot, b->muted >> l & 1 ? scale_rgb(b->rgb[l], SCENE_BEAT_MUTED) : b->rgb[l], false, l);
+    }
+    beat_disc(sc, 0.f, 0.f, 0.03f * k, 0xffffff, false, -1);
+    if (!b->hide_name) beat_text(sc, b->label, -0.17f * k, 0.078f * k, 0xffffff, false);
+    /* live: the phrase's pips, the hand, the swelling hits, the count-in's click */
+    for (int q = 0; b->norder > 1 && q < b->norder && q < 16; q++) {
+        const float x = (q - (b->norder - 1) * 0.5f) * 0.045f * k;
+        beat_disc(sc, x, -0.27f * k, (q == b->slot ? 0.016f : 0.01f) * k, q == b->slot ? 0xffffff : BEAT_GRID, true, -1);
+    }
+    const float u = fminf(1.f, fmaxf(0.f, b->since / SCENE_BEAT_SWELL_S)), swell = (1.f - u) * (1.f - u);
+    if (b->step >= 0 && b->step < ns) {
+        beat_spoke(sc, b->angle[b->step], 0.08f * k, R * 0.975f, 0.03f, B.rgb, true);
+        for (int l = 0; l < nl; l++) {
+            if (!(b->hits[l] >> b->step & 1) || (b->muted >> l & 1)) continue;
+            const float a = b->angle[b->step] * DEG, r = R * BEAT_RING[l];
+            beat_disc(sc, r * cosf(a), r * sinf(a), dot * (1.f + (BEAT_SWELL - 1.f) * swell), b->rgb[l], true, -1);
+        }
+    }
+    if (b->cin_step >= 0 && b->cin_step < ns) {
+        const float a = b->angle[b->cin_step] * DEG, r = R * 1.1f + 0.034f * k;
+        beat_disc(sc, r * cosf(a), r * sinf(a), (0.012f + 0.02f * swell) * k, 0xffffff, true, -1);
+    }
+}
+
+int scene_beat_hit(const scene_t *sc, float x, float y) {
+    int best = -1;
+    float bd = 0.f;
+    for (int n = sc ? sc->nfixed : 0; n < sc->nitems; n++) {
+        const scene_item_t *it = &sc->items[n];
+        if (it->layer < 0) continue;
+        const float reach = fmaxf(it->r * 2.4f, 0.08f), d = (x - it->x) * (x - it->x) + (y - it->y) * (y - it->y);
+        if (d <= reach * reach && (best < 0 || d < bd)) { best = it->layer; bd = d; }
+    }
+    return best;
+}
+
+/* ── wheels ─────────────────────────────────────────────────────────────────────────────────────────────────────── */
+
+int scene_dial(const scene_t *sc, int face) {
+    for (int n = 0; sc && n < sc->nfixed; n++) if (sc->items[n].k == PK_DIAL && sc->items[n].face == face) return n;
+    return -1;
+}
+int scene_centre(const scene_t *sc) {
+    for (int n = 0; sc && n < sc->nfixed; n++) if (sc->items[n].k == PK_CENTRE) return n;
+    return -1;
+}
+int scene_dial_labels(const scene_t *sc, int n, char (*out)[PKG_KEY_MAX + 1], int max) {
+    if (!sc || n < 0 || n >= sc->nfixed) return 0;
+    const scene_item_t *d = &sc->items[n];
+    const char *p = sc->say + d->lab;
+    int k = 0;
+    for (; k < d->nlab && k < max; k++) {
+        const size_t len = strcspn(p, "\n");
+        memcpy(out[k], p, len); out[k][len] = '\0';
+        p += len + 1;
+    }
+    return k;
+}
+
+bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w) {
+    const int n = scene_dial(sc, w->face);
+    return n >= 0 && (w->turning || w->since < SCENE_WHEEL_SHOW_S || w->face == 1);
+}
+
+void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
+    const int n = scene_dial(sc, w->face);
+    if (n < 0) return;
+    const scene_item_t d = sc->items[n];
+    const float r = d.r, step = d.step > 1.f ? d.step : 1.f;
+    scene_item_t *o = beat_item(sc, PK_RING, true);                     /* the rail */
+    if (o) { o->r = r; o->rgb = 0x3a3e4eu; }
+    if (w->nlabels > 0) {                                               /* a bead a label, the one chosen under the notch */
+        for (int i = 0; i < w->nlabels; i++) {
+            int rel = i - w->index;
+            rel -= w->nlabels * (int)floorf((rel + w->nlabels * 0.5f) / w->nlabels);
+            const float a = 90.f - rel * step - w->turn;
+            if (fabsf(a - 90.f) > 165.f) continue;
+            beat_disc(sc, r * cosf(a * DEG), r * sinf(a * DEG), (rel ? 0.013f : 0.022f), rel ? BEAT_GRID : 0xffffffu, true, -1);
+        }
+    } else {                                                            /* fine ticks turning with the finger, the top of the rim */
+        const int ticks = (int)lrintf(360.f / step);
+        for (int q = 0; q < ticks && q < 90; q++) {
+            float a = fmodf(q * step - w->turn, 360.f);
+            a = a > 180.f ? a - 360.f : a < -180.f ? a + 360.f : a;
+            if (fabsf(a) <= SCENE_WHEEL_SCALE) beat_spoke(sc, 90.f + a, r - 0.015f, 0.03f, BEAT_HAIR, BEAT_GRID, true);
+        }
+    }
+    beat_spoke(sc, 90.f, r - 0.055f, 0.07f + 0.03f * w->flash, 0.03f, toward_white(SCENE_NOTCH_RGB, w->flash), true);
+    if (!scene_wheel_words(sc, w)) return;
+    char words[PKG_KEY_MAX + 1];
+    if (w->nlabels > 0) {
+        snprintf(words, sizeof words, "%s", w->labels[(w->index % w->nlabels + w->nlabels) % w->nlabels]);
+        const float size = fminf(0.13f, 1.3f / (0.6f * (float)strlen(words)));   /* (its width inside the glass) */
+        beat_text(sc, words, 0.f, size, 0xffffffu, true);
+    } else {
+        snprintf(words, sizeof words, "%d", (int)lrintf(w->value));
+        beat_text(sc, words, 0.04f, 0.22f, 0xffffffu, true);
+        if (d.sets == 1) beat_text(sc, "BPM", -0.13f, 0.07f, BEAT_INK, true);
+    }
 }

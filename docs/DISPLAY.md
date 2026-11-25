@@ -92,6 +92,9 @@ Every shape except `tap_zone` also takes `color`.
 | `symbol` | `asset`, `size`, `at`, `rotate` | one of your assets |
 | `label` | `text`, `size`, `at` | up to 40 letters in Molty's own font |
 | `tap_zone` | see [Taps](#taps) | nothing: a place to tap |
+| `beat_clock` | `radius`, `dot` | the rhythm Molty plays, as a clock (see [A clock and a wheel](#a-clock-and-a-wheel)) |
+| `wheel` | `id`, `radius`, `grab_from`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels` | a ring at the edge the finger turns |
+| `centre_tap` | `radius`, `back_after` | nothing: a tap in the middle flips the wheel |
 
 ```yaml
 draw:
@@ -182,6 +185,27 @@ circle or line beats one that only falls in a wedge.
 
 Any shape can join a group with `group: "{{ body.id }}"`. A lit shape grows and brightens while the reading
 plays. A shape with `only_when: highlighted` shows only then.
+
+## A clock and a wheel
+
+Three shapes draw from Molty's own state, and the finger acts on them on Molty, with no round trip:
+
+```yaml
+draw:
+  - beat_clock: { radius: 0.672 }                                  # the rhythm the beat player holds
+  - wheel: { id: tempo, sets: tempo, step: 12, by: 2, fast: 4, min: 40, max: 220, value: 100 }
+  - wheel: { id: rhythm, sets: pick, step: 30, face: 1 }           # up after a tap in the middle
+  - centre_tap: { radius: 0.26, back_after: 4 }
+```
+
+- `beat_clock` draws the rhythm `rhythm.play` sent: a ring a drum, a mark a step, a dot a hit, the hand and each hit
+  swelling as it sounds, from the speaker's own clock. A tap on a dot mutes that drum. One a screen.
+- `wheel` turns in clicks: a drag that starts from `grab_from` (0.85) out never stirs the water or taps anything.
+  Each click adds `by` to a number, or with `labels: "{{ names }}"` (a list whose elements each have a `label`) steps
+  to the next one. `sets: tempo` or `pick` drives the beat player. The agent hears one `ring` event when it settles.
+- `centre_tap` flips the wheel to the one with `face: 1`; a second tap, or `back_after` seconds, chooses and flips back.
+
+The molty-rhythm skill (`skills/molty-rhythm/`) is the example; [PACKAGES.md](PACKAGES.md#layouts) has every rule.
 
 ## Assets
 

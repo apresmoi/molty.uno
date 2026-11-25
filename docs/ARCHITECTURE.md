@@ -64,10 +64,11 @@ device/firmware/main/                 the core: no pins, no panel sizes
 ├── creature/       creature package players (channels: creature_player; rigged clips:
 │                   creature_clip, creature_dots, creature_ring)
 ├── pkg/            package store (flash), strict parser, pkg.* / scene.* / creature.* commands
-├── scene/          scene player: a package's layout on screen, its tap spots, the queue
+├── scene/          scene player: a package's layout on screen, its tap spots, the queue; a beat's clock, a wheel
 ├── link/           agent link: WSS client, identity, pairing, command dispatcher, audio, ask
 ├── audio/          VAD (end of speech) and the acknowledgement chirp
-├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark
+├── rhythm/         the beat player: a rhythm looped and synthesised on the device, sharing the speaker
+├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark; a wheel's clicks
 ├── power/          screen off, do not disturb, battery history, power off
 ├── update/         self-update from a release, confirmed by a tap
 └── diag/           log ring, frame histograms, heap guard, /api/diag, /api/log

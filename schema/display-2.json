@@ -237,6 +237,9 @@
         "symbol": { "$ref": "#/$defs/symbol" },
         "label": { "$ref": "#/$defs/label" },
         "tap_zone": { "$ref": "#/$defs/tap_zone" },
+        "beat_clock": { "$ref": "#/$defs/beat_clock" },
+        "wheel": { "$ref": "#/$defs/wheel" },
+        "centre_tap": { "$ref": "#/$defs/centre_tap" },
         "for": { "type": "string", "pattern": "^[a-z][a-z0-9_]* in [a-z][a-z0-9_]*$", "description": "Repeat the shapes in draw for each element: \"body in bodies\". bodies is a list input (repeated on the device) or a data table (repeated by the compiler). Inside, \"{{ body.angle }}\" reads a field.", "errorMessage": "must read like \"body in bodies\"" },
         "draw": { "$ref": "#/$defs/draw" },
         "use": { "$ref": "#/$defs/name", "description": "Place a part by name." },
@@ -245,9 +248,9 @@
       "oneOf": [
         { "required": ["for", "draw"], "maxProperties": 2 },
         { "required": ["use"], "propertyNames": { "enum": ["use", "with"] } },
-        { "minProperties": 1, "maxProperties": 1, "propertyNames": { "enum": ["circle", "arc", "ticks", "spoke", "line", "dot", "globe", "symbol", "label", "tap_zone"] } }
+        { "minProperties": 1, "maxProperties": 1, "propertyNames": { "enum": ["circle", "arc", "ticks", "spoke", "line", "dot", "globe", "symbol", "label", "tap_zone", "beat_clock", "wheel", "centre_tap"] } }
       ],
-      "errorMessage": "an entry draws one thing: one shape (circle, arc, ticks, spoke, line, dot, globe, symbol, label, tap_zone), or for with draw, or use (with with)",
+      "errorMessage": "an entry draws one thing: one shape (circle, arc, ticks, spoke, line, dot, globe, symbol, label, tap_zone, beat_clock, wheel, centre_tap), or for with draw, or use (with with)",
       "description": "One shape (its name is the key), a for block, or a part placed with use."
     },
     "circle": {
@@ -443,6 +446,49 @@
         }
       },
       "description": "Nothing visible: a place to tap. Round (at and radius), along a segment (along and radius), or a wedge of a ring (sector). Overlapping zones: the smallest wins, then the nearest."
+    },
+    "beat_clock": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size", "description": "The outer drum's ring. The others sit at 0.75, 0.525 and 0.3375 of it, the step marks just outside it." },
+        "dot": { "$ref": "#/$defs/size", "description": "A hit's dot. Default 0.057 of radius." },
+        "color": { "$ref": "#/$defs/color", "description": "The hand's colour. Default white." },
+        "show": { "$ref": "#/$defs/show" }
+      },
+      "description": "The rhythm Molty's beat player holds, drawn as a clock from the speaker's own clock: a ring a drum, a mark a step, a dot a hit, the hand, each hit swelling as it sounds, the count-in, the phrase, the name. A tap on a dot mutes that drum. One a screen."
+    },
+    "wheel": {
+      "type": "object",
+      "required": ["id"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "maxLength": 40, "description": "Names the wheel in the ring event the agent gets when it settles." },
+        "radius": { "$ref": "#/$defs/size", "description": "Where it is drawn. Default 0.95." },
+        "grab_from": { "$ref": "#/$defs/size", "description": "A touch from this far out turns it. Default 0.85." },
+        "step": { "$ref": "#/$defs/num", "description": "Degrees a click. Default 12." },
+        "by": { "$ref": "#/$defs/num", "description": "What a click adds to the value. Default 1." },
+        "fast": { "$ref": "#/$defs/num", "description": "What a click adds turning fast (over 200 degrees a second). Default by." },
+        "min": { "$ref": "#/$defs/num" },
+        "max": { "$ref": "#/$defs/num" },
+        "value": { "$ref": "#/$defs/num", "description": "Where it starts." },
+        "face": { "enum": [0, 1], "description": "0: up at first; 1: up after a tap on the centre_tap." },
+        "sets": { "enum": ["tempo", "pick"], "description": "tempo: the value is the beat player's tempo, at once. pick: the wheel steps through the beat player's rhythms and plays the one chosen." },
+        "labels": { "type": "string", "description": "A list input whose elements each have a label: the wheel steps through them, one bead each, instead of a number." },
+        "color": { "$ref": "#/$defs/color" }
+      },
+      "description": "A ring at the edge the finger turns, in clicks, on Molty itself: a number, or a choice among labels. Each click ticks the motor. One a face."
+    },
+    "centre_tap": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size", "description": "The zone round the centre. 0.26 keeps clear of a clock's third ring." },
+        "back_after": { "$ref": "#/$defs/num", "description": "Seconds untouched on face 1 before it flips back (with the choice). Default 4." }
+      },
+      "description": "A tap in the middle flips the wheel to its other face; on face 1 a second tap, or back_after seconds, makes the choice."
     }
   }
 }

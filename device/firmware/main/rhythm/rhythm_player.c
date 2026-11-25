@@ -260,7 +260,7 @@ bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first) {
 
 void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *o) {
     memset(o, 0, sizeof(*o));
-    o->step = -1;
+    o->step = o->cin_step = -1;
     if (!p->nlib) return;
     const rhy_pattern_t *pt = cur(p);
     o->on = p->on && !p->quit; o->paused = p->paused; o->cur = p->cur; o->mute = p->mute; o->bpm = p->bpm; o->ver = p->ver;
@@ -274,6 +274,7 @@ void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *o) {
         int q = s;
         while (q > 0 && !(pt->beats >> q & 1)) q--;
         o->since = (float)((um - rhy_onset(pt, q)) / ups);
+        o->cin_step = pt->beats >> q & 1 ? q : -1;
     } else {
         o->step = s;
         o->since = (float)((um - rhy_onset(pt, s)) / ups);

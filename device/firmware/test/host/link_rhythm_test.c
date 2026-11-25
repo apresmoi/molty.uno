@@ -113,7 +113,7 @@ int main(void) {
     cJSON_Delete(f);
     rhythm_local_bpm(150.f);
     rhythm_local_pick(1);
-    char id[RHY_ID_MAX + 1], labels[4][RHY_LABEL_MAX + 1];
+    char id[RHY_ID_MAX + 1], labels[4][RHYTHM_LABEL_ROOM];
     assert(rhythm_now(&v, NULL) && v.cur == 1 && v.bpm == 150.f && v.count_in && !v.mute);
     assert(rhythm_labels(labels, 4) == 2 && !strcmp(labels[1], "SON CLAVE") && !strcmp(rhythm_id(1, id), "son-clave"));
     assert(!rhythm_take_event(&ev));                       /* the wheel's own event is the wheel's (mole_fluid.c) */

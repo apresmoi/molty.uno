@@ -1,0 +1,11 @@
+about: The rhythm Molty plays, as a clock, from the speaker's own clock. Turn the rim for the tempo; tap the centre to choose another rhythm with the rim; tap a drum's dot to mute it.
+duration: hold
+draw:
+  # the clock, drawn smaller inside the rim (0.84 of the design's 0.8)
+  - beat_clock: { radius: 0.672 }
+  # the rim: the tempo, a click every 12 degrees, 2 beats a minute a click (4 turning fast), 40 to 220
+  - wheel: { id: tempo, sets: tempo, step: 12, by: 2, fast: 4, min: 40, max: 220, value: 100 }
+  # after a tap on the centre: the library, one bead every 30 degrees
+  - wheel: { id: rhythm, sets: pick, step: 30, face: 1 }
+  # the centre: a tap flips the rim between the two; 4 s untouched plays the choice
+  - centre_tap: { radius: 0.26, back_after: 4 }

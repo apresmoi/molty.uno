@@ -11,7 +11,7 @@ import { assetPng } from './assets.mjs';
 import { COMMON, READS, SHAPES, TOKENS } from './compile.mjs';
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
-const KIND = { ring: 'circle', arc: 'arc', ticks: 'ticks', line: 'line', curve: 'line', disc: 'dot', ball: 'globe', glyph: 'symbol', text: 'label', spot: 'tap_zone' };
+const KIND = { ring: 'circle', arc: 'arc', ticks: 'ticks', line: 'line', curve: 'line', disc: 'dot', ball: 'globe', glyph: 'symbol', text: 'label', spot: 'tap_zone', beat: 'beat_clock', dial: 'wheel', centre: 'centre_tap' };
 const SPLIT_AT = 5;   // screens: from here on, one file each
 
 // ---- YAML, as much as these files need
@@ -54,7 +54,7 @@ function screenOf(l, pkg, opening = []) {
       else if (f === 'pts' && v.length === 2) [props.from, props.to] = v.map(at);
       else if (f === 'pts') props.points = v.map(at);
       else if (f === 'n' && spoke) continue;   // the spoke's angle carries it
-      else if (f === 'arc' || f === 'r0' || f === 'r1') (props.sector ??= {})[{ arc: 'width', r0: 'inner', r1: 'outer' }[f]] = val(v, f === 'arc' ? 'angle' : 'distance', it);
+      else if (it.k === 'spot' && (f === 'arc' || f === 'r0' || f === 'r1')) (props.sector ??= {})[{ arc: 'width', r0: 'inner', r1: 'outer' }[f]] = val(v, f === 'arc' ? 'angle' : 'distance', it);
       else if (f === 'open') (props.opens ??= {}).screen = val(v, 'screen', it);
       else if (f === 'ttl') (props.opens ??= {}).seconds = val(v, 'time', it);
       else if (f === 'side' && typeof v === 'number') props.lit_side = v < 0 ? 'left' : 'right';

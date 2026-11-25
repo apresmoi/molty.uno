@@ -139,6 +139,7 @@ typedef struct {
     bool on, paused, count_in;
     int cur;                            /* the pattern                                                         */
     int step;                           /* the step sounding, 0..; -1 during a count-in                       */
+    int cin_step;                       /* the count-in's click on that step, -1 none                          */
     float since;                        /* s since that step (or count-in beat) began                          */
     int slot, norder;                   /* where in the phrase (0 without one)                                 */
     uint32_t hits[RHY_LAYERS];          /* this bar's hits a layer                                             */

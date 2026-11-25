@@ -240,6 +240,16 @@ void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t
  *  Any one task. */
 typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
 bool mole_fluid_scene_event(mole_scene_evt_t *out);
+/** A press at panel pixel (px, py) is a scene's wheel's (scene_player.h: the dial up, from its r0 out: 1), its centre's
+ *  (2) or on a beat's dot (3); 0: none. sense.c asks first: such a press is the fluid task's alone (it turns the wheel,
+ *  flips its face, mutes the drum), never a spot or a `tap`. Any task. */
+int mole_fluid_zone(int px, int py);
+/** Clicks of a scene's wheel since the last call: a tick of the motor each (sense.c). */
+int mole_fluid_take_ticks(void);
+/** A wheel settled (the finger left it, or a choice was made): evt `ring` (link_protocol.h link_evt_ring_frame). index
+ *  -1: a number (value); id: the beat player's rhythm a pick chose. False: none since the last call. */
+typedef struct { char spot[41], label[25], id[25]; double value; int index; } mole_ring_evt_t;
+bool mole_fluid_ring_event(mole_ring_evt_t *out);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 

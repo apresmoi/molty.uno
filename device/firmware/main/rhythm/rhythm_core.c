@@ -146,7 +146,7 @@ bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt) {
     return have;
 }
 
-int rhythm_labels(char (*out)[RHY_LABEL_MAX + 1], int max) {
+int rhythm_labels(char (*out)[RHYTHM_LABEL_ROOM], int max) {
     rhythm_lock();
     const int n = s_p ? (s_p->nlib < max ? s_p->nlib : max) : 0;
     for (int i = 0; i < n; i++) strcpy(out[i], s_p->lib[i].label);

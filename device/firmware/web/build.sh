@@ -32,11 +32,12 @@ SRCS=(
   "$MAIN/creature/cute_spec.c" "$MAIN/creature/cute_rig.c" "$MAIN/creature/mood_engine.c" "$MAIN/creature/rig_geo.c"
   "$MAIN/creature/creature_player.c" "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c"
   "$HERE/web_cat.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c" "$MAIN/creature/sky.c" "$MAIN/creature/weather.c"
-  "$MAIN/pkg/pkg_parse.c" "$MAIN/scene/scene_player.c" "$MAIN/link/link_protocol.c" "$MAIN/sense/gesture.c"
+  "$MAIN/pkg/pkg_parse.c" "$MAIN/scene/scene_player.c" "$MAIN/link/link_protocol.c" "$MAIN/sense/gesture.c" "$MAIN/sense/ring_input.c"
+  "$MAIN/rhythm/rhythm_player.c" "$MAIN/rhythm/rhythm_wire.c" "$MAIN/rhythm/rhythm_core.c"
   "$IDF_JSON/cJSON.c"
 )
 INCS=(-I"$OUT" -I"$HERE/sdk" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$MAIN/scene" -I"$MAIN/pkg" -I"$MAIN/link"
-      -I"$MAIN/sense" -I"$MAIN/board" -I"$MAIN/diag" -I"$IDF_JSON")
+      -I"$MAIN/sense" -I"$MAIN/board" -I"$MAIN/diag" -I"$MAIN/rhythm" -I"$IDF_JSON")
 CFLAGS=(-std=c11 -DWEB_SDK_CLOCK -D_POSIX_C_SOURCE=200809L -D_DARWIN_C_SOURCE -D_DEFAULT_SOURCE -ffp-contract=off -fno-math-errno
         -Wall -Wextra -Werror -Wno-deprecated-declarations)
 

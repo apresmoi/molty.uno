@@ -29,6 +29,11 @@ export const SHAPES = {
   // a new way to shape a zone or a new thing a tap does is one more row here, or one more case in shape() when it is
   // not a plain field (sector, opens), and its property in schema/display-2.json's tap_zone
   tap_zone: ['spot', { radius: ['r', 'distance'], reads: ['say', 'reading'], id: ['id', 'id'], highlights: ['lights', 'groups'], grow: ['grow', 'number'] }],
+  // the device's own pieces: the beat player's clock, a wheel round the edge, the centre that flips it
+  beat_clock: ['beat', { radius: ['r', 'distance'], dot: ['size', 'distance'] }],
+  wheel: ['dial', { id: ['id', 'id'], radius: ['r', 'distance'], grab_from: ['r0', 'distance'], step: ['step', 'angle'], by: ['by', 'number'], fast: ['fast', 'number'],
+    min: ['min', 'number'], max: ['max', 'number'], value: ['value', 'number'], face: ['face', 'count'], sets: ['sets', 'sets'], labels: ['labels', 'list'] }],
+  centre_tap: ['centre', { radius: ['r', 'distance'], back_after: ['back', 'time'] }],
 };
 export const COMMON = { color: ['color', 'color'], group: ['group', 'group'] };
 /** Properties that are not one plain field: shape() turns each into its v1 form. */
@@ -37,6 +42,7 @@ export const SHAPED = ['at', 'show', 'only_when', 'move', 'from', 'to', 'points'
 export const READS = {
   distance: ['distance', 'number'], length: ['distance', 'number'], width: ['distance', 'number'], coord: ['number', 'distance'], angle: ['angle', 'number'], time: ['seconds', 'number'], amount: ['amount', 'number'],
   speed: ['number'], count: ['number'], number: ['number'], side: ['number'], color: ['color'], asset: ['asset'], map: ['asset'], text: ['text'], reading: ['reading', 'text'], id: ['text', 'asset'], group: ['text', 'asset'], groups: ['groups', 'text'], screen: ['text'],
+  sets: [], list: ['list'],
 };
 const WORDS = ['text', 'reading', 'id', 'group', 'groups', 'screen'];
 const REFUSED = {
@@ -80,6 +86,8 @@ export function compile(skill, files, bad, warn) {
         case 'map': return !files[v] ? fail(at, `${what}: no asset named ${JSON.stringify(v)} (maps: ${list(Object.keys(files).filter((n) => files[n].as === 'map'))})`) : files[v].as === 'symbol' ? fail(at, `${what}: ${v} is a symbol, and a globe wears a map (as: map)`) : v;
         case 'side': return v === 'right' ? 1 : v === 'left' ? -1 : fail(at, `${what} must be right or left`);
         case 'screen': return skill.screens[v] ? v : fail(at, `${what}: no screen named ${JSON.stringify(v)} (screens: ${list(Object.keys(skill.screens))})`);
+        case 'sets': return v === 'tempo' || v === 'pick' ? v : fail(at, `${what} must be tempo or pick`);
+        case 'list': return fail(at, `${what} must be a list input: "{{ name }}"`);
         case 'text': case 'reading': case 'id': case 'group': case 'groups':
           return typeof v !== 'string' ? fail(at, `${what} must be text: put it in quotes`) : /^[$@]/.test(v) ? fail(at, `${what} ${JSON.stringify(v)} starts with ${v[0]}, which the device reads as a binding: start the text with something else`) : v;
         default: return num();
@@ -174,6 +182,7 @@ export function compile(skill, files, bad, warn) {
           const [f, holds] = fields[p] ?? COMMON[p];
           if (kind === 'spoke' && p === 'angle') it.n = 1;
           it[f] = value(v, holds, ctx, here, what);
+          if (p === 'labels' && typeof it[f] === 'string') { const m = BIND.exec(v); if (m) read.add(`${m[1]}.label`); }   // a wheel reads each element's label
         }
       }
       if (kind === 'tap_zone' && !('r' in it)) fail(at, 'tap_zone needs radius (how far from at a tap still counts), or a sector with from and to');

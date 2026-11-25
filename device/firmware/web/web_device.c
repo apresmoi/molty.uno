@@ -188,6 +188,7 @@ static bool web_sense_touch(int x, int y, unsigned *spot_out) {
         if (i >= 0) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; answered(i, NULL); }
         return true;
     }
+    if (!s_lis.on && mole_fluid_zone(x, y)) { *spot_out = 0; return true; }   /* a wheel's, its centre's, a beat's dot: the fluid's */
     const uint32_t w = (uint32_t)s_px - 1u, X = (uint32_t)x * 65535u / w, Y = (uint32_t)y * 65535u / w;
     s_tap_xy = (X > 65535u ? 65535u : X) << 16 | (Y > 65535u ? 65535u : Y);
     const unsigned spot = s_lis.on ? 0 : mole_fluid_spot_tap(x, y);
@@ -247,14 +248,23 @@ static void imu_feed(uint32_t now) {
     }
 }
 
+static int s_wheel_ticks;              /* a wheel's clicks, not yet taken (wm_wheel_ticks) */
+
 /* sense.c sense_task, one pass (the device: every 10 ms; here once a frame) */
 static void sense_tick(uint32_t now) {
     const bool pair = pairing();
     imu_feed(now);
     if (pair) gesture_reset(&s_g);
     if (s_lis.on && s_voice_in >= 0.05f) s_lis.speech_ms += (uint32_t)(s_fi[FI_FRAME_MS] + 0.5f);   /* the VAD hears it */
+    const bool beat = !pair && !s_q.open && rhythm_active();
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
+        if (beat) {                    /* sense.c: a rhythm plays: accept pauses and resumes it, reject stops it */
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_pause(); else rhythm_local_stop(); }
+            s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
+            s_btn_prev[b] = on;
+            continue;
+        }
         const gesture_input_t in = b == MOLTY_BTN_ACCEPT ? GESTURE_IN_BUTTON_ACCEPT : GESTURE_IN_BUTTON_REJECT;
         const bool screen = gesture_binds_get(mole_fluid_gestures(), in) == GESTURE_DO_SCREEN && !s_q.open;
         const gesture_sw_t click = gesture_switch_feed(&s_sw[b], on, now);
@@ -294,12 +304,20 @@ static void sense_tick(uint32_t now) {
     if (spot && !pair) spot_do(spot, now);
     mole_scene_evt_t sv;               /* the screen changed on the device itself: the relay hears what is up */
     if (mole_fluid_scene_event(&sv)) ws_emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
+    s_wheel_ticks += mole_fluid_take_ticks();   /* a wheel's clicks: the motor's ticks on the device (wm_wheel_ticks) */
+    mole_ring_evt_t re;                /* a wheel settled */
+    if (mole_fluid_ring_event(&re)) ws_emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
+    rhythm_ev_t rv;                    /* the beat player's own: a mute, a pause, a stop */
+    while (rhythm_take_event(&rv)) ws_emit(rhythm_event_frame(&rv));
     if (s_dl.on) {                     /* pkg_cmd.c download_task: the ring follows the bytes, then full and into the water */
         const float got = (float)(now - s_dl.t0) / (float)(s_dl.ms ? s_dl.ms : 1u);
         if (got < 1.f) mole_fluid_progress(DL_RING_PCT * got, false);
         else { s_dl.on = false; mole_fluid_progress(100.f, true); pkg_evt("installed", "version", s_qa.version); }
     }
 }
+
+/** The motor's ticks a wheel asked for since the last call (the device ticks once a click, sense.c). */
+WM_API int wm_wheel_ticks(void) { const int n = s_wheel_ticks; s_wheel_ticks = 0; return n; }
 
 /** The device's own handling of its inputs on (the simulator): a tap, a double tap, the buttons and a shake do what
  *  sense.c does with them, and what an agent would hear piles up for wm_events. Off (the website's screens): a tap is

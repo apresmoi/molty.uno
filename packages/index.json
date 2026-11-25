@@ -51,5 +51,20 @@
     "path": "packages/octopus/octopus.json",
     "size": 33754,
     "sha256": "d331f11ef93dd170fd046a071a52e8feba504ebd9d5445c7f9de205afb2a3b1a"
+  },
+  "rhythm": {
+    "name": "Rhythm",
+    "version": "1.0.0",
+    "kind": "scenes",
+    "description": "A rhythm Molty plays and draws as a clock, a ring a drum, a rim to turn for the tempo. Play it with the molty-rhythm skill.",
+    "layouts": [
+      "clock"
+    ],
+    "skills": [
+      "molty-rhythm"
+    ],
+    "path": "packages/rhythm/rhythm.json",
+    "size": 338,
+    "sha256": "c4bebd70c6ff5e966a84c8132181b78343108d675f2b487df9b55fe3d202770c"
   }
 }

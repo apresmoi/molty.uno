@@ -36,7 +36,8 @@ const char *rhythm_stop(void);
 /** The pattern playing and where the speaker is in it now. False: no rhythm loaded. */
 bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt);
 /** The library's labels (the wheel's names), how many. */
-int  rhythm_labels(char (*out)[RHY_LABEL_MAX + 1], int max);
+#define RHYTHM_LABEL_ROOM 25            /* a label as a wheel holds it (PKG_KEY_MAX + 1) */
+int  rhythm_labels(char (*out)[RHYTHM_LABEL_ROOM], int max);
 /** The library's rhythm i's id ("" none). */
 const char *rhythm_id(int i, char out[RHY_ID_MAX + 1]);
 /** The screen's own acts. A mute, a pause and a stop are sent to the agent (rhythm_take_event); a tempo or a pick

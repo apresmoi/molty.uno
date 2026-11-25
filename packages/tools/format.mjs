@@ -33,17 +33,28 @@ export const ITEMS = {
   // tappable in a ring sector about the glass centre: `arc` degrees wide round the spot's own direction, radii r0 (0)..r1
   // `open`: a tap opens that layout of the package over this one (opens(), below), for `ttl` seconds when it is a held one
   spot: { ...POS, r: 'num', say: 'say', id: 'text', pts: 'points', lights: 'lights', grow: 'num', arc: 'num', r0: 'num', r1: 'num', open: 'layout', ttl: 'num' },
+  // the device's own pieces (docs/PACKAGES.md "Beats and wheels"): the beat player's pattern as a clock (r: its outer
+  // ring, size: its dots); a wheel round the edge, grabbed from r0 out, turned in clicks of `step` degrees adding `by`
+  // (`fast` turning fast) to its value, min..max from `value`, or stepping through its `labels` (a list param, each
+  // element's `label`); `sets` the beat player's tempo or pick; on face 0 or 1; a centre that flips the faces (`back`
+  // s untouched on face 1 flips back)
+  beat: { r: 'num', size: 'num' },
+  dial: { r: 'num', r0: 'num', id: 'text', step: 'num', by: 'num', fast: 'num', min: 'num', max: 'num', value: 'num', face: 'num', sets: 'sets', labels: 'labels' },
+  centre: { r: 'num', back: 'num' },
 };
-const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'] };
+const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'], beat: ['r'], dial: ['id'], centre: ['r'] };
+/** The device's own pieces: in no group, never repeated. */
+const OWN = ['beat', 'dial', 'centre'];
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
 export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0, grow: 1.25 };
 // which param type a field of each value type may bind to
-const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text', layout: 'text' };
+const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 'text', image: 'text', list: 'list', group: 'text', lights: 'text', layout: 'text', sets: 'text', labels: 'list' };
 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
-const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3], arc: [0, 360], r0: [0, 2], r1: [0, 2], ttl: [1, 600] };
-const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
+const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3], arc: [0, 360], r0: [0, 2], r1: [0, 2], ttl: [1, 600],
+  step: [0, 360], by: [-1000, 1000], fast: [-1000, 1000], min: [-10000, 10000], max: [-10000, 10000], value: [-10000, 10000], face: [0, 1], back: [0, 60] };
+const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'face') return v === 0 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc' || f === 'step') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
 
@@ -60,6 +71,8 @@ function literal(type, v, assets, f, layouts) {
     case 'group': return typeof v === 'string' && NAME_RE.test(v) ? '' : 'must be a name [A-Za-z0-9_-]{1,24}';
     case 'lights': { const g = typeof v === 'string' ? v.split(' ').filter(Boolean) : []; return g.length && g.length <= LIMITS.lights && g.every((n) => NAME_RE.test(n)) ? '' : `must be 1..${LIMITS.lights} names, spaces between`; }
     case 'when': return v === 'lit' ? '' : 'must be "lit"';
+    case 'sets': return v === 'tempo' || v === 'pick' ? '' : 'must be "tempo" or "pick"';
+    case 'labels': return Array.isArray(v) && v.length <= LIMITS.list && v.every((e) => isText(e?.label, 24) && e.label) ? '' : 'must be a list param whose elements each have a label (1..24 characters)';
     default: return 'cannot be a literal';
   }
 }
@@ -140,7 +153,7 @@ export function checkPackage(pkg, id) {
     if (!Array.isArray(l.items) || !l.items.length || l.items.length > LIMITS.items) { bad.push(`${at}: items must be 1..${LIMITS.items}`); continue; }
     l.items.forEach((it, i) => {
       const where = `${at} item ${i}`, fields = { ...COMMON, ...ITEMS[it.k] };
-      if (it.k === 'spot') { delete fields.group; delete fields.when; }   // a spot lights groups, it is in none
+      if (it.k === 'spot' || OWN.includes(it.k)) { delete fields.group; delete fields.when; }   // a spot lights groups, it is in none
       if (!ITEMS[it.k]) return bad.push(`${where}: unknown k ${JSON.stringify(it.k)}`);
       const value = (f, type, v, rf = f) => {
         const r = ref(v);
@@ -163,11 +176,14 @@ export function checkPackage(pkg, id) {
       }
       if ('polar' in it && ('x' in it || 'y' in it)) bad.push(`${where}: polar replaces x, y: give one or the other`);
       for (const f of REQUIRED[it.k]) if (!(f in it)) bad.push(`${where}: ${it.k} needs ${f}`);
-      if (('arc' in it) !== ('r1' in it) || ('r0' in it && !('arc' in it))) bad.push(`${where}: a sector is arc and r1 (and r0)`);
+      if (it.k === 'spot' && (('arc' in it) !== ('r1' in it) || ('r0' in it && !('arc' in it)))) bad.push(`${where}: a sector is arc and r1 (and r0)`);
+      if (OWN.includes(it.k) && 'each' in it) bad.push(`${where}: a ${it.k} is not repeated`);
       if ('ttl' in it && !('open' in it)) bad.push(`${where}: ttl is for open`);
       // a layout a spot opens takes its params from this one's by name: those count as read
       if (pkg.layouts?.[it.open]) for (const p of Object.keys(pkg.layouts[it.open].params ?? {})) used.add(p);
     });
+    const own = (k, f = () => true) => l.items.filter((it) => it.k === k && f(it)).length;
+    if (own('beat') > 1 || own('centre') > 1 || own('dial', (it) => !it.face) > 1 || own('dial', (it) => it.face === 1) > 1) bad.push(`${at}: one beat, one centre and one dial a face`);
     for (const p of Object.keys(params)) if (!used.has(p)) bad.push(`${at}: param ${p} is never read`);
   }
   return bad;

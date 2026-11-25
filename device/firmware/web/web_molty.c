@@ -209,9 +209,29 @@ WM_API void wm_haze(void) { if (s_up) { fluid_fine_destroy(s_fine); s_fine = NUL
  *  same wave (0: they hold still, as while the word forms). After wm_haze. */
 WM_API void wm_haze_water(float kx, float ky) { if (s_haze_live) { s_haze_water[0] = kx; s_haze_water[1] = ky; } }
 
+/* ── the beat player (rhythm.h): one thread here, and the speaker is the page's: what is made is heard ──────────── */
+void rhythm_lock(void) {}
+void rhythm_unlock(void) {}
+uint64_t rhythm_heard(void) { return UINT64_MAX; }   /* (rhy_view: all that was made) */
+#define WM_PCM_MAX 8192
+static int16_t s_pcm[WM_PCM_MAX];
+static int s_npcm;
+static double s_pcm_due;
+/* the rhythm's samples for dt_us, made before the frame: its picture follows what was made */
+static void rhythm_pump(uint32_t dt_us) {
+    s_npcm = 0;
+    if (!rhythm_wants_speaker()) { s_pcm_due = 0.0; return; }
+    rhythm_yield(false);
+    s_pcm_due += dt_us * (RHY_RATE / 1e6);
+    const int n = s_pcm_due < WM_PCM_MAX ? (int)s_pcm_due : WM_PCM_MAX;
+    s_pcm_due -= n;
+    s_npcm = (int)rhythm_fill(s_pcm, (size_t)n);
+}
+
 /** One frame, dt_us after the last: the sim task's pass, then the drawer's. The panel is then wm_pixels. */
 WM_API void wm_frame(uint32_t dt_us) {
     if (!s_up) return;
+    rhythm_pump(dt_us);
     web_sdk_clock_once(s_clock);       /* the sim task's `prev`: the clock it read before it waited */
     s_clock += dt_us;
     web_sdk_clock(s_clock);
@@ -246,8 +266,9 @@ WM_API int wm_touch(int down, int x, int y) {
             const float r = s_px * 0.5f;
             const int i = mole_fluid_ask_shown() == s_q.seq ? fluid_ask_pick(&s_q.hit, ((float)x + 0.5f - r) / r, ((float)y + 0.5f - r) / r) : -1;
             if (i >= 0) { mole_fluid_ask_pick(i); s_q.open = false; s_q.answer = i; }
-        } else spot = mole_fluid_spot_tap(x, y);
-        control = (asked && !s_q.open) || (spot && spot != MOLE_SPOT_BACK);
+        } else if (mole_fluid_zone(x, y)) control = 1;      /* a wheel's, its centre's, a beat's dot (the fluid's own) */
+        else spot = mole_fluid_spot_tap(x, y);
+        control = control || (asked && !s_q.open) || (spot && spot != MOLE_SPOT_BACK);
     }
     s_finger.down = down != 0;
     if (down) { s_finger.x = x; s_finger.y = y; }
@@ -496,6 +517,20 @@ WM_API int wm_scene(const char *layout, const char *params, float ttl_s) {
     wm_ask_end();                      /* it took the screen (pkg_cmd.c) */
     return 0;
 }
+/** The beat player's commands (docs/AGENT-LINK.md "Rhythm"): name "rhythm.play", "rhythm.set" or "rhythm.stop", args
+ *  its JSON. 0, or -1 (its error: bad args, not playing). */
+WM_API int wm_rhythm(const char *name, const char *args) {
+    if (!s_up || !name) return -1;
+    cJSON *a = args ? cJSON_Parse(args) : NULL, *out = NULL;
+    const char *err = !strcmp(name, "rhythm.play") ? rhythm_play(a, &out) : !strcmp(name, "rhythm.set") ? rhythm_set(a, &out)
+                    : !strcmp(name, "rhythm.stop") ? rhythm_stop() : "unknown_command";
+    cJSON_Delete(a); cJSON_Delete(out);
+    return err ? -1 : 0;
+}
+/** The rhythm's sound made for the last frame: 16 kHz mono samples (wm_rhythm_pcm_n of them), for the page to play. */
+WM_API const int16_t *wm_rhythm_pcm(void) { return s_pcm; }
+WM_API int wm_rhythm_pcm_n(void) { return s_npcm; }
+
 /** scene.clear: the creature comes back. */
 WM_API void wm_scene_clear(void) { if (s_up) mole_fluid_scene(MOLE_SCENE_CLEAR, NULL); }
 

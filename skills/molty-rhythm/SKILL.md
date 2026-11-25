@@ -5,7 +5,8 @@ description: Play a rhythm on your human's Molty as a clock that keeps time by i
 
 # Molty rhythm
 
-A rhythm drawn as a clock and played on Molty's speaker. You pick it and send it **once**: the
+A rhythm drawn as a clock ([clock](display.yaml#clock), on the rhythm package; its call:
+[build/display.md](build/display.md)) and played on Molty's speaker. You pick it and send it **once**: the
 loop, the drum sounds, the hand, the tempo wheel and the mutes all run on Molty, timed by its own
 speaker. Nothing beat by beat crosses the network.
 
