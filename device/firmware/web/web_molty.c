@@ -36,6 +36,7 @@ static void web_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
 #undef fluid_draw_send2
 #undef fluid_draw_overlay_dirty
 #include "creature_dots.h"             /* CD_VIEW_SIZE: the world a panel is wide (wm_pan) */
+#include "creature_clip.h"             /* a creature's habits by name (wm_habit) */
 #include "web_default_molty.h"
 const uint8_t *web_default_molty_end[] = { _binary_default_molty_start + sizeof(_binary_default_molty_start) };
 
@@ -447,6 +448,22 @@ WM_API int wm_weather(int kind, float s) {
 /** (A demo hook for the website's /demo/ page, never the device's nor an agent's: the next falling star now, as soon
  *  as one may show.) */
 WM_API void wm_demo_star(void) { if (s_up && s_sky && s_sky->star.t < 0.f) s_sky->star.wait = 0.f; }
+
+/** One of the creature's habits now, by its gesture's name (a preview's button): its moment (life.moments) plays that
+ *  pick, cutting the one playing, as soon as idle life could play one. 0, or -1 when the creature has no such habit. */
+WM_API int wm_habit(const char *name) {
+    const struct cc *c = s_up && s_cpk ? cpk_clip(s_cpk) : NULL;
+    for (int m = 0; c && m < cc_moments(c); m++)
+        for (int j = 0; j < FD_PICKS_MAX && cc_moment_name(c, m, j); j++)
+            if (!strcmp(cc_moment_name(c, m, j), name)) { fd_moment_now(&s_dir, m, j); return 0; }
+    return -1;
+}
+/** Every habit's wait times k from now on (a preview that shows them sooner; 1: the device's own). */
+WM_API void wm_habits_speed(float k) {
+    if (!s_up || !(k > 0.f)) return;
+    for (int i = 0; i < s_dir.nmom; i++) s_dir.mom_left[i] *= k / s_dir.cfg.moment_scale;
+    s_dir.cfg.moment_scale = k;
+}
 
 /** A listen records (the recording ring) or ended; the mic's level while it does, 0..1. */
 WM_API void wm_listen(int on) { if (s_up) mole_fluid_listen(on != 0); }
