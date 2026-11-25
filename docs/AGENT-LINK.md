@@ -902,6 +902,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `pkg.remove`, `pkg.list` | `{id}`, none | `{removed}`, `{packages}` | cap `pkg` |
 | `scene.play`, `scene.queue` | `{pkg, layout, params?, ttl_s? 1..600 =60}` | `{pkg, layout, ttl_s}` | cap `scene`: a package's layout on screen; `scene.clear` melts back to the creature |
 | `creature.select`, `creature.list` | `{id}`, none | `{id, name}`, `{current, creatures}` | cap `creatures`: which built-in or installed creature Molty is |
+| `rhythm.play` | `{rhythms: 1..16 patterns, pick, bpm 40..220, mute?, buzz?, paused?}` | `{rhythm, bpm, muted, paused, buzz}` | cap `rhythm` (boards with a speaker): the [beat player](#rhythm) loops the picked pattern by itself; the library's rhythms (≤ 8192 bytes) are what the rim chooses among |
+| `rhythm.set` | any of `{bpm, pick, mute: [layer ids], next: true, buzz, paused}` | as `rhythm.play` | a tempo at once, never a restart; a new `pick` after a count-in; `next` moves the phrase one bar on at the bar line; `not_playing` before a `rhythm.play` |
+| `rhythm.stop` | none | none | silence; the clock leaves the screen |
 | `volume` | `{volume 0..21}` | none | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
@@ -1005,6 +1008,30 @@ A while after it dozes off the screen goes dark: [Screen off](#device-events).
 the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
 comparisons: no measurable change to the ~30 fps.
 
+### Rhythm
+
+The beat player (`device/firmware/main/rhythm/`, cap `rhythm` on boards with a speaker) keeps a rhythm going on Molty by
+itself: the agent sends the library and a tempo once (`rhythm.play`), the device loops the pattern, makes every drum's
+sound and places each hit on its exact sample (`rhythm_player.h`). Nothing beat by beat crosses the network.
+
+- **A pattern** is the molty-rhythm skill's `wire()` of a library file: `{id, label, steps, per, beats, layers: [{id,
+  sound, color, hits, accent?}], lengths?, swing?, bars?, order?, count_in?}`. Steps are 1-based; a beat is `per` units;
+  uneven `lengths` (aksak) and `swing` move the steps; `bars` and `order` make a phrase; `count_in` bars of clicks on the
+  beats come first (1 unless it says). The device refuses anything else (`invalid_args`).
+- **The sound.** Each drum is synthesised (`low`, `head`, `rim`, `clap`, `bell`, `hat`, `snare`; `click` for the
+  count-in), mixed under a soft limit, 16 kHz. A tempo change takes the next sample; a mute fades the drum in 5 ms.
+- **The speaker is shared.** One thing plays at a time, as ever: a `say`, a `listen` or the chirp after it takes the
+  speaker, the rhythm fades out and waits; after it, it starts again with a count-in at the bar it left. The agent's
+  voice is never mixed with it, and the microphone never hears it.
+- **The clock** is the rhythm package's screen (a `beat` item, [PACKAGES.md](PACKAGES.md#layouts)): it draws from the
+  speaker's own clock. The sound lives as long as its clock: with none on screen for 2 s it stops; stopped, the clock goes.
+- **On Molty itself:** the rim turns the tempo, the centre chooses a rhythm, a dot mutes a drum (`ring` and `tap`
+  events); while a rhythm plays the accept button pauses and resumes it and the reject button stops it, whatever they
+  are bound to (`rhythm` events).
+- **The buzz** (`buzz: true`, off unless asked): a 30 ms buzz on each main beat, started 30 ms early so the motor is up
+  to speed when the beat is heard; dropped like any buzz (no motor, the mic open). While it buzzes the shake detector is
+  deaf, so shake to talk waits.
+
 ## Device events
 
 Device→relay `{"t":"evt","name":...,"data":{...}}` frames, sent only while the link is up
@@ -1015,7 +1042,9 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
-| `tap` | `{x, y, spot?, opened?, closed?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `tap` | `{x, y, spot?, opened?, closed?, muted?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a rhythm clock's drum dot: `spot` the drum, `muted` whether it is silent now (Molty muted it itself). On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `ring` | `{spot, value}` · `{spot, index, label?, id?}` | a scene's wheel settled ([PACKAGES.md](PACKAGES.md#layouts)): the finger left a number wheel (`value`) or a face-0 choice, or the centre's tap or its wait made a face-1 choice (`index`, `label`; `id`: the rhythm a pick chose, which now plays). Never one a click |
+| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm, bpm}` | the beat player's state changed on the device itself: the accept button paused or resumed it, the reject button stopped it, or its clock left the screen ([Rhythm](#rhythm)) |
 | `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
@@ -1211,7 +1240,7 @@ flowchart TD
 | Step | Detail |
 |---|---|
 | Relay room | `DeviceRoom.onEvt`, over the device's WSS |
-| Allow list | `shake`, `tap`, `button`, `answer`; the rest stays internal |
+| Allow list | `shake`, `tap`, `button`, `answer`, `ring`, `rhythm`, `scene`; the rest stays internal |
 | Relay's own events | `utterance`, `utterance.partial`; `draft.used` / `draft.dropped` to one agent |
 | Cap | 30 a minute per device; the excess is dropped and counted |
 | Event ring | `ev:<seq>`, 200 events / 24 h, in Durable Object storage |
@@ -1231,6 +1260,8 @@ flowchart TD
 | `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square); on a scene's spot also `spot: "<id>"`, with `opened: "<layout>"` when Molty itself opened that layout for the tap; `closed: true` when the tap beside an opened layout took Molty back to the one under it. A malformed extra is dropped, the tap is kept |
 | `scene` | `{why: "open" \| "back" \| "end", pkg?, layout?, spot?}`: Molty changed its own screen. `pkg` and `layout` are what is up now (both or neither: neither means no scene, the creature is back); `spot` is the one that opened it. Inbox only (pull and ride-along): no webhook gets it |
 | `button` | `{id: "accept" \| "reject"}` |
+| `ring` | `{spot, value: number}` or `{spot, index: int 0..31, label?, id?}`: a wheel settled. Webhooks only when their `events` name it |
+| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm?, bpm}`. Webhooks only when their `events` name it |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
 
 **Who Molty is.** The device's `creature` frame (Device events) is checked and bounded (`creatureData` in
