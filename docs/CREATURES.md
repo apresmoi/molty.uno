@@ -25,7 +25,7 @@ What ships, all three built into the firmware:
 |---|---|---|---|---|
 | duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
-| cat | 2.2.1 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+| cat | 2.3.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` (and its own habits: `groom`, `wash`, `leg_up`) |
 
 The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
 mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.2.1) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.3.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 
@@ -349,7 +349,8 @@ chains: { gesture: { first: [clip], then: [clip], rounds: [min, max], last: [cli
   **light paw lock** holds the paws that were on the floor where they were, fading out with the blend.
 - Every ordered pair of resting families has its own authored clip, and so do sitting and standing into and out of the walk
   (the cat: sit, stand, loaf, crouch, walk; 16 clips); from the loaf or the crouch the walk is two authored hops (it stands up
-  first). A crossfade only ever joins clips of the same family (a mood to a mood while sitting, a transition into its loop).
+  first). A habit's own pose (the cat's paw raised, its leg up) has ways only to and from sitting, so from anywhere else it
+  is two hops. A crossfade only ever joins clips of the same family (a mood to a mood while sitting, a transition into its loop).
 - A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
   boundary, so a stepping paw is never cut.
 - A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
@@ -379,8 +380,9 @@ The cat's clips, by what they are for:
 | moods | `idle`, `listening`, `thinking`, `speaking`, `happy` (sitting), `sleepy` (the loaf), `surprised` (standing, arched) |
 | shared gestures | `wiggle`, `nod`, `shake_head`, `bounce`, `peek` (also `inspect`), `glance_left`, `glance_right`, `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `paddle` |
 | its own gestures | `eat` (a chain: the bowl comes in `eat_left` or `eat_right`, then `eat_dish`), `yarn` (a chain: `yarn_in`, 1 to 4 of `yarn_bat_l` and `yarn_bat_r`, then `yarn_away`), `walk` (held 6 s), `shaken` (3.4 s) |
-| resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk` |
-| transitions | 16 edges: every ordered pair of sit, stand, loaf and crouch, plus sit and stand into and out of the walk |
+| its habits (moments only) | `groom` (3 to 8 of the licks `groom_lick(2)_l/_r`, wipes `groom_wipe(2)_l/_r` and the switches `paw_l_to_paw_r`, `paw_r_to_paw_l`, a paw raised), `wash` (1 to 3 of `wash_shoulder_l/_r`, `wash_flank_l/_r`, sitting), `leg_up` (2 to 4 of `legup_lick`, `legup_lick2`, `legup_blep`, the leg up); its moment: every 40 to 90 s one of groom 3, wash 2, leg_up 2, stretch 1, yawn 0.5, glance_left, glance_right, look_up 1 |
+| resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk`; its habits' poses `paw_l_idle`, `paw_r_idle`, `legup_idle` |
+| transitions | 24 edges: every ordered pair of sit, stand, loaf and crouch, sit and stand into and out of the walk, and sit into and out of each habit's pose (`sit_to_paw_l` ... `legup_to_sit`), one paw to the other |
 
 ### Life
 
@@ -547,12 +549,12 @@ is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge,
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | 158 KB (its clips packed) |
-| nodes, shapes, clips | 80, 128, 96 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
-| families, edges, gestures, chains | 8, 64, 32, 8 (16 clips a step) | 5, 16, 18, 2 |
-| channels (all clips) | | 2046 (1368 LINEAR, 678 STEP, no CUBICSPLINE) |
+| file (rigged) | 256 KB | 197 KB (its clips packed; 2.2.1 with 54 clips was 158 KB) |
+| nodes, shapes, clips | 80, 128, 96 | 43 (2 of them props), 109, 80 (4 of them pose clips for its life, 7 links of its eat and yarn chains, 26 of its habits) |
+| families, edges, gestures, chains | 8, 64, 32, 8 (16 clips a step) | 8, 24, 21 (3 habits), 5 |
+| channels (all clips) | | 3119 (1794 LINEAR, 1325 STEP, no CUBICSPLINE) |
 | life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
-| moments, picks each | 16, 16 | |
+| moments, picks each | 16, 16 | 1, 8 |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.

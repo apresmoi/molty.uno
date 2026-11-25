@@ -23,7 +23,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'a49bd3ec39abad3e630b909ba2055c4b78ca52f123f14a24a43a22bf7848cd96';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'e110c3093cb4527a306d8e1864de4fc9035d3b78727cac10b23e765be6ebd262';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -63,7 +63,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 161526);
+  assert.equal(bytes.length, 202154);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -71,12 +71,12 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
 
 test('the cat: what its names wire up, with nothing said about it in molty.json', () => {
   const g = check(CAT).pkg.creature.rig.graph, clips = check(CAT).pkg.creature.rig.clips;
-  assert.deepEqual(g.rest, { sit: 'idle', stand: 'stand_idle', loaf: 'loaf_idle', crouch: 'crouch_idle', walk: 'walk' }, 'a pose rests in <pose>_idle, <pose>, or idle');
+  assert.deepEqual(g.rest, { sit: 'idle', stand: 'stand_idle', loaf: 'loaf_idle', crouch: 'crouch_idle', walk: 'walk', paw_l: 'paw_l_idle', paw_r: 'paw_r_idle', legup: 'legup_idle' }, 'a pose rests in <pose>_idle, <pose>, or idle');
   assert.deepEqual([g.edges['sit>stand'], g.edges['sit>walk'], g.edges['walk>sit'], g.edges['sit>loaf'], g.edges['loaf>sit']], ['sit_to_stand', 'walk_start', 'walk_stop', 'lie_down', 'get_up'], 'a way is <a>_to_<b>, or the one free action that goes that way');
-  assert.equal(Object.keys(g.edges).length, 16);
+  assert.equal(Object.keys(g.edges).length, 24);
   assert.deepEqual(g.enter, { surprised: { sit: 'sit_surprised', stand: 'stand_surprised' } }, '<pose>_<mood> is the way into a mood');
   assert.deepEqual([clips.bounce.from, clips.bounce.to, clips.sleepy.from, clips.surprised.to, clips.walk_stop.from], ['sit', 'crouch', 'loaf', 'stand', 'walk'], 'the pose an action starts and ends in is worked out');
-  assert.deepEqual(Object.keys(clips).filter((n) => clips[n].loop).sort(), ['crouch_idle', 'happy', 'idle', 'listening', 'loaf_idle', 'sleepy', 'speaking', 'stand_idle', 'surprised', 'thinking', 'walk'], 'moods and resting actions loop');
+  assert.deepEqual(Object.keys(clips).filter((n) => clips[n].loop).sort(), ['crouch_idle', 'happy', 'idle', 'legup_idle', 'listening', 'loaf_idle', 'paw_l_idle', 'paw_r_idle', 'sleepy', 'speaking', 'stand_idle', 'surprised', 'thinking', 'walk'], 'moods and resting actions loop');
 });
 
 test('the exporter (only where Blender 5.3 is): cat.blend still gives the committed cat.glb', { skip: !/^Blender 5\.3\./.test(spawnSync('blender', ['--version'], { encoding: 'utf8' }).stdout ?? '') && 'Blender 5.3 is not on the PATH' }, () => {
@@ -108,7 +108,7 @@ test('a second Molty from the cat, by editing only its JSON: renamed, recoloured
   doc.gestures.wiggle = { about: 'a big stretch instead of a shimmy', plays: 'stretch' };      // remapped
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));
   const miss = check(dir);
-  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:56', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
+  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:59', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
   delete doc.gestures.inspect;
   doc.gestures.lie_down = 'folds down into a loaf';                                            // a new gesture, wired by its name alone
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));
