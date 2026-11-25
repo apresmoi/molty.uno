@@ -52,6 +52,7 @@ void vSemaphoreDelete(SemaphoreHandle_t);
 QueueHandle_t xQueueCreate(unsigned, size_t);
 int xQueueSend(QueueHandle_t, const void *, unsigned);
 int xQueueReceive(QueueHandle_t, void *, unsigned);
+unsigned uxQueueMessagesWaiting(QueueHandle_t);
 int xTaskCreate(void (*)(void *), const char *, unsigned, void *, unsigned, void *);
 RingbufHandle_t xRingbufferCreateWithCaps(size_t, int, int);
 void *xRingbufferReceive(RingbufHandle_t, size_t *, unsigned);

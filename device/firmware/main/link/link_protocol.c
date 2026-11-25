@@ -309,6 +309,29 @@ cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why
     return j;
 }
 
+cJSON *link_evt_ring_frame(const char *spot, double value, int index, const char *label, const char *id)
+{
+    cJSON *data, *j = evt("ring", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "spot", spot);
+        if (index < 0) cJSON_AddNumberToObject(data, "value", round(value * 1000) / 1000);
+        else { cJSON_AddNumberToObject(data, "index", index); if (label && label[0]) cJSON_AddStringToObject(data, "label", label); }
+        if (id && id[0]) cJSON_AddStringToObject(data, "id", id);
+    }
+    return j;
+}
+
+cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm)
+{
+    cJSON *data, *j = evt("rhythm", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "state", state);
+        if (rhythm && rhythm[0]) cJSON_AddStringToObject(data, "rhythm", rhythm);
+        cJSON_AddNumberToObject(data, "bpm", bpm);
+    }
+    return j;
+}
+
 cJSON *link_evt_tap_frame(double x, double y)
 {
     cJSON *data, *j = evt("tap", &data);

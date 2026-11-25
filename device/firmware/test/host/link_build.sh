@@ -48,14 +48,17 @@ end = source.index('static void screen_home(', start)
 Path(sys.argv[2]).write_text(source[start:end])
 PY
 "$OUT/link_dma_test"
-for test in identity audio_pair client cmd ask haptic; do
+RHY="$HERE/../../main/rhythm"
+for test in identity audio_pair client cmd ask haptic rhythm; do
   extra=()
   if [ "$test" = identity ]; then extra+=("$LINK/link_identity.c"); fi
   if [ "$test" = audio_pair ]; then extra+=("$AUDIO/vad.c" "$AUDIO/chirp.c" "$LINK/link_uplink.c" "$LINK/listen_react.c" "$HERE/../../main/sense/shake_settle.c" "$HERE/../../main/fluid/fluid_ask.c"); fi
   if [ "$test" = haptic ]; then extra+=("$HERE/../../main/haptic/haptic_plan.c"); fi
+  if [ "$test" = audio_pair ] || [ "$test" = cmd ]; then extra+=("$HERE/rhythm_stub.c"); fi
+  if [ "$test" = rhythm ]; then extra+=("$RHY/rhythm_core.c" "$RHY/rhythm_player.c" "$RHY/rhythm_wire.c" "$HERE/../../main/haptic/haptic_plan.c"); fi
   if [ "$test" = ask ]; then extra+=("$HERE/../../main/fluid/fluid_ask.c" "$HERE/../../main/sense/gesture.c"); fi
   cc -std=c11 -Wall -Wextra -Werror -O2 ${LINK_TEST_CFLAGS:-} \
-    -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/creature" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$HERE/../../main/pkg" -I"$HERE/../../main/diag" -I"$HERE/../../main/power" -I"$HERE/../../main/haptic" -I"$IDF_JSON" \
+    -I"$OUT/stubs" -I"$OUT" -I"$HERE" -I"$LINK" -I"$AUDIO" -I"$HERE/../../main/fluid" -I"$HERE/../../main/creature" -I"$HERE/../../main/sense" -I"$HERE/../../main/update" -I"$HERE/../../main/pkg" -I"$HERE/../../main/diag" -I"$HERE/../../main/power" -I"$HERE/../../main/haptic" -I"$RHY" -I"$IDF_JSON" \
     "$HERE/link_${test}_test.c" "$HERE/link_sdk_stub.c" \
     "$LINK/link_protocol.c" ${extra[@]+"${extra[@]}"} "$OUT/cJSON.o" -lm -o "$OUT/link_${test}_test"
   "$OUT/link_${test}_test"

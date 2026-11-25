@@ -65,6 +65,7 @@ int xQueueReceive(QueueHandle_t q, void *p, unsigned t) {
     if(!q->count) return 0;
     memcpy(p,q->data,q->item); q->count--; memmove(q->data,q->data+q->item,q->count*q->item); return pdTRUE;
 }
+unsigned uxQueueMessagesWaiting(QueueHandle_t q) { return (unsigned)q->count; }
 int xTaskCreate(void (*fn)(void *), const char *name, unsigned stack, void *arg, unsigned prio, void *out) {
     (void)fn;(void)name;(void)stack;(void)arg;(void)prio;(void)out; return pdPASS;
 }

@@ -6,6 +6,7 @@
 #include "self_update.h"
 #include "pkg_cmd.h"
 #include "haptic.h"
+#include "rhythm_dev.h"
 #include "mole_creature.h"
 #include "molty_board.h"
 #include "sdkconfig.h"
@@ -352,6 +353,8 @@ void link_cmd_init(void)
     link_cmd_register("pkg.list", pkg_cmd_list);
     link_cmd_register("scene.play", pkg_cmd_scene_play); link_cmd_register("scene.queue", pkg_cmd_scene_queue);
     link_cmd_register("scene.clear", pkg_cmd_scene_clear);
+    link_cmd_register("rhythm.play", rhythm_cmd_play); link_cmd_register("rhythm.set", rhythm_cmd_set);
+    link_cmd_register("rhythm.stop", rhythm_cmd_stop);
     link_cmd_register("creature.select", pkg_cmd_creature_select); link_cmd_register("creature.list", pkg_cmd_creature_list);
 }
 

@@ -102,6 +102,7 @@ cJSON *link_identity_hello(void)
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "hints";   /* takes {"t":"hint"} while listening: listener reactions */
     if (molty_board_has(MOLTY_CAP_SPEAKER) || molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "resume";   /* keeps a say / listen through a short drop (hello.resume) */
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_cancel";   /* the relay may drop a say it gave up on */
+    if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "rhythm";   /* rhythm.play / .set / .stop: the beat player (rhythm.h) */
     if (haptic_available()) caps[n++] = "haptic";   /* cmd buzz: the vibration motor (haptic.h) */
     caps[n++] = "gestures";   /* cmd gestures: tap, double tap and the buttons do what the human chose */
     caps[n++] = "dnd";   /* reports do not disturb (evt dnd); the relay holds back unprompted speech */
