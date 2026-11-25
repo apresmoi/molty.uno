@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT — see rhythm_wire.h */
+/* SPDX-License-Identifier: MIT, see rhythm_wire.h */
 #include "rhythm_wire.h"
 #include <math.h>
 #include <stdio.h>

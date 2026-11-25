@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT — see rhythm_player.h */
+/* SPDX-License-Identifier: MIT, see rhythm_player.h */
 #include "rhythm_player.h"
 #include <math.h>
 #include <string.h>

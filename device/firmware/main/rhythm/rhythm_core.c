@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT — see rhythm.h */
+/* SPDX-License-Identifier: MIT, see rhythm.h */
 #include "rhythm.h"
 #include "rhythm_wire.h"
 #include "link_protocol.h"

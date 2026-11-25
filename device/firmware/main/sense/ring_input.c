@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT — see ring_input.h */
+/* SPDX-License-Identifier: MIT, see ring_input.h */
 #include "ring_input.h"
 #include <math.h>
 
