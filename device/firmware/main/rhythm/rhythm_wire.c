@@ -38,9 +38,9 @@ static bool color_of(const cJSON *c, uint32_t *rgb) {
     return true;
 }
 
-static const char *pattern(const cJSON *j, rhy_pattern_t *pt) {
+static const char *pattern(const cJSON *j, int nregions, rhy_pattern_t *pt) {
     memset(pt, 0, sizeof(*pt));
-    static const char *const KEYS[] = { "id", "label", "steps", "per", "beats", "layers", "lengths", "swing", "bars", "order", "count_in" };
+    static const char *const KEYS[] = { "id", "label", "steps", "per", "beats", "layers", "lengths", "swing", "bars", "order", "count_in", "region" };
     if (!cJSON_IsObject(j)) return "a rhythm is an object";
     for (const cJSON *c = j->child; c; c = c->next) {
         bool known = false;
@@ -78,7 +78,7 @@ static const char *pattern(const cJSON *j, rhy_pattern_t *pt) {
         strcpy(o->id, lid->valuestring);
         o->sound = RHY_SOUNDS;
         for (int q = 0; cJSON_IsString(snd) && q < RHY_SOUNDS; q++) if (!strcmp(snd->valuestring, RHY_SOUND_NAMES[q])) o->sound = (uint8_t)q;
-        if (o->sound == RHY_SOUNDS) return "layer sound: low head rim clap bell hat snare click";
+        if (o->sound == RHY_SOUNDS) return "layer sound: low head rim clap bell hat snare click tom slap shaker";
         if (!color_of(cJSON_GetObjectItemCaseSensitive(L, "color"), &o->rgb)) return "layer color: #rrggbb";
         if (!steps_of(cJSON_GetObjectItemCaseSensitive(L, "hits"), pt->steps, true, &o->hits)) return "layer hits: step numbers";
         if (!steps_of(cJSON_GetObjectItemCaseSensitive(L, "accent"), pt->steps, false, &o->accent) || (o->accent & ~o->hits)) return "layer accent: some of its hits";
@@ -101,15 +101,33 @@ static const char *pattern(const cJSON *j, rhy_pattern_t *pt) {
     const cJSON *cin = cJSON_GetObjectItemCaseSensitive(j, "count_in");
     if (cin && (!cJSON_IsNumber(cin) || cin->valueint < 0 || cin->valueint > 2 || cin->valuedouble != cin->valueint)) return "count_in: 0, 1 or 2";
     pt->count_in = cin ? (uint8_t)cin->valueint : 1;
+    const cJSON *rg = cJSON_GetObjectItemCaseSensitive(j, "region");
+    if (rg && (!cJSON_IsNumber(rg) || rg->valuedouble != rg->valueint || rg->valueint < 0 || rg->valueint >= (nregions > 0 ? nregions : 1))) return "region: one of regions";
+    pt->region = rg ? (uint8_t)rg->valueint : 0;
     return NULL;
 }
 
-int rhy_parse_lib(const cJSON *arr, rhy_pattern_t *out, const char **err) {
+int rhy_parse_regions(const cJSON *arr, rhy_region_t *out, const char **err) {
     *err = NULL;
-    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) < 1 || cJSON_GetArraySize(arr) > RHY_LIB) { *err = "rhythms: 1..16"; return -1; }
+    if (!arr) return 0;
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) < 1 || cJSON_GetArraySize(arr) > RHY_REGIONS) { *err = "regions: 1..16"; return -1; }
     int n = 0;
     for (const cJSON *j = arr->child; j; j = j->next, n++) {
-        if ((*err = pattern(j, &out[n]))) return -1;
+        const cJSON *label = cJSON_GetObjectItemCaseSensitive(j, "label"), *color = cJSON_GetObjectItemCaseSensitive(j, "color");
+        if (!cJSON_IsObject(j) || cJSON_GetArraySize(j) != 2 || !cJSON_IsString(label) || !name_ok(label->valuestring, RHY_LABEL_MAX, true) || !color_of(color, &out[n].rgb)) {
+            *err = "a region is {label, color}"; return -1;
+        }
+        strcpy(out[n].label, label->valuestring);
+    }
+    return n;
+}
+
+int rhy_parse_lib(const cJSON *arr, int nregions, rhy_pattern_t *out, const char **err) {
+    *err = NULL;
+    if (!cJSON_IsArray(arr) || cJSON_GetArraySize(arr) < 1 || cJSON_GetArraySize(arr) > RHY_LIB) { *err = "rhythms: 1..96"; return -1; }
+    int n = 0;
+    for (const cJSON *j = arr->child; j; j = j->next, n++) {
+        if ((*err = pattern(j, nregions, &out[n]))) return -1;
         for (int q = 0; q < n; q++) if (!strcmp(out[q].id, out[n].id)) { *err = "rhythm ids differ"; return -1; }
     }
     return n;

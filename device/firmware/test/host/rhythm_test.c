@@ -96,8 +96,13 @@ int main(int argc, char **argv) {
     text[got] = 0;
     cJSON *lib = cJSON_Parse(text);
     const char *err = NULL;
-    NLIB = rhy_parse_lib(lib, LIB, &err);
-    CHECK(NLIB == 12, "the library parses: %d (%s)", NLIB, err ? err : "");
+    static rhy_region_t REG[RHY_REGIONS];
+    const int nreg = rhy_parse_regions(cJSON_GetObjectItem(lib, "regions"), REG, &err);
+    NLIB = nreg < 1 ? -1 : rhy_parse_lib(cJSON_GetObjectItem(lib, "rhythms"), nreg, LIB, &err);
+    CHECK(nreg >= 10 && NLIB >= 50, "the library parses: %d rhythms in %d regions (%s)", NLIB, nreg, err ? err : "");
+    int bad_region = 0;
+    for (int i = 0; i < NLIB; i++) bad_region += LIB[i].region >= nreg || (i && LIB[i].region < LIB[i - 1].region);
+    CHECK(!bad_region, "each rhythm in a region, the regions in order (%d not)", bad_region);
     printf("  library %d rhythms, %zu bytes\n", NLIB, got);
     const int cha = lib_index("chacarera"), aks = lib_index("aksak-9"), son = lib_index("son-clave"), bell = lib_index("bell-12");
     CHECK(cha >= 0 && aks >= 0 && son >= 0 && bell >= 0, "the library has chacarera, aksak-9, son-clave, bell-12");
@@ -117,7 +122,7 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof(BAD) / sizeof(BAD[0]); i++) {
         cJSON *j = cJSON_Parse(BAD[i]);
         static rhy_pattern_t tmp[RHY_LIB];
-        CHECK(rhy_parse_lib(j, tmp, &err) < 0 && err, "bad library %zu refused", i);
+        CHECK(rhy_parse_lib(j, 1, tmp, &err) < 0 && err, "bad library %zu refused", i);
         cJSON_Delete(j);
     }
     uint32_t m = 0;
@@ -308,6 +313,52 @@ int main(int argc, char **argv) {
         size_t made = 256; int blocks = 0;
         while ((made = rhy_fill(&P, BUF, 256)) == 256 && blocks < 10) blocks++;
         CHECK(!P.on && blocks < 2, "stop: fades, then off");
+    }
+
+    /* ── the speaker's clock as the picture reads it: an I2S ring of 6 x 240 frames (the default config, both boards),
+     * 256-sample writes that wait for room, the DAC 50 ppm off the timer; the picture reads at 30 frames a second.
+     * rhythm_dev.c's measure (written less the ring, plus half a buffer, plus the time since the write) smoothed by
+     * rhy_clock_heard against the sample truly heard: no offset, and the same after ten minutes ── */
+    {
+        const double rate = RHY_RATE * (1.0 + 50e-6);  /* the DAC's real rate, timer us */
+        const double desc = 240.0, ring = 1440.0;
+        rhy_clock_t clk = { 0 };
+        double t = 0.0, freed = 0.0, written = 0.0, w_ret = 0.0, tw = 0.0, next_frame = 0.0;   /* w_ret: as of the last write's return */
+          /* freed: room handed back, frames (the ring starts full of silence) */
+        double e_first = 0.0, e_last = 0.0, worst = 0.0; int n_first = 0, n_last = 0;
+        const double T = 600.0 * 1e6;
+        while (t < T) {
+            /* the writer: a 256-block, copied as buffers free (each frees when the DMA is done with it) */
+            double left = 256.0;
+            while (left > 0.0) {
+                const double room = freed - written;
+                if (room <= 0.0) {                          /* wait for the next buffer to finish */
+                    const double done = floor(t * rate / 1e6 / desc + 1e-9) + 1.0;   /* buffers played by then */
+                    const double at = done * desc / rate * 1e6;
+                    while (next_frame < at) {               /* the picture's frames meanwhile */
+                        const double meas = w_ret - ring + desc / 2.0 + (next_frame - tw) * (RHY_RATE / 1e6);
+                        const double h = rhy_clock_heard(&clk, meas, (int64_t)next_frame);
+                        const double truth = next_frame * rate / 1e6 - ring;   /* (the ring's first silence ahead of it) */
+                        if (next_frame > 2e6) {
+                            const double e = (h - truth) / RHY_RATE * 1e3;   /* ms */
+                            if (fabs(e) > worst) worst = fabs(e);
+                            if (next_frame < 62e6) { e_first += e; n_first++; }
+                            if (next_frame > T - 60e6) { e_last += e; n_last++; }
+                        }
+                        next_frame += 1e6 / 30.0;
+                    }
+                    t = at; freed = done * desc;
+                    continue;
+                }
+                const double k = room < left ? room : left;
+                written += k; left -= k;
+            }
+            tw = t; w_ret = written;
+        }
+        e_first /= n_first; e_last /= n_last;
+        CHECK(fabs(e_first) < 1.5 && fabs(e_last) < 1.5 && fabs(e_last - e_first) < 0.2 && worst < 4.0,
+              "the picture's clock: %.2f ms off in the first minute, %.2f ms after ten, worst %.2f ms", e_first, e_last, worst);
+        printf("  clock   the speaker's clock read at 30 fps, the DAC 50 ppm off the timer: %.2f ms off at first, %.2f ms after ten minutes, worst %.2f ms\n", e_first, e_last, worst);
     }
 
     /* ── cost: the busiest rhythm, a minute ── */

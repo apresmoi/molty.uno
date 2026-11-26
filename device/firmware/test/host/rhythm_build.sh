@@ -9,7 +9,7 @@ REPO="$(cd "$FW/../.." && pwd)"
 JSON="${IDF_PATH:-$HOME/esp/esp-idf}/components/json/cJSON"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-rhythm.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
-node --input-type=module -e "import { load, wire } from '$REPO/skills/molty-rhythm/scripts/library.mjs'; console.log(JSON.stringify(load().map(wire)));" > "$OUT/lib.json"
+node --input-type=module -e "import { load, wireLibrary } from '$REPO/skills/molty-rhythm/scripts/library.mjs'; console.log(JSON.stringify(wireLibrary(load())));" > "$OUT/lib.json"
 cc -std=c11 -Wall -Wextra -Werror -O2 -ffp-contract=off -I"$FW/main/rhythm" -I"$JSON" "$HERE/rhythm_test.c" \
   "$FW/main/rhythm/rhythm_player.c" "$FW/main/rhythm/rhythm_wire.c" "$JSON/cJSON.c" -lm -o "$OUT/rhythm_test"
 "$OUT/rhythm_test" "$OUT/lib.json"

@@ -3,7 +3,7 @@
 #include <math.h>
 #include <string.h>
 
-const char *const RHY_SOUND_NAMES[RHY_SOUNDS] = { "low", "head", "rim", "clap", "bell", "hat", "snare", "click" };
+const char *const RHY_SOUND_NAMES[RHY_SOUNDS] = { "low", "head", "rim", "clap", "bell", "hat", "snare", "click", "tom", "slap", "shaker" };
 
 /* ── the drums ──────────────────────────────────────────────────────────────────────────────────────────────────────
  * A tone (a sine and one partial, its pitch falling from f0 to f1 with time constant sweep) under a decay tau, plus
@@ -20,6 +20,9 @@ static const snd_t SND[RHY_SOUNDS] = {
     /* hat   */ {   0.f,   0.f,  1.f,   1.f,  70.f, 0.0f,   0.00f, 1.60f, 18.f, 0.90f, 0.85f, 0.50f },
     /* snare */ { 190.f, 160.f, 30.f,  60.f, 220.f, 0.0f,   0.00f, 1.00f, 70.f, 0.60f, 0.50f, 0.75f },
     /* click */ { 1500.f, 1500.f, 1.f, 12.f,  50.f, 0.0f,   0.00f, 0.00f,  1.f, 0.00f, 0.00f, 0.60f },
+    /* tom   */ { 330.f, 200.f, 20.f,  70.f, 250.f, 1.5f,   0.20f, 0.20f,  6.f, 0.50f, 0.00f, 0.85f },
+    /* slap  */ { 420.f, 360.f,  5.f,  15.f, 120.f, 2.3f,   0.30f, 1.20f, 10.f, 0.70f, 0.50f, 0.75f },
+    /* shaker*/ {   0.f,   0.f,  1.f,   1.f,  90.f, 0.0f,   0.00f, 1.00f, 25.f, 0.95f, 0.90f, 0.35f },
 };
 #define MASTER   0.34f                  /* one accented hit's peak, about -9 dBFS                                */
 #define RHY_SOFT 0.6f                   /* an unaccented hit                                                     */
@@ -119,9 +122,26 @@ static inline int first_beat(const rhy_pattern_t *pt) { for (int s = 0; s < pt->
 /* ── the clock ───────────────────────────────────────────────────────────────────────────────────────────────────── */
 
 static double du_of(const rhy_player_t *p) { return (double)p->bpm * cur(p)->per / 60.0 / RHY_RATE; }
+static inline double ev_u(const rhy_player_t *p);
+/* u at sample n on the clock now, exactly as a step's time is tested (1e-9 units: a millionth of a sample, so an onset
+ * on a sample lands on it, not after) */
+static inline bool due_at(const rhy_player_t *p, uint64_t n) {
+    return p->anc[0].u0 + ((double)n - (double)p->anc[0].n0) * p->anc[0].du + 1e-9 >= ev_u(p);
+}
+/* the first sample from p->n on the next step sounds on: worked out once a step (or a tempo change), so rhy_fill
+ * compares two integers a sample */
+static void sched(rhy_player_t *p) {
+    const double x = (ev_u(p) - 1e-9 - p->anc[0].u0) / p->anc[0].du;
+    int64_t c = (int64_t)p->anc[0].n0 + (x > 0.0 ? (int64_t)ceil(x) : 0);
+    if (c < (int64_t)p->n) c = (int64_t)p->n;
+    while (c > (int64_t)p->n && due_at(p, (uint64_t)c - 1)) c--;
+    while (!due_at(p, (uint64_t)c)) c++;
+    p->n_ev = (uint64_t)c;
+}
 static void anchor(rhy_player_t *p, double u0) {
     memmove(&p->anc[1], &p->anc[0], sizeof(p->anc[0]) * (RHY_ANCHORS - 1));
     p->anc[0].n0 = p->n; p->anc[0].u0 = u0; p->anc[0].du = du_of(p);
+    if (p->nlib) sched(p);
 }
 double rhy_u_at(const rhy_player_t *p, uint64_t n) {
     int i = 0;
@@ -135,6 +155,7 @@ static void restart(rhy_player_t *p, int64_t k) {
     p->cin_end = (double)k * L;
     anchor(p, (double)(k - cin) * L);
     p->ev_bar = k - cin; p->ev_step = 0;
+    sched(p);
 }
 static inline double ev_u(const rhy_player_t *p) { return (double)p->ev_bar * bar_len(p) + rhy_onset(cur(p), p->ev_step); }
 
@@ -231,10 +252,8 @@ void rhy_stop(rhy_player_t *p) {
 size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n) {
     if (!rhy_sounding(p)) { memset(out, 0, n * sizeof(int16_t)); return 0; }
     for (size_t i = 0; i < n; i++) {
-        if (!p->paused) {
-            const double u = p->anc[0].u0 + ((double)p->n - (double)p->anc[0].n0) * p->anc[0].du;
-            for (int guard = 0; u + 1e-9 >= ev_u(p) && guard < RHY_STEPS * 2; guard++) place(p);   /* (1e-9 units: a millionth of a sample, so an onset on a sample lands on it, not after) */
-        }
+        if (!p->paused)
+            for (int guard = 0; p->n >= p->n_ev && guard < RHY_STEPS * 2; guard++) { place(p); sched(p); }
         float s = 0.f;
         bool any = false;
         for (int k = 0; k < RHY_VOICES; k++) if (p->v[k].len) { s += voice_sample(p, &p->v[k]); any = true; }
@@ -259,6 +278,16 @@ bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first) {
     memmove(p->beat_n, p->beat_n + 1, sizeof(p->beat_n[0]) * (size_t)p->nbeat);
     memmove(p->beat_first, p->beat_first + 1, (size_t)p->nbeat);
     return true;
+}
+
+double rhy_clock_heard(rhy_clock_t *c, double measured, int64_t t_us) {
+    const double pred = c->n + (double)(t_us - c->t) * (RHY_RATE / 1e6), err = measured - pred;
+    if (!c->on || fabs(err) > RHY_CLOCK_JUMP_MS * RHY_RATE / 1000.0 || t_us < c->t) *c = (rhy_clock_t){ true, measured, t_us };
+    else {
+        const double a = 1.0 - exp(-(double)(t_us - c->t) / (RHY_CLOCK_TAU_MS * 1000.0));
+        *c = (rhy_clock_t){ true, pred + err * a, t_us };
+    }
+    return c->n;
 }
 
 void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *o) {

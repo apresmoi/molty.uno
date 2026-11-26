@@ -10,8 +10,12 @@
 #include "cJSON.h"
 #include "rhythm_player.h"
 
-/** The patterns of arr (1..RHY_LIB) into out; how many, or -1 with *err. */
-int rhy_parse_lib(const cJSON *arr, rhy_pattern_t *out, const char **err);
+/** The patterns of arr (1..RHY_LIB) into out, each `region` below nregions; how many, or -1 with *err. */
+int rhy_parse_lib(const cJSON *arr, int nregions, rhy_pattern_t *out, const char **err);
+/** A region of the library, as the wheel shows it: its label (capitals, up to 12) and its tint. */
+typedef struct { char label[RHY_LABEL_MAX + 1]; uint32_t rgb; } rhy_region_t;
+/** rhythm.play's `regions` (1..RHY_REGIONS {label, color}) into out; how many, 0 when absent, -1 with *err. */
+int rhy_parse_regions(const cJSON *arr, rhy_region_t *out, const char **err);
 /** A list of pt's layer ids into layer bits (NULL: none). False: not a list of its ids. */
 bool rhy_parse_mute(const rhy_pattern_t *pt, const cJSON *ids, uint32_t *mute);
 /** pt's layer named id, -1 none. */

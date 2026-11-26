@@ -18,7 +18,8 @@
  *   phrase    bars in an order (`bars`, `order`), on repeat; `next` moves the phrase one bar on at the next bar line.
  *   count-in  a bar (or two) of clicks on the beats before the pattern: at the start, after a new pick, after a pause.
  *   sound     each hit starts a voice (RHY_VOICES at once, the oldest gives way): a pitched sine dropping in pitch
- *             (low, head), a high ringing pair (rim, bell), shaped noise (clap, hat, snare), a click. Accented hits
+ *             (low, head, tom: a hand drum's open tone), a high ringing pair (rim, bell), shaped noise (clap, hat,
+ *             snare, shaker), a hand drum's slap (a short tone under bright noise), a click. Accented hits
  *             play louder. The voices are summed, then a soft knee keeps the sum under full scale: never a clipped
  *             sample.
  *   mute      a muted layer's ringing voices fade out over RHY_FADE samples (no click); its next hits are silent.
@@ -41,7 +42,8 @@ extern "C" {
 #define RHY_LAYERS  4
 #define RHY_BARS    8
 #define RHY_ORDER   16
-#define RHY_LIB     16
+#define RHY_LIB     96                  /* a library (a skill's, all its regions): PSRAM                         */
+#define RHY_REGIONS 16
 #define RHY_VOICES  8
 #define RHY_FADE    80                  /* samples (5 ms): a muted or paused voice's fade                      */
 #define RHY_BPM_MIN 40
@@ -52,7 +54,7 @@ extern "C" {
 #define RHY_LABEL_MAX 12
 #define RHY_LAYER_ID_MAX 16
 
-enum { RHY_LOW, RHY_HEAD, RHY_RIM, RHY_CLAP, RHY_BELL, RHY_HAT, RHY_SNARE, RHY_CLICK, RHY_SOUNDS };
+enum { RHY_LOW, RHY_HEAD, RHY_RIM, RHY_CLAP, RHY_BELL, RHY_HAT, RHY_SNARE, RHY_CLICK, RHY_TOM, RHY_SLAP, RHY_SHAKER, RHY_SOUNDS };
 extern const char *const RHY_SOUND_NAMES[RHY_SOUNDS];
 
 typedef struct {
@@ -65,6 +67,7 @@ typedef struct {
 typedef struct {
     char id[RHY_ID_MAX + 1], label[RHY_LABEL_MAX + 1];
     uint8_t steps, nlayers, nbars, norder, count_in;
+    uint8_t region;                     /* its region (rhythm.play's `regions`), 0 without      */
     float per;                          /* units a beat                                                        */
     float swing;                        /* 0..0.33                                                             */
     float start[RHY_STEPS + 1];         /* where each step starts, units; start[steps] = the bar's length L     */
@@ -105,6 +108,8 @@ typedef struct {
     bool next_req;
     bool stopping;                      /* fading out for a pause or a stop                                    */
     bool quit;                          /* ... a stop: off once faded                                          */
+    uint64_t n_ev;                      /* the sample the next step sounds on (sched: the clock's arithmetic once a
+                                         * step, never a sample)                                                  */
     rhy_voice_t v[RHY_VOICES];
     uint32_t noise;
     uint64_t beat_n[RHY_BEATS]; uint8_t beat_first[RHY_BEATS]; int nbeat;
@@ -136,6 +141,17 @@ size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n);
 double rhy_u_at(const rhy_player_t *p, uint64_t n);
 /** A main beat placed at or before sample upto, not yet taken: true and *first (the bar's first). For the buzz. */
 bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first);
+
+/** The speaker's clock as the picture reads it: the sample heard at a moment, from what was written and when. Each
+ *  write gives a measure (the newest sample written, less what waits in the DMA ring, plus the time since), off by up
+ *  to half a DMA buffer as the writes fall; this follows those measures smoothly (RHY_CLOCK_TAU_MS), steps to them
+ *  after a jump of more than RHY_CLOCK_JUMP_MS (a new stream), and never drifts from the samples: every measure is
+ *  counted in samples, the timer only bridges the time since the last write. */
+#define RHY_CLOCK_TAU_MS  150.0
+#define RHY_CLOCK_JUMP_MS 40.0
+typedef struct { bool on; double n; int64_t t; } rhy_clock_t;
+/** measured: the sample heard at t_us by the newest write; returns the smoothed one. */
+double rhy_clock_heard(rhy_clock_t *c, double measured, int64_t t_us);
 
 /** What the picture shows at output sample n. */
 typedef struct {
