@@ -243,6 +243,7 @@ static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's qu
 static bool     s_req_regrid = false;           /* rebuild the grid: hot fields moved (shed / allow internal) */
 static uint32_t s_glass_pic = 1;               /* the fluid's own picture (FLUID_LOOK_GLASS): a number each state entered */
 static bool     s_carried;                      /* (enter_state: a change of picture brings the state) */
+static uint32_t s_cr_pic = 0;                   /* the creature's picture: a number each creature made (adopt_creature) */
 static bool     s_req_internal = false;         /* ...into internal RAM: once the picture is not changing (a rebuild re-enters
                                                  * the state: the boot word would melt, a change of picture be cut short) */
 static bool     s_shed = false;                 /* the heap guard shed them: internal RAM stays off this boot */
@@ -1577,6 +1578,8 @@ static void adopt_creature(cr_job_t *j) {
         const int mood = cr_loaded() ? cr_mood() : CM_IDLE;
         cute_rt_destroy(s_cute); cpk_destroy(s_cpk);
         s_cute = rt; s_cpk = k;
+        s_cr_pic++;                                    /* another creature: another picture, a change of picture to it */
+        if (s_cur == ST_CREATURE) { s_glass_pic++; if (fluid_draw_morph_carries(s_draw)) s_sim->p.settle = true; }
         cr_set_mood(mood);
         ESP_LOGI(TAG, "creature '%s' loaded (%u B, %s)", name, (unsigned)len, pkg ? "package" : ".molty");
     } else {
@@ -2582,7 +2585,7 @@ static void fluid_task(void *arg) {
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->look);
         const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
                             : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->look, ready)
-                            : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS | FLUID_LOOK_DUST | (s_glass_pic & 0x03FFFFFFu);
+                            : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, s_cr_pic, true) : FLUID_LOOK_GLASS | FLUID_LOOK_DUST | (s_glass_pic & 0x03FFFFFFu);
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
             static uint32_t look_was;
             static int cuts;
