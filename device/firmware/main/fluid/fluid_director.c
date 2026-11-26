@@ -25,7 +25,7 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
     .boot_word_s = 2.8f,
-    .bye_word_s = 1.8f, .bye_pond_s = 2.2f,
+    .bye_word_s = 1.5f,
 };
 
 /* flashes: a say that ended well (happy), a shake (surprised) */
@@ -174,15 +174,8 @@ void fd_bye(fluid_director_t *d) {
     go(d, FD_ST_TEXT, 0);
 }
 
-bool fd_bye_word(const fluid_director_t *d) { return d->bye && d->bye_t < d->cfg.bye_word_s; }
-
-float fd_bye_level(const fluid_director_t *d) {
-    if (!d->bye || d->bye_t <= d->cfg.bye_word_s) return 1.f;
-    const float f = 1.f - (d->bye_t - d->cfg.bye_word_s) / d->cfg.bye_pond_s;
-    return f > 0.f ? f : 0.f;
-}
-
-bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s + d->cfg.bye_pond_s; }
+bool fd_bye_word(const fluid_director_t *d) { return d->bye; }
+bool fd_bye_dark(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s; }
 
 
 void fd_set_creature(fluid_director_t *d, bool loaded) {
@@ -302,11 +295,7 @@ static void reel_step(fluid_director_t *d) {
 
 void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     d->state_t += dt;
-    if (d->bye) {                          /* the goodbye: the word, then the pond, then off */
-        d->bye_t += dt;
-        if (d->bye_t >= d->cfg.bye_word_s && target(d) != FD_ST_FX) go(d, FD_ST_FX, FLUID_FX_RIPPLE);
-        return;
-    }
+    if (d->bye) { d->bye_t += dt; return; }   /* the goodbye: the word, then the glass goes dark (fd_bye_dark) */
     bool reading = d->cur == FD_ST_TEXT && !d->pending;
     d->text_done_t = reading && text_done ? d->text_done_t + dt : 0.f;
 

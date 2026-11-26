@@ -55,8 +55,8 @@
  *            └───┴───────────────────────────────────────┘
  *   fd_boot: "molty.uno" (TEXT) ─ boot_word_s ─▶ CREATURE; anything wanting the screen ends
  *            it on the spot.
- *   fd_bye:  "bye!" (TEXT) ─ bye_word_s ─▶ the ripple pond, fading out ─ bye_pond_s ─▶ done
- *            (fd_bye_done: the power goes off). Nothing ends it: every request is ignored.
+ *   fd_bye:  "bye!" (TEXT, by the dissolve) ─ bye_word_s ─▶ dark (fd_bye_dark: the glass dissolves to empty, then
+ *            the power goes off). Nothing ends it: every request is ignored.
  *   "autoplay" only: the reel (blob ▸ creature ▸ effects ▸ text) until any other request.
  */
 #pragma once
@@ -94,8 +94,7 @@ typedef struct {
     float work_ttl_s;                 /* working ends by itself after this long: 120   */
     float work_gap_min_s, work_gap_max_s; /* between two work actions: 0.5..1.6        */
     float boot_word_s;                /* boot screen: the word condenses, holds, melts: 2.8 */
-    float bye_word_s;                 /* power off: "bye!" condenses and holds: 1.8    */
-    float bye_pond_s;                 /* ...melts into a pond that fades to black: 2.2 */
+    float bye_word_s;                 /* power off: "bye!" comes and holds: 1.5, then dark */
 } fd_cfg_t;
 extern const fd_cfg_t FD_CFG_DEFAULT;
 
@@ -154,8 +153,7 @@ bool  fd_boot_word(const fluid_director_t *d);   /* the text state shows the boo
  *  acts; from here every request is ignored. */
 void  fd_bye(fluid_director_t *d);
 bool  fd_bye_word(const fluid_director_t *d);    /* the text state shows the goodbye word */
-float fd_bye_level(const fluid_director_t *d);   /* the panel's brightness, 1 → 0 over the pond */
-bool  fd_bye_done(const fluid_director_t *d);    /* the goodbye is over: power off now */
+bool  fd_bye_dark(const fluid_director_t *d);    /* the word's time is over: the glass goes dark, then off */
 /** A creature (.molty) is (not) loaded. Loading one while the creature was wanted but the
  *  boot word (after fd_boot) or the blob stood in for it moves to the creature. */
 void  fd_set_creature(fluid_director_t *d, bool loaded);

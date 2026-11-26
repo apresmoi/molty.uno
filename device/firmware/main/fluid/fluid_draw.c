@@ -1701,6 +1701,7 @@ static bool hdc_room(fluid_draw_t *d) {
 #define MP_NEW_LINES0 0.85f    /* the new lines come in over this .. this (as the old: a cell's together), over the  */
 #define MP_NEW_LINES1 1.12f    /*  last landings                                                                      */
 #define MP_LEN        1.12f    /* the change's length (the dust down by 1.04, the lines full 2 frames after)         */
+#define MP_DARK       0.84f    /* a change into the empty glass ends here: the cloud gone (MP_MID + MP_MID1 + MP_GONE) */
 #define MP_GONE       0.2f     /* a pair with no new grain fades in the cloud over this, from its cloud point on    */
 #define MP_KNOWN      0.2f     /* the pull toward the new spot comes in over this, once the new picture is read    */
 #define MP_FPS        30.f     /* the change's frames a second (one step a frame drawn, never two)                 */
@@ -3213,7 +3214,7 @@ static void morph_begin(fluid_draw_t *d) {
     if (!r) return;
     m->dg[FLUID_MD_OLD] = m->frames;
     fluid_morph_mem_t *mm = m->mm;
-    m->dur = MP_LEN;
+    m->dur = m->look == FLUID_LOOK_EMPTY ? MP_DARK : MP_LEN;   /* (into the empty glass: the old dust gone, nothing gathers) */
     m->n = m->w = 0; m->t = 0.f;
     if (!mm->again) m->px = m->wins = 0;
 }

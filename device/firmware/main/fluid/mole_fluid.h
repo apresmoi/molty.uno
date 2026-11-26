@@ -129,7 +129,8 @@ void mole_fluid_event(mole_fluid_event_t ev);
  *  or a listen. It also goes off by itself a while after the creature fell asleep (screen_nap.h:
  *  the settings screen_off_battery_s / screen_off_usb_s); such a nap ends for those, for a
  *  pick-up and for anything the agent shows, the creature awake. An on by hand starts that
- *  timer again. Safe from any task; a no-op before init. */
+ *  timer again. Going off, the picture first dissolves to an empty glass (~0.85 s, fluid_draw.c MP_DARK); coming on,
+ *  it gathers from it (~0.65 s, from MP_BORN0). Safe from any task; a no-op before init. */
 void mole_fluid_screen(bool on);
 /** The screen is on (true before init). */
 bool mole_fluid_screen_on(void);
@@ -154,11 +155,14 @@ void mole_fluid_utc(double unix_s);
 double mole_fluid_utc_now(void);
 /** Do not disturb is on (power.c): no falling star while the creature sleeps then. Any task. */
 void mole_fluid_dnd(bool on);
-/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
- *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
- *  screen stays on and every request is ignored. Safe from any task. */
+/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, the picture dissolves into "bye!", which holds, then
+ *  dissolves to an empty glass (about 2.5 s in all); then mole_fluid_goodbye_done. From here the screen stays on and
+ *  every request is ignored. Safe from any task. */
 void mole_fluid_goodbye(void);
 bool mole_fluid_goodbye_done(void);
+/** Before a restart the firmware chose (an update, /api/reboot): the picture dissolves to an empty glass. Waits for it
+ *  at most max_ms (a task's, never the screen's): true once the glass is empty (or the screen is off / not up). */
+bool mole_fluid_dark(uint32_t max_ms);
 
 /** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
  *  screen's edge, never a state change. One caller (sense.c). */

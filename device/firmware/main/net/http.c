@@ -156,6 +156,7 @@ static esp_err_t send_unsupported(httpd_req_t *r, const char *what)
 static void reboot_task(void *arg)
 {
     vTaskDelay(pdMS_TO_TICKS(500));
+    mole_fluid_dark(1200);               /* the picture dissolves to the empty glass first (~0.85 s, at most 1.2 s) */
     esp_restart();
 }
 

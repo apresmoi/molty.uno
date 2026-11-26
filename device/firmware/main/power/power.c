@@ -200,13 +200,14 @@ static int8_t rssi_now(void)
     return esp_wifi_sta_get_ap_info(&ap) == ESP_OK ? ap.rssi : 0;
 }
 
-/* On the task: the goodbye plays (at most 8 s), the history is kept, the power goes. With
- * USB keeping the board up it restarts instead: the boot screen says it heard. */
+/* On the task: the goodbye plays (about 2.5 s: "bye!", then the glass dissolves to empty; never waited past 4 s, so a
+ * goodbye that fails or runs late never keeps the power on), the history is kept, the power goes. With USB keeping
+ * the board up it restarts instead: the boot screen says it heard. */
 static void off_now(void)
 {
     link_audio_stop_any();
     mole_fluid_goodbye();
-    for (int i = 0; i < 80 && !mole_fluid_goodbye_done(); i++) vTaskDelay(pdMS_TO_TICKS(100));
+    for (int i = 0; i < 40 && !mole_fluid_goodbye_done(); i++) vTaskDelay(pdMS_TO_TICKS(100));
     mole_flash_force();
     if (s_dnd_unsaved) dnd_store();
     if (mole_fluid_nap_setting(NULL, NULL) != s_nap_saved) nap_store();

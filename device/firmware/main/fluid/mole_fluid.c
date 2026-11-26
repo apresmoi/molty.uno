@@ -380,7 +380,8 @@ static atomic_uint s_moved_ms;                  /* the last frame something move
 #define FLUID_QUIET_PX 20000                    /* ... or sent this many px to the panel (a creature at rest: ~10 k) */
 static uint32_t fluid_calm_ms(void);
 static atomic_bool s_bye = false, s_bye_done = false;   /* mole_fluid_goodbye; it ended   */
-static float    s_bye_lvl = 1.f;                    /* the panel's level the goodbye set */
+static atomic_bool s_dark_req = false, s_dark_done = false;   /* mole_fluid_dark: the glass empty before a restart */
+static bool     s_dark;                             /* the task: the glass goes (or is) dark: the screen off, the goodbye */
 static bool     s_word_dots = false;                /* the boot word's dots (s_tx->dots) are drawn */
 static uint8_t *s_sdots, *s_sdots_d;                /* a scene's dots: the task's, the drawer's (PSRAM) */
 /* a scene in high definition: its shapes and the dots it keeps (scene_shapes_t), the task's
@@ -2153,6 +2154,9 @@ static void draw_task(void *arg) {
 static void pace_wake(void *task) { xTaskNotifyGive((TaskHandle_t)task); }
 
 /* The panel off / on, with the drawer idle (it never sends a window to a sleeping panel). */
+/* the drawer shows the empty glass, no change running (the drawer idle between frames) */
+static bool glass_empty(void) { return s_draw && s_draw->m.look == FLUID_LOOK_EMPTY && !fluid_draw_morphing(s_draw); }
+
 static bool screen_switch(bool on) {
     xSemaphoreTake(s_idle, portMAX_DELAY);
     if (!tx_idle() && !tx_drain()) { xSemaphoreGive(s_idle); return false; }   /* (the sender still holds the panel: later) */
@@ -2161,7 +2165,13 @@ static bool screen_switch(bool on) {
         uint16_t *fb = molty_display_framebuffer();
         if (fb) { memset(fb, 0, (size_t)s_fb_w * s_fb_h * sizeof(uint16_t)); molty_display_flush(); }
     }
-    s_full_flush = true;
+    if (on) {   /* the panel black, as it went to sleep: the picture gathers on it (no repaint at once) */
+        uint16_t *fb = molty_display_framebuffer();
+        fluid_draw_morph_empty(s_draw, fb);
+        if (fb) { molty_display_flush(); s_glass_black = true; }
+        else s_full_flush = true;
+        atomic_store(&s_dark_done, false);
+    } else s_full_flush = true;
     if (on) atomic_store(&s_moved_ms, (uint32_t)(esp_timer_get_time() / 1000));   /* (waking is a move: its first frames come) */
     atomic_store(&s_screen, on);
     xSemaphoreGive(s_idle);
@@ -2299,7 +2309,10 @@ static void fluid_task(void *arg) {
             nap_on(&s_nap);
             prev = woke = esp_timer_get_time();         /* no catching up on the time it was off */
             next = woke + FLUID_FRAME_US;
-        } else if (!atomic_load(&s_screen_want)) { if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS)); continue; }
+        } else if (!atomic_load(&s_screen_want) && glass_empty()) {   /* (dissolved to the empty glass first) */
+            if (!screen_switch(false)) vTaskDelay(pdMS_TO_TICKS(FLUID_OFF_POLL_MS));
+            continue;
+        }
         else if (atomic_exchange(&s_hand_off, false)) nap_on(&s_nap);   /* (off and on again by hand: the timer starts again) */
         int64_t now = esp_timer_get_time();
         float rdt = (float)(now - prev) / 1e6f;
@@ -2552,13 +2565,12 @@ static void fluid_task(void *arg) {
             te_phase(&te_ph, &te_n, te_per, ho_at, !after, !after && !atomic_load(&s_anim_busy));
         }
         ho_at = te_at;
-        if (s_dir.bye) {   /* the goodbye's fade: the panel's level, with the drawer idle */
-            const float l = fd_bye_level(&s_dir);
-            if ((s_bye_lvl - l >= 0.02f || (l <= 0.f && s_bye_lvl > 0.f)) && (tx_idle() || tx_drain())) {   /* (not over the sender) */
-                s_bye_lvl = l;
-                molty_display_level((uint8_t)(255.f * l * l + 0.5f));
-            }
-            if (fd_bye_done(&s_dir)) atomic_store(&s_bye_done, true);
+        {   /* dark: the screen off (by hand, the nap), the goodbye's end, a restart: the picture dissolves to an empty
+             * glass (FLUID_LOOK_EMPTY), then the panel sleeps, the power goes, the chip restarts */
+            s_dark = !atomic_load(&s_screen_want) || fd_bye_dark(&s_dir) || atomic_load(&s_dark_req);
+            const bool empty = s_dark && glass_empty();
+            atomic_store(&s_dark_done, empty);
+            if (empty && s_dir.bye) atomic_store(&s_bye_done, true);
         }
         int64_t t2 = esp_timer_get_time();
         /* The whole picture changing (the boot word to the creature, the creature to a scene and back, a scene to a
@@ -2583,7 +2595,7 @@ static void fluid_task(void *arg) {
             fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->look);
-        const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
+        const uint32_t look = s_dark ? FLUID_LOOK_EMPTY : asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
                             : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->look, ready)
                             : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, s_cr_pic, true) : FLUID_LOOK_GLASS | FLUID_LOOK_DUST | (s_glass_pic & 0x03FFFFFFu);
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
@@ -2692,13 +2704,18 @@ static void fluid_task(void *arg) {
             }
             if (!s_hd.out) { memcpy(s_dletters, s_overlay, sizeof(fluid_letter_t) * (size_t)s_noverlay); s_dnletters = s_noverlay; }
         }
+        if (s_dark) {   /* the empty glass: no dots, no letters, nothing of the fluid (crisp dots alone, none) */
+            memset(s_sdots_d, 0, (size_t)s_sim->N);
+            s_dopts.scene = true; s_dopts.dots = s_sdots_d; s_dopts.shapes = NULL; s_dopts.nshapes = 0; s_dopts.kdots = NULL;
+            s_dopts.fine = NULL; s_dopts.dust = 0.f; s_dopts.frame = 0; s_dopts.letters = NULL; s_dopts.nletters = 0;
+        }
         /* the creature's own cells are its lines in a change of picture, the rest of its dots its dust */
-        fluid_draw_morph_lines(s_draw, s_crisp && s_cpk && !asking ? cpk_cells_creature(s_cpk) : NULL);
-        fluid_draw_morph_order(s_draw, asking && s_ask.scr.whole ? fluid_askview_order(s_ask.v) : NULL);   /* (its answers grow) */
+        fluid_draw_morph_lines(s_draw, s_crisp && s_cpk && !asking && !s_dark ? cpk_cells_creature(s_cpk) : NULL);
+        fluid_draw_morph_order(s_draw, asking && s_ask.scr.whole && !s_dark ? fluid_askview_order(s_ask.v) : NULL);   /* (its answers grow) */
         fluid_draw_morph_handoff(s_draw);                   /* (the change's reading: this task's from here, or back) */
         if (s_touch_t0) { s_dtouch = s_touch_t0; s_touch_t0 = 0; }
         s_dstatus = fd_status(&s_dir);
-        ask_compose();
+        if (!s_dark) ask_compose();
         s_dask = s_ask.scr.whole && fluid_draw_morphing(s_draw) ? 0u : fluid_ask_tappable(&s_ask.scr, cfg.speed);   /* (whole: once on the glass) */
         {   /* the dust's frame: worked out ahead (above), else here now; the next one ahead only while the drawer works out
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
@@ -3475,6 +3492,13 @@ void mole_fluid_goodbye(void) {
     if (!s_mutex) atomic_store(&s_bye_done, true);     /* fluid not up: nothing to show */
 }
 bool mole_fluid_goodbye_done(void) { return atomic_load(&s_bye_done); }
+
+bool mole_fluid_dark(uint32_t max_ms) {
+    if (!s_mutex || !atomic_load(&s_screen)) return true;   /* (fluid not up, or the panel asleep: dark already) */
+    atomic_store(&s_dark_req, true);
+    for (uint32_t t = 0; t < max_ms && !atomic_load(&s_dark_done); t += 20) vTaskDelay(pdMS_TO_TICKS(20));
+    return atomic_load(&s_dark_done);
+}
 
 void mole_fluid_progress(float pct, bool done) {
     if (done) { atomic_store(&s_prog_end, true); return; }
