@@ -1978,6 +1978,15 @@ static void morph_end(fluid_draw_t *d, bool cut) {
     m->forced = m->keep = false;
 }
 
+void fluid_draw_morph_empty(fluid_draw_t *d, uint16_t *snap) {
+    if (!d || !snap) return;
+    fluid_morph_t *m = &d->m;
+    job_release(d);
+    if (m->on) morph_end(d, true);
+    memset(snap, 0, sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
+    m->snap = snap; m->look = FLUID_LOOK_EMPTY; m->whole = morph_maps(d);
+}
+
 void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready) {
     if (!d) return;
     fluid_morph_t *m = &d->m;
@@ -1994,7 +2003,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     }
     /* nothing kept to change from, or into a look the panel's mirror keeps (it writes over the kept glass): at once */
     job_release(d);                                     /* (a change ends or another starts: the reading so far is the drawer's) */
-    if (!look || (look & FLUID_LOOK_GLASS) || !snap || !(m->on || m->whole) || !morph_maps(d)) {
+    if (!look || !snap || !(m->on || m->whole) || !morph_maps(d)) {
         if (m->on) morph_end(d, true);
         else d->force = true;
         m->look = look; m->whole = (look & (FLUID_LOOK_KEEP | FLUID_LOOK_GLASS)) && snap;
@@ -2998,7 +3007,8 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         if (!mm->passed) return;
         mm->clock = true;
         m->dg[FLUID_MD_PASS] = m->frames;
-        m->n = m->keep ? mq(MP_BORN0) : 0;              /* (its dust alone: from just before its grains come up) */
+        /* (its dust alone, or from an empty glass: from just before its grains come up, MP_BORN0: ~0.65 s) */
+        m->n = m->keep || (!mm->A.n && !mm->L0.n) ? mq(MP_BORN0) : 0;
         m->t = qtime(m->n);
         mm->slow = !m->ready && !m->keep;               /* (its dust built late: the dissolve a little slower) */
         mm->rate = mm->slow ? MP_SLOW : MP_RATE;

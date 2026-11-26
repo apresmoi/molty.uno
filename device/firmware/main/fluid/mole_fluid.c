@@ -241,6 +241,8 @@ typedef struct { mole_scene_op_t op; scene_t *sc; } scene_op_t;
 static scene_op_t s_scene_ops[SCENE_QUEUE_MAX + 2];
 static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's queue (task's copy) */
 static bool     s_req_regrid = false;           /* rebuild the grid: hot fields moved (shed / allow internal) */
+static uint32_t s_glass_pic = 1;               /* the fluid's own picture (FLUID_LOOK_GLASS): a number each state entered */
+static bool     s_carried;                      /* (enter_state: a change of picture brings the state) */
 static bool     s_req_internal = false;         /* ...into internal RAM: once the picture is not changing (a rebuild re-enters
                                                  * the state: the boot word would melt, a change of picture be cut short) */
 static bool     s_shed = false;                 /* the heap guard shed them: internal RAM stays off this boot */
@@ -364,6 +366,7 @@ static bool  s_touch_down = false;
 static float s_tpx = 0.f, s_tpy = 0.f;
 static int   s_last_tx = 0, s_last_ty = 0;
 static volatile bool s_full_flush = true;
+static bool s_glass_black;                      /* power on: the panel and its mirror black (fluid_draw_morph_empty) */
 static atomic_bool s_screen_want = true;        /* mole_fluid_screen                    */
 static atomic_bool s_screen = true;             /* on the glass now (the task switches it) */
 /* the screen's nap (screen_nap.h): the task's timer; an off by hand (mole_fluid_screen), a pick-up (mole_fluid_lifted)
@@ -611,7 +614,7 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
     /* the transition: the old shape breaks up in eddies + a ring from its centre */
     float cx, cy;
     fluid_sim_centroid(s_sim, &cx, &cy);
-    if (st == ST_SCENE && s_fine) { /* on fine dust the change is the dust's own (fluid_morph_t): still water under it */ }
+    if ((st == ST_SCENE && s_fine) || s_carried) { /* the change is the dust's own (fluid_morph_t): still water under it */ }
     else {
         if (s_sim->swirl_kick < 3.f) s_sim->swirl_kick = 3.f;
         if (st != ST_TEXT) ripple(cx, cy, 0.7f, 0.2f);
@@ -629,7 +632,13 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
 static void direct(const fluid_cfg_t *cfg) {
     int st, fx;
     /* a standing question owns the screen: the director's transitions wait under it */
-    if (s_ask.scr.phase != FLUID_ASK_SHOW && fd_take(&s_dir, &st, &fx)) enter_state(st, fx, cfg);
+    if (s_ask.scr.phase != FLUID_ASK_SHOW && fd_take(&s_dir, &st, &fx)) {
+        if (!(st == ST_TEXT && s_cur == ST_TEXT)) s_glass_pic++;
+        s_carried = fluid_draw_morph_carries(s_draw) && !(st == ST_TEXT && s_cur == ST_TEXT);   /* a change of picture brings it */
+        if (s_carried) { fd_settled(&s_dir); s_sim->p.settle = true; }
+        enter_state(st, fx, cfg);
+        s_carried = false;
+    }
     cr_set_mood(fd_mood(&s_dir));
 }
 
@@ -1224,7 +1233,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         scene_grow_tick(&s_grow, s_rd_on || s_sub, rdt);
         if (s_sp.cur) scene_grow_apply(&s_grow, s_sp.cur);
     }
-    /* speed reader (paused under a question: the labels own s_tx) */
+    /* speed reader (paused under a question: the labels own s_tx; its own clock waits while the words' picture comes) */
+    if (s_cur == ST_TEXT && fluid_draw_morphing(s_draw)) s_word_until += rdt;
     if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
         /* following a say: each word when the speaker reaches it (link_audio's cues),
          * never on the reader's own clock; once the say is over, the clock takes the rest */
@@ -1292,7 +1302,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         fluid_progress_tick(&s_pg, rdt_ring, at >= 0.f && s_tnow - at < PROG_TTL_S, pv < 0 ? -1.f : pv * 0.001f, done);
     }
     /* the floor: the dim fluid on a ground plane under a creature, flat behind anything else */
-    s_floor_w += ((s_cur == ST_CREATURE ? 1.f : 0.f) - s_floor_w) * fminf(1.f, 2.f * rdt);
+    s_floor_w += ((s_cur == ST_CREATURE ? 1.f : 0.f) - s_floor_w) * (s->p.settle ? 1.f : fminf(1.f, 2.f * rdt));
     s->p.floor = s_floor_w;
     const float acc = cfg->palette == FLUID_PAL_PASTEL ? 0.f : 1.f;   /* mono palettes: the accent */
 
@@ -1926,6 +1936,7 @@ static void draw_task(void *arg) {
         int ds = s_dstatus, mark = ds > 0 && ds < FD_STATUS_COUNT ? MARK[ds] : FLUID_MARK_NONE;
         /* the mark appears, goes or changes colour: one full repaint (cells under it are not dirty) */
         bool full = s_full_flush || mark != mark_drawn || s_dopts.palette != pal_drawn;
+        if (s_glass_black) full = false;               /* (power on: the glass black, the word gathers on it) */
         {   /* crisp dots, and a scene on fine dust, go on whole row pairs: the panel's mirror need not follow them (its copy
              * is a third of the send); back to windows with odd edges, one full repaint first makes it whole again */
             static bool mirror_off;
@@ -1962,7 +1973,7 @@ static void draw_task(void *arg) {
             s_last_wait_us = (uint32_t)(esp_timer_get_time() - tw) + s_tx_qwait_us;
             if (!s_tx_frame) s_blit_us += s_last_wait_us;
             s_full_flush = !sent;                       /* a window that failed: repaint all */
-            mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov;
+            mark_drawn = mark; pal_drawn = s_dopts.palette; ov_drawn = ov; s_glass_black = false;
             if (s_fb_want && !fluid_draw_morphing(s_draw) && tx_idle()) {   /* the same frame into the framebuffer (a change of picture keeps the old one there: after it) */
                 const fluid_rect_t t = { fb, s_fb_w, 0, 0, s_fb_w, s_fb_h };
                 fluid_draw_rect(s_draw, &s_dopts, &t, true);
@@ -2550,8 +2561,9 @@ static void fluid_task(void *arg) {
         /* The whole picture changing (the boot word to the creature, the creature to a scene and back, a scene to a
          * scene, a question coming and going): everywhere at once, as dust, from this frame. A scene's glass, the
          * creature's and a question's are kept by the drawer as it sends them (FLUID_LOOK_KEEP) in the panel's mirror
-         * (unused while their windows go on whole row pairs); the fluid's own looks (words, the blob) by the mirror
-         * itself (FLUID_LOOK_GLASS): a change goes from them, never into them. A scene's dust built since comes in while
+         * (unused while their windows go on whole row pairs); the fluid's own looks (words, a creature drawn in the
+         * fluid) by the mirror itself (FLUID_LOOK_GLASS, a number each state entered: s_glass_pic), and a change goes
+         * into them too, their ink settled on its target at once (s_carried). A scene's dust built since comes in while
          * nothing of the change's new picture is read yet; till it has, the cloud waits (`ready`, briefly), else it comes
          * after the change as a change of its own (FLUID_LOOK_DUST). It swaps in before the look is told, so the change
          * reads the glass as it was. */
@@ -2570,7 +2582,7 @@ static void fluid_task(void *arg) {
         const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->look);
         const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
                             : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->look, ready)
-                            : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS;
+                            : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS | FLUID_LOOK_DUST | (s_glass_pic & 0x03FFFFFFu);
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
             static uint32_t look_was;
             static int cuts;
@@ -2888,7 +2900,11 @@ esp_err_t mole_fluid_creature_init(void) {
     sky_init(s_sky, s_dir.rng);                  /* (seeded from the director's, none of its numbers drawn) */
     weather_init(s_wx, s_dir.rng);               /* (the same seed, its own stream: weather.c) */
     s_wx_t = 0;
-    if (!s_booted) fd_boot(&s_dir);
+    if (!s_booted) {                             /* power on: the word gathers on the empty glass */
+        fd_boot(&s_dir);
+        fluid_draw_morph_empty(s_draw, molty_display_framebuffer());
+        if (molty_display_framebuffer()) { molty_display_flush(); s_glass_black = true; }   /* (the panel black with it) */
+    }
     s_booted = true;
     s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
     s_tnow = s_acc = 0.f; s_melt_t = 1e9f;

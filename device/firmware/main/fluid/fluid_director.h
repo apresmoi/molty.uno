@@ -206,6 +206,8 @@ void  fd_tick(fluid_director_t *d, float dt, bool text_done);
 /** The shown state was covered (a question's labels) and forms again: its clock restarts,
  *  so it flows back in before it crystallises. */
 void  fd_replay(fluid_director_t *d);
+/** The state just entered is brought by a change of picture: its shape is whole at once (fd_solidity 1). */
+void  fd_settled(fluid_director_t *d);
 /** The transition to execute now, if any (resets the state clock). */
 bool  fd_take(fluid_director_t *d, int *st, int *fx);
 

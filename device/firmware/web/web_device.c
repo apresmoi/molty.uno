@@ -49,7 +49,7 @@ static struct { int pal, status; fluid_overlay_t ov; } s_kept = { .pal = -1, .st
 /* the drawer task's own test: what it last drew has changed (draw_task: full), with what its locals keep. (The mark is
  * compared by the status it comes from: the same but for two statuses with one mark.) */
 static bool dev_full(void) {
-    return s_full_flush || s_mirror_back || s_dopts.palette != s_kept.pal || s_dstatus != s_kept.status;
+    return !s_glass_black && (s_full_flush || s_mirror_back || s_dopts.palette != s_kept.pal || s_dstatus != s_kept.status);
 }
 static int web_draw_cells(fluid_draw_t *d, const fluid_frame_t *f, const fluid_draw_opts_t *o) {
     if (s_dev) {

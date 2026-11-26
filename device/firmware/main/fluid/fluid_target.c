@@ -291,7 +291,7 @@ void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t) {
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
         const int k = j * s->W + i;
         if (!s->mask[k]) { s->T[k] = 0; continue; }
-        tx->near_s[k] += (tx->near[k] - tx->near_s[k]) * 0.2f;   /* re-shape smoothly between words */
+        tx->near_s[k] += (tx->near[k] - tx->near_s[k]) * (s->p.settle ? 1.f : 0.2f);   /* re-shape smoothly between words */
         float nr = tx->near_s[k], dk = tx->dark[k] - cov[k];
         if (dk < 0.f) dk = 0.f;
         float field = 0.f;
