@@ -43,7 +43,7 @@ export function statusPage(root: HTMLElement, { api }: AppCtx) {
       row('address', w?.ip ?? '—'),
       row('molty', r ? r.current : '—'),
       row('voice', h('a', { href: '#/voice' }, voice ? `${voice.serving.tts ?? voice.mode}${voice.first_words?.mode === 'opener' ? ' ⠂ first words' : ''} ⠂ reflex ${voice.reflex?.mode ?? 'off'}` : 'settings')),
-      row('state', s ? `${s.state}${s.autoplay ? ' · autoplay' : ''}${s.palette ? ' · ' + s.palette : ''}` : '—'),
+      row('state', s ? `${s.state}${s.palette ? ' · ' + s.palette : ''}` : '—'),
       row('fps', s?.fps !== undefined ? `${s.fps.toFixed(1)}` : '—'),
       row('memory', i ? `${Math.round(i.free_heap / 1024)} KB heap ⠂ ${Math.round(i.free_psram / 1024)} KB psram free` : '—'),
     );
