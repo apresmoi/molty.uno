@@ -36,11 +36,11 @@ export const ITEMS = {
   // the device's own pieces (docs/PACKAGES.md "Beats and wheels"): the beat player's pattern as a clock (r: its outer
   // ring, size: its dots); a wheel round the edge, grabbed from r0 out, turned in clicks of `step` degrees adding `by`
   // (`fast` turning fast) to its value, min..max from `value`, or stepping through its `labels` (a list param, each
-  // element's `label`); `sets` the beat player's tempo or pick; on face 0 or 1; a centre that flips the faces (`back`
-  // s untouched on face 1 flips back)
+  // element's `label`); `sets` the beat player's tempo or pick; on face 0 (playing) or 1 (stopped); each click a tick
+  // of the motor, `tick_ms` at `tick` percent (0: the device's own); a centre that plays and stops the beat
   beat: { r: 'num', size: 'num' },
-  dial: { r: 'num', r0: 'num', id: 'text', step: 'num', by: 'num', fast: 'num', min: 'num', max: 'num', value: 'num', face: 'num', sets: 'sets', labels: 'labels' },
-  centre: { r: 'num', back: 'num' },
+  dial: { r: 'num', r0: 'num', id: 'text', step: 'num', by: 'num', fast: 'num', min: 'num', max: 'num', value: 'num', face: 'num', sets: 'sets', labels: 'labels', tick_ms: 'num', tick: 'num' },
+  centre: { r: 'num' },
 };
 const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'], beat: ['r'], dial: ['id'], centre: ['r'] };
 /** The device's own pieces: in no group, never repeated. */
@@ -53,8 +53,8 @@ const BINDS = { num: 'number', text: 'text', say: 'text', color: 'text', asset: 
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 /** The range each numeric field must lie in, literal or bound (the firmware's pkg_num_ok); angles otherwise. */
 const RANGE = { x: [-2, 2], y: [-2, 2], r: [0, 2], w: [0, 0.5], len: [-1, 1], n: [1, 120], size: [0, 2], lit: [0, 1], spin: [-720, 720], on: [0, 600], off: [0, 600], grow: [1, 3], arc: [0, 360], r0: [0, 2], r1: [0, 2], ttl: [1, 600],
-  step: [0, 360], by: [-1000, 1000], fast: [-1000, 1000], min: [-10000, 10000], max: [-10000, 10000], value: [-10000, 10000], face: [0, 1], back: [0, 60] };
-const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'face') return v === 0 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc' || f === 'step') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
+  step: [0, 360], by: [-1000, 1000], fast: [-1000, 1000], min: [-10000, 10000], max: [-10000, 10000], value: [-10000, 10000], face: [0, 1], tick_ms: [0, 60], tick: [0, 100] };
+const inRange = (f, v) => { if (f === 'side') return v === -1 || v === 1; if (f === 'tick_ms') return v === 0 || (v >= 5 && v <= 60); if (f === 'tick') return v === 0 || (v >= 25 && v <= 100); if (f === 'face') return v === 0 || v === 1; if (f === 'n' && !Number.isInteger(v)) return false; if ((f === 'size' || f === 'arc' || f === 'step') && v <= 0) return false; const [lo, hi] = RANGE[f] ?? [-720, 720]; return v >= lo && v <= hi; };
 const ref = (v) => (typeof v === 'string' && /^[$@][A-Za-z0-9_-]{1,24}$/.test(v) ? v : null);
 const isText = (v, max = LIMITS.text) => typeof v === 'string' && /^[\x20-\x7e]*$/.test(v) && v.length <= max && !/^[$@]/.test(v);
 
@@ -184,6 +184,7 @@ export function checkPackage(pkg, id) {
     });
     const own = (k, f = () => true) => l.items.filter((it) => it.k === k && f(it)).length;
     if (own('beat') > 1 || own('centre') > 1 || own('dial', (it) => !it.face) > 1 || own('dial', (it) => it.face === 1) > 1) bad.push(`${at}: one beat, one centre and one dial a face`);
+    if (own('centre') > own('beat')) bad.push(`${at}: a centre plays and stops a beat: the layout has none`);
     for (const p of Object.keys(params)) if (!used.has(p)) bad.push(`${at}: param ${p} is never read`);
   }
   return bad;

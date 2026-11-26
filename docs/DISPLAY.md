@@ -93,8 +93,8 @@ Every shape except `tap_zone` also takes `color`.
 | `label` | `text`, `size`, `at` | up to 40 letters in Molty's own font |
 | `tap_zone` | see [Taps](#taps) | nothing: a place to tap |
 | `beat_clock` | `radius`, `dot` | the rhythm Molty plays, as a clock (see [A clock and a wheel](#a-clock-and-a-wheel)) |
-| `wheel` | `id`, `radius`, `grab_from`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels` | a ring at the edge the finger turns |
-| `centre_tap` | `radius`, `back_after` | nothing: a tap in the middle flips the wheel |
+| `wheel` | `id`, `radius`, `grab_from`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a ring at the edge the finger turns |
+| `centre_tap` | `radius` | nothing: a tap in the middle plays and stops the clock |
 
 ```yaml
 draw:
@@ -193,17 +193,20 @@ Three shapes draw from Molty's own state, and the finger acts on them on Molty, 
 ```yaml
 draw:
   - beat_clock: { radius: 0.672 }                                  # the rhythm the beat player holds
-  - wheel: { id: tempo, sets: tempo, step: 12, by: 2, fast: 4, min: 40, max: 220, value: 100 }
-  - wheel: { id: rhythm, sets: pick, step: 30, face: 1 }           # up after a tap in the middle
-  - centre_tap: { radius: 0.26, back_after: 4 }
+  - wheel: { id: tempo, sets: tempo, step: 12, by: 2, fast: 4, min: 40, max: 220, value: 100 }   # while it plays
+  - wheel: { id: rhythm, sets: pick, step: 30, face: 1 }           # while it is stopped
+  - centre_tap: { radius: 0.26 }                                   # plays, stops
 ```
 
 - `beat_clock` draws the rhythm `rhythm.play` sent: a ring a drum, a mark a step, a dot a hit, the hand and each hit
-  swelling as it sounds, from the speaker's own clock. A tap on a dot mutes that drum. One a screen.
+  swelling as it sounds, from the speaker's own clock; stopped, the hand at rest and a play mark in the middle. A tap
+  on a dot mutes that drum. One a screen. Nothing it does changes the picture whole: the screen forms once.
 - `wheel` turns in clicks: a drag that starts from `grab_from` (0.85) out never stirs the water or taps anything.
   Each click adds `by` to a number, or with `labels: "{{ names }}"` (a list whose elements each have a `label`) steps
-  to the next one. `sets: tempo` or `pick` drives the beat player. The agent hears one `ring` event when it settles.
-- `centre_tap` flips the wheel to the one with `face: 1`; a second tap, or `back_after` seconds, chooses and flips back.
+  to the next one. `sets: tempo` or `pick` drives the beat player. Each click ticks the motor (`tick_ms` at `tick`
+  percent; left out, Molty's own). The agent hears one `ring` event when it settles. `face: 0` is up while the clock
+  plays (or with no clock), `face: 1` while it is stopped.
+- `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` on the screen.
 
 The molty-rhythm skill (`skills/molty-rhythm/`) is the example; [PACKAGES.md](PACKAGES.md#layouts) has every rule.
 

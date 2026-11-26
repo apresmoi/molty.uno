@@ -473,8 +473,10 @@
         "min": { "$ref": "#/$defs/num" },
         "max": { "$ref": "#/$defs/num" },
         "value": { "$ref": "#/$defs/num", "description": "Where it starts." },
-        "face": { "enum": [0, 1], "description": "0: up at first; 1: up after a tap on the centre_tap." },
-        "sets": { "enum": ["tempo", "pick"], "description": "tempo: the value is the beat player's tempo, at once. pick: the wheel steps through the beat player's rhythms and plays the one chosen." },
+        "face": { "enum": [0, 1], "description": "0: up while the beat plays (or with no beat_clock); 1: up while it is stopped." },
+        "sets": { "enum": ["tempo", "pick"], "description": "tempo: the value is the beat player's tempo, at once. pick: the wheel steps through the beat player's rhythms, the clock showing each at once (a tap on the centre_tap plays it)." },
+        "tick_ms": { "$ref": "#/$defs/num", "description": "How long the motor ticks a click, 5 to 60 ms; 0 or left out: Molty's own (22)." },
+        "tick": { "$ref": "#/$defs/num", "description": "How strong that tick is, 25 to 100 percent; 0 or left out: Molty's own (80)." },
         "labels": { "type": "string", "description": "A list input whose elements each have a label: the wheel steps through them, one bead each, instead of a number." },
         "color": { "$ref": "#/$defs/color" }
       },
@@ -485,10 +487,9 @@
       "required": ["radius"],
       "additionalProperties": false,
       "properties": {
-        "radius": { "$ref": "#/$defs/size", "description": "The zone round the centre. 0.26 keeps clear of a clock's third ring." },
-        "back_after": { "$ref": "#/$defs/num", "description": "Seconds untouched on face 1 before it flips back (with the choice). Default 4." }
+        "radius": { "$ref": "#/$defs/size", "description": "The zone round the centre. 0.26 keeps clear of a clock's third ring." }
       },
-      "description": "A tap in the middle flips the wheel to its other face; on face 1 a second tap, or back_after seconds, makes the choice."
+      "description": "A tap in the middle plays the beat_clock's rhythm (after a count-in), another stops it: stopped, the wheel with face 1 is up. Needs a beat_clock on the screen."
     }
   }
 }

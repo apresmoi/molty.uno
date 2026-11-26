@@ -54,9 +54,9 @@
   },
   "rhythm": {
     "name": "Rhythm",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "kind": "scenes",
-    "description": "A rhythm Molty plays and draws as a clock, a ring a drum, a rim to turn for the tempo. Play it with the molty-rhythm skill.",
+    "description": "A rhythm Molty plays and draws as a clock, a ring a drum. Tap the middle to play or stop; turn the rim to choose or for the tempo.",
     "layouts": [
       "clock"
     ],
@@ -64,7 +64,7 @@
       "molty-rhythm"
     ],
     "path": "packages/rhythm/rhythm.json",
-    "size": 338,
-    "sha256": "c4bebd70c6ff5e966a84c8132181b78343108d675f2b487df9b55fe3d202770c"
+    "size": 447,
+    "sha256": "07cd6f832b3c023906023848ac15dee65de916d424380c9933611a629eb81d13"
   }
 }

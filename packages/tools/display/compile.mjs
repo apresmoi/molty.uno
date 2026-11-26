@@ -29,11 +29,12 @@ export const SHAPES = {
   // a new way to shape a zone or a new thing a tap does is one more row here, or one more case in shape() when it is
   // not a plain field (sector, opens), and its property in schema/display-2.json's tap_zone
   tap_zone: ['spot', { radius: ['r', 'distance'], reads: ['say', 'reading'], id: ['id', 'id'], highlights: ['lights', 'groups'], grow: ['grow', 'number'] }],
-  // the device's own pieces: the beat player's clock, a wheel round the edge, the centre that flips it
+  // the device's own pieces: the beat player's clock, a wheel round the edge, the centre that plays and stops it
   beat_clock: ['beat', { radius: ['r', 'distance'], dot: ['size', 'distance'] }],
   wheel: ['dial', { id: ['id', 'id'], radius: ['r', 'distance'], grab_from: ['r0', 'distance'], step: ['step', 'angle'], by: ['by', 'number'], fast: ['fast', 'number'],
-    min: ['min', 'number'], max: ['max', 'number'], value: ['value', 'number'], face: ['face', 'count'], sets: ['sets', 'sets'], labels: ['labels', 'list'] }],
-  centre_tap: ['centre', { radius: ['r', 'distance'], back_after: ['back', 'time'] }],
+    min: ['min', 'number'], max: ['max', 'number'], value: ['value', 'number'], face: ['face', 'count'], sets: ['sets', 'sets'], labels: ['labels', 'list'],
+    tick_ms: ['tick_ms', 'number'], tick: ['tick', 'number'] }],
+  centre_tap: ['centre', { radius: ['r', 'distance'] }],
 };
 export const COMMON = { color: ['color', 'color'], group: ['group', 'group'] };
 /** Properties that are not one plain field: shape() turns each into its v1 form. */
