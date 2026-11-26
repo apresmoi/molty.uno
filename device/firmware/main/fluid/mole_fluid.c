@@ -1174,7 +1174,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     }
     fd_set_scene(&s_dir, scene_playing(&s_sp));
     fd_set_busy(&s_dir, s_listen || s_follow, covered);
-    fd_set_creature_free(&s_dir, cpk_free(s_cpk));
+    /* (a habit is motion inside one picture: none starts while the picture changes or the glass goes dark) */
+    fd_set_creature_free(&s_dir, cpk_free(s_cpk) && !s_dark && !fluid_draw_morphing(s_draw));
     if (atomic_load(&s_bye) && !s_dir.bye) fd_bye(&s_dir);
     fd_tick(&s_dir, rdt, s_cur == ST_TEXT && s_word_until > 1e8f && !s_follow);
     direct(cfg);

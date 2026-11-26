@@ -15,7 +15,8 @@
  *   screen off (by hand, the nap), power off, a restart: the picture dissolves to an empty glass first, then the panel
  *     sleeps (and nothing is drawn) or the power goes; on again, it gathers from the empty glass;
  *   creatures: a creature change and the way home with one drawn in the fluid are each one change of picture;
- *   a scene closed by hand (the reject button, a held finger): one change of picture home, never a goodbye.
+ *   a scene closed by hand (the reject button, a held finger): one change of picture home, never a goodbye;
+ *   the cat's habits: none starts while the picture changes or the glass goes dark.
  *
  *   picture_flow_test <repo root> <case>   (picture_flow_build.sh runs every case)
  */
@@ -404,6 +405,36 @@ static void case_close(const char *root) {
     free(astro);
 }
 
+/* habits (the cat's moments) are motion inside one picture: sped up to come every half second or so, none ever starts
+ * while the picture changes (the start-up, a scene closed by hand and home) or the glass goes dark and wakes */
+static void case_habits(const char *root) {
+    char path[1024]; size_t len;
+    snprintf(path, sizeof(path), "%s/packages/astrology/astrology.json", root);
+    char *astro = slurp(path, &len);
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 1) == 0 && wm_package(astro, len) == 0, "power on");
+    wm_device(1); wm_sense(1);
+    wm_habits_speed(0.01f);
+    int started = 0, odd = 0;
+    bool was = false;
+    for (int k = 0; k < 12; k++) {
+        for (int i = 0; i < 200; i++) {
+            if (k && i == 0) mole_fluid_screen(false);
+            if (k && i == 40) mole_fluid_screen(true);
+            if (i == 80) CHECK(wm_scene("globe", "{\"img\":\"moon\",\"lit\":0.5,\"side\":1,\"r\":0.3,\"spin\":0}", 40.f) == 0, "a scene");
+            if (i == 140) { if (k & 1) wm_button(1, 1); else wm_touch(1, 160, 160); }
+            if (i == 142 && (k & 1)) wm_button(1, 0);
+            if (i == 175 && !(k & 1)) wm_touch(0, 0, 0);
+            frame();
+            const bool on = s_dir.mom_on != 0;
+            if (on && !was) { started++; odd += s_dark || fluid_draw_morphing(s_draw) || s_cur != ST_CREATURE; }
+            was = on;
+        }
+    }
+    printf("habits: %d started, %d while the picture changed or went dark\n", started, odd);
+    CHECK(s_dir.nmom > 0 && started >= 3 && odd == 0, "habits come between changes, never during one (%d of %d)", odd, started);
+    free(astro);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -493,6 +524,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "refused")) case_refused();
     else if (!strcmp(c, "busy")) case_busy(argv[1]);
     else if (!strcmp(c, "close")) case_close(argv[1]);
+    else if (!strcmp(c, "habits")) case_habits(argv[1]);
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;
