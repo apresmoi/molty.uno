@@ -132,8 +132,8 @@ static void frame(void) {
     fd_set_scene(&D, scene_playing(&SP));
     if (!fd_scene_wanted(&D) && scene_playing(&SP)) scene_clear(&SP);
     fd_tick(&D, DT, false);
-    int st, fx;
-    fd_take(&D, &st, &fx);
+    int st;
+    fd_take(&D, &st);
 }
 static void run(float s) { for (int n = (int)lrintf(s / DT); n > 0; n--) frame(); }
 static scene_t *titled(const char *title, float ttl) {
@@ -148,7 +148,7 @@ static void test_player(void) {
     memset(&SP, 0, sizeof(SP));
     scene_play(&SP, titled("a", 2.f));
     CHECK(scene_take_start(&SP) && !scene_take_start(&SP), "a start is reported once");
-    fd_request_state(&D, FD_ST_SCENE, 0, false);
+    fd_request_state(&D, FD_ST_SCENE, false);
     frame();
     CHECK(D.cur == FD_ST_SCENE, "the scene is on screen");
     run(1.8f);
@@ -159,7 +159,7 @@ static void test_player(void) {
     CHECK(D.cur == FD_ST_CREATURE, "and it stays there");
 
     /* the layout's dur ends it before a longer ttl */
-    scene_play(&SP, titled("d", 60.f)); fd_request_state(&D, FD_ST_SCENE, 0, false);
+    scene_play(&SP, titled("d", 60.f)); fd_request_state(&D, FD_ST_SCENE, false);
     run(5.8f);
     CHECK(D.cur == FD_ST_SCENE, "on before its 6 s dur");
     run(0.4f);
@@ -168,7 +168,7 @@ static void test_player(void) {
     /* queue order: a, b, c, each 1 s; then the creature */
     char order[8] = ""; int no = 0;
     CHECK(scene_queue(&SP, titled("a", 1.f)) && scene_queue(&SP, titled("b", 1.f)) && scene_queue(&SP, titled("c", 1.f)), "queued");
-    fd_request_state(&D, FD_ST_SCENE, 0, false);
+    fd_request_state(&D, FD_ST_SCENE, false);
     char last = 0;
     for (int n = 0; n < 150; n++) {
         if (shown() != last && shown() != '-' && no < 7) order[no++] = shown();
@@ -183,7 +183,7 @@ static void test_player(void) {
     const char *const names[] = { "a", "b", "c", "d", "e", "f", "g", "h" };
     for (int i = 0; i < 8; i++) CHECK(scene_queue(&SP, titled(names[i], 1.f)), "queued %s", names[i]);
     CHECK(SP.nq == 7, "7 wait behind the one playing (%d)", SP.nq);
-    fd_request_state(&D, FD_ST_SCENE, 0, false);
+    fd_request_state(&D, FD_ST_SCENE, false);
     for (int n = 0; n < 300; n++) {
         if (shown() != last && shown() != '-' && no < 15) seven[no++] = shown();
         last = shown();
@@ -204,8 +204,8 @@ static void test_player(void) {
     CHECK(!scene_playing(&SP) && SP.nq == 0, "clear");
 
     /* another state takes the screen (a say's words): the scene is dropped, not resumed later */
-    scene_play(&SP, titled("s", 30.f)); fd_request_state(&D, FD_ST_SCENE, 0, false); frame();
-    fd_request_state(&D, FD_ST_TEXT, 0, false); frame();
+    scene_play(&SP, titled("s", 30.f)); fd_request_state(&D, FD_ST_SCENE, false); frame();
+    fd_request_state(&D, FD_ST_TEXT, false); frame();
     CHECK(D.cur == FD_ST_TEXT && !scene_playing(&SP), "replaced by the words");
 }
 

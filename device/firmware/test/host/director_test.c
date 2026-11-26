@@ -5,13 +5,13 @@
  * the creature's idle life, driven the way mole_fluid.c drives it (requests, then
  * fd_tick + fd_take once per ~30 fps frame; every fd_take is one melt).
  *
- * Checks: boot lands on the creature (the blob only until one loads); re-requesting the
+ * Checks: boot lands on the creature (the boot word only until one loads); re-requesting the
  * shown state / a mood never melts it or resets its solidity; show returns to the
  * creature 1.5 s after the last word (held text stays); idle life (lively / calm / off):
  * action gaps, the library, no immediate repeat, never over a screen owner, a fixed seed
  * repeats; the yawn before dozing off; sleep and waking; agent mood holds; agent actions
  * (wait for the creature, dropped after 3 s); the happy flash after a say; shake; status
- * changes never change the state; ending the reel (pairing / restore) never re-enables it;
+ * changes never change the state; the old demo states (blob, thinking, effects) are no states;
  * the boot screen: the word holds then melts into the boot's creature, which paddles in place
  * (no idle life) until the link is ready, the ttl, or at once without Wi-Fi, then dissolves into
  * the human's creature (or carries on when it is theirs); anything wanting the screen ends it;
@@ -40,15 +40,15 @@ static double s_now, s_act_t[ACT_LOG];   /* double: a float clock drifts ~0.1 s 
 
 static void frame(bool text_done) {
     fd_tick(&D, DT, text_done);
-    int st, fx;
-    if (fd_take(&D, &st, &fx)) s_melts++;
+    int st;
+    if (fd_take(&D, &st)) s_melts++;
     int a = fd_take_act(&D);
     if (a >= 0 && s_nact < ACT_LOG) { s_act[s_nact] = a; s_act_t[s_nact++] = s_now; }
     s_now += DT;
 }
 static void run(float s, bool text_done) { for (int n = (int)lrintf(s / DT); n > 0; n--) frame(text_done); }
 /* a request arrives between frames, then the frame runs (mole_fluid.c's order) */
-static void request(int st, bool hold) { fd_request_state(&D, st, 0, hold); frame(false); }
+static void request(int st, bool hold) { fd_request_state(&D, st, hold); frame(false); }
 
 static void boot(bool creature) {
     fd_init(&D, NULL, 12345);
@@ -59,13 +59,13 @@ static void boot(bool creature) {
 
 static void test_boot(void) {
     boot(true);
-    CHECK(D.cur == FD_ST_CREATURE && !D.autoplay, "boot shows state %d autoplay %d", D.cur, D.autoplay);
+    CHECK(D.cur == FD_ST_CREATURE, "boot shows state %d", D.cur);
     CHECK(fd_mood(&D) == CM_IDLE, "boot mood %d", fd_mood(&D));
     run(40.f, false);
-    CHECK(D.cur == FD_ST_CREATURE && !D.autoplay && s_melts == 1, "40 s later: state %d, %d melts (no reel)", D.cur, s_melts);
+    CHECK(D.cur == FD_ST_CREATURE && s_melts == 1, "40 s later: state %d, %d melts", D.cur, s_melts);
 
     boot(false);                          /* no creature (a bad file and no default) */
-    CHECK(D.cur == FD_ST_BLOB, "no creature: blob, got %d", D.cur);
+    CHECK(D.cur == FD_ST_TEXT && fd_boot_word(&D), "no creature: the boot word stands in, got %d", D.cur);
     run(2.f, false);
     fd_set_creature(&D, true);            /* one arrives (upload) */
     frame(false);
@@ -89,7 +89,7 @@ static void boot_screen_late(void) {
     fd_boot(&D);
     frame(true);
 }
-static bool word_up(void) { return D.cur == FD_ST_TEXT && fd_boot_word(&D) && D.cur != FD_ST_BLOB && D.next != FD_ST_BLOB; }
+static bool word_up(void) { return D.cur == FD_ST_TEXT && fd_boot_word(&D) && (!D.pending || D.next == FD_ST_TEXT); }
 
 static void test_boot_late(void) {
     /* early: the creature in before the word's time is over: nothing changes (test_boot_screen) */
@@ -113,7 +113,7 @@ static void test_boot_late(void) {
     fd_set_busy(&D, true, false); frame(false);
     fd_set_busy(&D, true, true); frame(false);
     fd_set_busy(&D, false, false); frame(false);
-    fd_request_state(&D, FD_ST_CREATURE, 0, false); frame(false);
+    fd_request_state(&D, FD_ST_CREATURE, false); frame(false);
     CHECK(word_up() && s_melts == 1, "mood, act, listen, question, creature request: the word stays (state %d, %d melts)", D.cur, s_melts);
     fd_set_creature(&D, true); frame(false);
     CHECK(D.cur == FD_ST_CREATURE && s_melts == 2 && D.held == CM_HAPPY, "the creature, in the mood it was given");
@@ -145,7 +145,7 @@ static void test_bye(void) {
     CHECK(D.cur == FD_ST_TEXT && fd_bye_word(&D) && !fd_boot_word(&D) && !D.boot, "the word, the boot screen over");
     CHECK(!fd_bye_dark(&D), "not dark while it says it");
     const int melts = s_melts;
-    fd_request_state(&D, FD_ST_CREATURE, 0, false); fd_request_state(&D, FD_ST_TEXT, 0, false);
+    fd_request_state(&D, FD_ST_CREATURE, false); fd_request_state(&D, FD_ST_TEXT, false);
     fd_agent_mood(&D, CM_HAPPY, 2.f); fd_agent_act(&D, CA_WIGGLE, 1.f);
     fd_boot(&D);
     run(1.3f, true);
@@ -173,7 +173,7 @@ static void test_boot_screen(void) {
     run(1.f, true);
     request(FD_ST_TEXT, true);
     CHECK(!D.boot && D.cur == FD_ST_TEXT && D.text_hold && s_melts == 2, "pairing code ends the boot screen");
-    /* a listen, a question, a mood, an act, autoplay: each ends it */
+    /* a listen, a question, a mood, an act: each ends it */
     boot_screen(); run(1.f, true);
     fd_set_busy(&D, true, false); frame(false);
     CHECK(!D.boot && D.cur == FD_ST_CREATURE, "a listen ends it: the creature");
@@ -186,9 +186,6 @@ static void test_boot_screen(void) {
     boot_screen(); run(1.f, true);
     fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD)); frame(false);
     CHECK(!D.boot, "an act ends it");
-    boot_screen();
-    fd_autoplay(&D); frame(true);
-    CHECK(!D.boot && D.autoplay, "autoplay ends it");
     /* without fd_boot nothing changes: test_boot */
 }
 
@@ -202,7 +199,7 @@ static void test_guard(void) {
     float min_sol = 1.f;
     static const int moods[] = { CM_HAPPY, CM_THINKING, CM_LISTENING, CM_IDLE, CM_THINKING };
     for (int i = 0; i < 25; i++) {        /* a chatty agent: state + mood every 200 ms */
-        fd_request_state(&D, FD_ST_CREATURE, 0, false);
+        fd_request_state(&D, FD_ST_CREATURE, false);
         fd_agent_mood(&D, moods[i % 5], -1.f);
         for (int k = 0; k < 6; k++) { frame(false); if (fd_solidity(&D, 1.f) < min_sol) min_sol = fd_solidity(&D, 1.f); }
     }
@@ -210,12 +207,11 @@ static void test_guard(void) {
     CHECK(min_sol > 0.999f, "solidity dipped to %.3f", min_sol);
     CHECK(fd_mood(&D) == CM_THINKING, "the last mood blends in: %d", fd_mood(&D));
 
-    request(FD_ST_FX, false);             /* a different state still transitions */
-    CHECK(D.cur == FD_ST_FX && s_melts == melts + 1, "effect: state %d", D.cur);
-    fd_request_state(&D, FD_ST_FX, 1, false); frame(false);
-    CHECK(s_melts == melts + 2 && D.cur_fx == 1, "another effect is another state");
-    request(FD_ST_TEXT, false); request(FD_ST_TEXT, false);
-    CHECK(s_melts == melts + 4, "text always restarts the reader");
+    request(FD_ST_TEXT, false); request(FD_ST_TEXT, false);   /* a different state still transitions */
+    CHECK(s_melts == melts + 2, "text always restarts the reader");
+    const int before = s_melts;
+    fd_request_state(&D, 1, false); fd_request_state(&D, 3, false); fd_request_state(&D, 0, false); frame(false);
+    CHECK(s_melts == before && D.cur == FD_ST_TEXT, "the old demo states (blob, thinking, effects) are no states");
 }
 
 static void test_show_returns(void) {
@@ -296,8 +292,8 @@ static void test_idle_life(void) {
     fd_set_creature(&a, true); fd_set_creature(&b, true);
     bool same = true;
     for (int i = 0; i < (int)(600.f / DT); i++) {
-        fd_tick(&a, DT, false); fd_take(&a, NULL, NULL);
-        fd_tick(&b, DT, false); fd_take(&b, NULL, NULL);
+        fd_tick(&a, DT, false); fd_take(&a, NULL);
+        fd_tick(&b, DT, false); fd_take(&b, NULL);
         if (fd_take_act(&a) != fd_take_act(&b) || fd_mood(&a) != fd_mood(&b)) same = false;
     }
     CHECK(same, "a fixed seed repeats");
@@ -318,10 +314,6 @@ static void test_idle_life(void) {
     request(FD_ST_TEXT, true);                    /* pairing code / update screen: held text */
     for (int i = 0; i < (int)(200.f / DT); i++) { if (i % (int)(100.f / DT) == 0) fd_user(&D); frame(true); }
     CHECK(s_nact == 0, "text on screen: %d idle actions", s_nact);
-    request(FD_ST_CREATURE, false);
-    fd_autoplay(&D);
-    for (int i = 0; i < (int)(100.f / DT); i++) frame(true);
-    CHECK(s_nact == 0, "the demo reel: %d idle actions", s_nact);
     request(FD_ST_CREATURE, false);               /* back: idle life resumes */
     for (int i = 0; i < (int)(60.f / DT); i++) frame(false);
     CHECK(s_nact >= 1, "idle life resumes on the creature: %d", s_nact);
@@ -651,23 +643,6 @@ static void test_status(void) {
           "status precedence");
 }
 
-static void test_reel(void) {
-    boot(true);
-    fd_autoplay(&D);
-    run(20.f, true);                      /* text steps run to their (immediate) end */
-    CHECK(D.autoplay && s_melts >= 5, "the reel runs on request: %d melts", s_melts);
-    /* pairing: the code (held text) ends the reel; the restore asks for the creature */
-    request(FD_ST_TEXT, true);
-    CHECK(!D.autoplay && D.cur == FD_ST_TEXT, "pairing code ends the reel");
-    run(30.f, true);
-    request(FD_ST_CREATURE, false);
-    int melts = s_melts;
-    run(120.f, false);
-    CHECK(!D.autoplay && D.cur == FD_ST_CREATURE && s_melts == melts, "restore never re-enables the reel");
-    CHECK(fd_mood(&D) == CM_IDLE || fd_mood(&D) == CM_HAPPY || fd_mood(&D) == CM_SURPRISED,
-          "the reel's last mood does not stick: %d", fd_mood(&D));
-}
-
 /* a question covered the shown state and left: replay restarts its clock (it flows back
  * before it crystallises) without a transition or a change of state */
 static void test_replay(void) {
@@ -700,7 +675,6 @@ int main(void) {
     test_shake();
     test_status();
     test_bye();
-    test_reel();
     test_replay();
     printf("%d passed, %d failed\n", s_pass, s_fail);
     return s_fail ? 1 : 0;

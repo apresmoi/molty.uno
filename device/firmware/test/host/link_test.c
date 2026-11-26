@@ -274,12 +274,13 @@ static void test_event_frames(void)
     expect_json(link_evt_button_frame(false), "{\"t\":\"evt\",\"name\":\"button\",\"data\":{\"id\":\"reject\"}}");
 }
 
-/* after the pairing code / the Improv "hi": back to the shown state, never the reel */
+/* after the pairing code / the Improv "hi": back to the shown state; the old demo states (gone) are the creature */
 static void test_restore(void)
 {
     const struct { const char *saved, *want; } cases[] = {
         { "{\"state\":\"creature\",\"autoplay\":false,\"mood\":\"idle\"}", "{\"state\":\"creature\"}" },
-        { "{\"state\":\"effect:vortex\",\"autoplay\":false}", "{\"state\":\"effect:vortex\"}" },
+        { "{\"state\":\"effect:vortex\",\"autoplay\":false}", "{\"state\":\"creature\"}" },
+        { "{\"state\":\"scene\"}", "{\"state\":\"scene\"}" },
         { "{\"state\":\"blob\",\"autoplay\":true}", "{\"state\":\"creature\"}" },
         { "{\"state\":\"text\",\"autoplay\":false}", "{\"state\":\"creature\"}" },
         { "{\"state\":\"autoplay\"}", "{\"state\":\"creature\"}" },

@@ -11,6 +11,7 @@
 #include "fluid_sim.h"
 #include "fluid_ring.h"
 #include "glyph_font.h"
+#include "blob_fixture.h"   /* the tests' shape */
 
 #include <math.h>
 #include <stdio.h>
@@ -84,8 +85,8 @@ static void test_braille(void) {
 /* int16 storage saturates instead of going NaN/inf: "finite" = never pinned at the rail */
 static int unsaturated(const int16_t *a, int n) { for (int k = 0; k < n; k++) if (a[k] >= 32767 || a[k] <= -32767) return 0; return 1; }
 
-enum { ST_BLOB, ST_RIPPLE, ST_VORTEX, ST_WAVE, ST_TEXT, ST_N };
-static const char *ST_NAME[ST_N] = { "blob", "effect:ripple", "effect:vortex", "effect:wave", "text" };
+enum { ST_BLOB, ST_TEXT, ST_N };
+static const char *ST_NAME[ST_N] = { "blob", "text" };
 
 static void run_state(int W, int H, int st, double *step_ms, double *frame_ms) {
     fluid_sim_t *s = fluid_sim_create(W, H, FLUID_STAGE_REF);
@@ -100,8 +101,6 @@ static void run_state(int W, int H, int st, double *step_ms, double *frame_ms) {
     const char *word = "molty.";
     fluid_text_set_sentence(tx, 4.5f);
     fluid_text_set_word(tx, s, word, (int)strlen(word), 1);
-    int fx = st - ST_RIPPLE; float fxs = 0.f;
-    if (st >= ST_RIPPLE && st <= ST_WAVE) fluid_effect_enter(s, fx);
     fluid_sim_impulse(s, 0.2f, -0.1f, 1.6f, 0.09f);
     fluid_sim_push(s, -0.3f, 0.2f, 40.f, -20.f, 0.16f);
     const float dt = 1.f / 60.f;
@@ -115,7 +114,6 @@ static void run_state(int W, int H, int st, double *step_ms, double *frame_ms) {
         switch (st) {
         case ST_BLOB: fluid_target_blob(s, t, swell, 0.02f, 0.f); break;
         case ST_TEXT: fluid_text_fill(tx, s, t); break;
-        default: fluid_target_effect(s, fx, t, swell, 0.f, 0.f); fluid_effect_tick(s, fx, 1.f / 30.f, &fxs); break;
         }
         fluid_sim_background(s, t, breath, (f & 1) == 0);
         fluid_sim_swirl_field(s);

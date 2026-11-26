@@ -140,7 +140,7 @@ static boot_t boot_run(int until, int welcome_at) {
         if (!on && was && b.gather_end < 0) b.gather_end = s_fno;
         if (!on && was && (s_draw->m.look & ~FLUID_LOOK_DUST) == (CAT & ~FLUID_LOOK_DUST)) b.stood = s_fno;
         was = on;
-        b.odd += !(word() || s_cur == ST_CREATURE) || s_cur == ST_BLOB || s_dir.cur == FD_ST_BLOB || (s_dir.pending && s_dir.next == FD_ST_BLOB);
+        b.odd += !(word() || s_cur == ST_CREATURE) || (s_dir.pending && s_dir.next != FD_ST_TEXT && s_dir.next != FD_ST_CREATURE);
         if (s_fno == 70) bright_of(s_ref);
         if (s_fno > 70 && b.start < 0) { const float k = kept(); if (k < b.least_kept) b.least_kept = k; }
     }
@@ -275,7 +275,7 @@ static void case_bye(void) {
     int i = 0, odd = 0, words = 0;
     while (!mole_fluid_goodbye_done() && i < 150) {
         frame(); i++;
-        odd += s_cur == ST_BLOB || s_cur == ST_FX || !mole_fluid_screen_on();
+        odd += (s_cur != ST_TEXT && s_cur != ST_CREATURE) || !mole_fluid_screen_on();
         words += s_cur == ST_TEXT && !fluid_draw_morphing(s_draw);
     }
     printf("power off: done after %.2f s, the word whole %.2f s\n", i / 30.f, words / 30.f);
@@ -325,6 +325,27 @@ static void case_creatures(const char *root) {
     free(oct); free(duck);
 }
 
+/* the old demo states (the blob, "thinking", the effects, the reel) are refused as any unknown value is, and change
+ * nothing on the glass */
+static void case_refused(void) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    const int starts = s_starts;
+    static const char *const old[] = { "blob", "thinking", "effect:ripple", "effect:vortex", "effect:wave", "autoplay", "pond" };
+    for (int i = 0; i < 7; i++) {
+        char j[64];
+        snprintf(j, sizeof(j), "{\"state\":\"%s\"}", old[i]);
+        CHECK(wm_state(j) != 0, "state %s refused", old[i]);
+        frames(10);
+    }
+    char *g = NULL;
+    CHECK(mole_fluid_creature_state_get_json(&g) == ESP_OK && g && strstr(g, "\"state\":\"creature\"") && !strstr(g, "autoplay") && !strstr(g, "reel_step"),
+          "GET: the creature, no autoplay or reel fields (%.80s)", g ? g : "");
+    free(g);
+    CHECK(s_starts == starts && !s_cuts && s_cur == ST_CREATURE, "nothing changed on the glass");
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -359,7 +380,7 @@ static void case_none(bool bad) {
     CHECK(!cr_loaded() && (!bad || s_cute_err[0]), "%s: no creature, its error kept (\"%s\")", what, s_cute_err);
     CHECK(wm_state("{\"state\":\"text\",\"text\":\"still here\"}") == 0, "a say");
     int said = 0, odd = 0;
-    for (int i = 0; i < 150; i++) { frame(); said += s_cur == ST_TEXT && !fd_boot_word(&s_dir); odd += s_cur == ST_BLOB || s_dir.cur == FD_ST_BLOB; }
+    for (int i = 0; i < 150; i++) { frame(); said += s_cur == ST_TEXT && !fd_boot_word(&s_dir); odd += s_cur != ST_TEXT && s_cur != ST_CREATURE; }
     CHECK(said > 30 && odd == 0 && word() && !s_dir.pending, "%s: the say's words, then the word again (%d frames of words, %d of the blob)", what, said, odd);
 }
 
@@ -411,6 +432,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "bye")) case_bye();
     else if (!strcmp(c, "restart")) case_restart();
     else if (!strcmp(c, "creatures")) case_creatures(argv[1]);
+    else if (!strcmp(c, "refused")) case_refused();
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;

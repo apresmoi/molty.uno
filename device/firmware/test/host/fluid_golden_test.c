@@ -17,6 +17,7 @@
  * Build + run: test/host/fluid_golden_build.sh [--print]
  */
 #include "fluid_sim.h"
+#include "blob_fixture.h"   /* the tests' shape */
 
 #include <inttypes.h>
 #include <math.h>
@@ -48,7 +49,7 @@ static uint64_t fnv(uint64_t h, const void *p, size_t n) {
     return h;
 }
 
-enum { SC_BLOB, SC_TEXT, SC_RIPPLE, SC_VORTEX, SC_WAVE, SC_LABEL };
+enum { SC_BLOB, SC_TEXT, SC_LABEL };
 
 typedef struct {
     const char *name;
@@ -59,10 +60,12 @@ typedef struct {
 static const scenario_t SCEN[] = {
     { "blob-52x32-pastel-all",       SC_BLOB,   52, 32, FLUID_PAL_PASTEL, FLUID_EDGE_ALL,      false },
     { "text-52x32-pastel-all",       SC_TEXT,   52, 32, FLUID_PAL_PASTEL, FLUID_EDGE_ALL,      false },
-    { "ripple-44x27-amber-contours", SC_RIPPLE, 44, 27, FLUID_PAL_AMBER,  FLUID_EDGE_CONTOURS, false },
-    { "vortex-60x37-green-ascii",    SC_VORTEX, 60, 37, FLUID_PAL_GREEN,  FLUID_EDGE_OFF,      true  },
-    { "wave-52x32-pastel-ascii",     SC_WAVE,   52, 32, FLUID_PAL_PASTEL, FLUID_EDGE_OFF,      true  },
     { "label-52x32-green-all",       SC_LABEL,  52, 32, FLUID_PAL_GREEN,  FLUID_EDGE_ALL,      false },
+    /* (the palettes, edge modes and grids the effect scenarios carried, on the blob and the text: captured with the
+     * sources before the effects went, c23dac8, and the same after) */
+    { "blob-44x27-amber-contours",   SC_BLOB,   44, 27, FLUID_PAL_AMBER,  FLUID_EDGE_CONTOURS, false },
+    { "blob-60x37-green-ascii",      SC_BLOB,   60, 37, FLUID_PAL_GREEN,  FLUID_EDGE_OFF,      true  },
+    { "text-52x32-pastel-ascii",     SC_TEXT,   52, 32, FLUID_PAL_PASTEL, FLUID_EDGE_OFF,      true  },
 };
 #define N_SCEN ((int)(sizeof(SCEN) / sizeof(SCEN[0])))
 
@@ -75,7 +78,7 @@ static uint64_t run(const scenario_t *sc, long *lit_out) {
     if (!s || !tx || !d || !fr || !fb) { printf("FAIL alloc %s\n", sc->name); s_fail++; return 0; }
     uint64_t h = 0xcbf29ce484222325ull;
 
-    const bool text = sc->kind == SC_TEXT || sc->kind == SC_WAVE || sc->kind == SC_LABEL;
+    const bool text = sc->kind == SC_TEXT || sc->kind == SC_LABEL;
     if (text) {
         fluid_text_set_sentence(tx, sc->kind == SC_LABEL ? 2.f : 4.5f);
         if (sc->kind == SC_LABEL) fluid_text_set_word(tx, s, "4821", 4, -1);
@@ -87,10 +90,6 @@ static uint64_t run(const scenario_t *sc, long *lit_out) {
         }
         h = fnv(h, tx->cov, (size_t)s->N * sizeof(float));
     }
-    int fx = sc->kind == SC_RIPPLE ? FLUID_FX_RIPPLE : sc->kind == SC_VORTEX ? FLUID_FX_VORTEX : FLUID_FX_WAVE;
-    float fxs = 0.f;
-    const bool effect = sc->kind == SC_RIPPLE || sc->kind == SC_VORTEX || sc->kind == SC_WAVE;
-    if (effect) fluid_effect_enter(s, fx);
     s->p.tilt_x = 4.f; s->p.tilt_y = -2.f;
     s->vibe.amp = 0.6f; s->vibe.freq = 9.7f;
     fluid_sim_impulse(s, 0.2f, -0.1f, 1.6f, 0.09f);
@@ -106,7 +105,6 @@ static uint64_t run(const scenario_t *sc, long *lit_out) {
         case SC_BLOB:   fluid_target_blob(s, t, swell, 0.02f, -0.01f); break;
         case SC_TEXT:
         case SC_LABEL:  fluid_text_fill(tx, s, t); break;
-        default:        fluid_target_effect(s, fx, t, swell, 0.f, 0.f); fluid_effect_tick(s, fx, 1.f / 30.f, &fxs); break;
         }
         fluid_sim_background(s, t, breath, (f & 1) == 0 || f < 2);
         if ((f & 1) == 1 || f < 2) fluid_sim_swirl_field(s);
@@ -117,8 +115,7 @@ static uint64_t run(const scenario_t *sc, long *lit_out) {
         fluid_sim_snapshot(s, fr, sc->strokes);
         o.time = t;
         o.shimmer = 0.12f + (f > 36 ? 0.35f : 0.f);
-        /* the wave scenario melts its letters away from frame 40 (mole_fluid's s_melt) */
-        o.melt = sc->kind == SC_WAVE && f >= 40 ? (f - 40) / 30.f : 0.f;
+        o.melt = 0.f;                                     /* (the melt was the wave scenario's: the effects are gone) */
         o.letters = text ? tx->letters : NULL;
         o.nletters = text && o.melt < 0.8f ? tx->nletters : 0;
         if (f == 50) { memset(fb, 0, (size_t)PANEL * PANEL * 2); d->force = true; }   /* full repaint */
