@@ -94,6 +94,10 @@ describe("rhythm events", () => {
     expect(agentEventData("tap", { x: 0.4, y: 0.6, spot: "parche", muted: true })).toEqual({ x: 0.4, y: 0.6, spot: "parche", muted: true });
     for (const t of ["ring", "rhythm"]) expect(agentEventData(t, SAMPLE_EVENTS[t].data)).toEqual(SAMPLE_EVENTS[t].data);
     expect(eventSentence(SAMPLE_EVENTS.ring)).toBe("The human turned Molty's tempo wheel to 112");
+    expect(eventSentence({ id: "e1", type: "ring", ts: 0, data: { spot: "rhythm", index: 6, label: "SON CLAVE", id: "son-clave" } })).toBe("The human chose son-clave on Molty's wheel: it waits, stopped, for a tap in the middle");
+    expect(eventSentence(SAMPLE_EVENTS.rhythm)).toBe("The human stopped the rhythm on Molty: it waits on the clock, choosing");
+    expect(eventSentence({ id: "e1", type: "rhythm", ts: 0, data: { state: "playing", rhythm: "milonga", bpm: 90 } })).toBe("The human started milonga on Molty");
+    expect(eventSentence({ id: "e1", type: "rhythm", ts: 0, data: { state: "stopped", rhythm: "milonga", bpm: 90 } })).toBe("The human stopped the rhythm on Molty and left it");
     expect(eventSentence({ id: "e1", type: "tap", ts: 0, data: { x: 0.5, y: 0.5, spot: "aro", muted: true } })).toBe("The human muted aro on Molty's rhythm");
   });
   it("a webhook gets them only when it names them: the human acts on Molty itself", () => {

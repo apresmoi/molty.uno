@@ -223,7 +223,7 @@ export const INBOX_ONLY_EVENTS: readonly string[] = [SCENE_EVENT];
 export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES).filter((t) => !INBOX_ONLY_EVENTS.includes(t)), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
 
 /** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer (a wheel turned, a
- *  rhythm paused: the human acts on Molty itself). Pull and ride-along carry them. */
+ *  rhythm stopped: the human acts on Molty itself). Pull and ride-along carry them. */
 export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT, "ring", "rhythm"];
 
 /** What a webhook without `events` receives. */
@@ -325,9 +325,9 @@ export function eventSentence(ev: AgentEvent): string {
     case "tap":
       return typeof d.muted === "boolean" ? `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} on Molty's rhythm` : "Molty's screen was tapped";
     case "ring":
-      return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it plays now` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
+      return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it waits, stopped, for a tap in the middle` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
     case "rhythm":
-      return `The human ${d.state === "stopped" ? "stopped" : d.state === "paused" ? "paused" : "resumed"} the rhythm on Molty`;
+      return d.state === "stopped" ? "The human stopped the rhythm on Molty and left it" : d.state === "paused" ? "The human stopped the rhythm on Molty: it waits on the clock, choosing" : `The human started ${String(d.rhythm ?? "the rhythm")} on Molty`;
     case SCENE_EVENT:
       if (!d.layout) return "Molty's scene ended: the creature is back";
       if (d.why === "open") return `Molty opened ${d.layout} of ${d.pkg}${d.spot ? ` (the human tapped ${d.spot})` : ""}`;
