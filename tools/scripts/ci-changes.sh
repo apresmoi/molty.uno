@@ -39,13 +39,13 @@ else
 
     case "$p" in
       # the console: its own sources + the creature engine and .molty files it imports
-      # (vite aliases @viewer/@molty) and its e2e loads; firmware bakes the built page
+      # (vite alias @viewer) and its e2e loads; firmware bakes the built page
       device/console/*|device/creatures/*) hit console console_e2e firmware ;;
     esac
 
     case "$p" in
-      # the creature exporter + its committed .molty output; the website syncs their READMEs
-      # as docs
+      # the creature exporter + its committed .molty output; the website's og script reads
+      # catalog/catalog.json
       device/creatures/*) hit creatures website ;;
     esac
     case "$p" in
