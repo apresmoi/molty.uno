@@ -14,7 +14,8 @@
  *   a question over a scene: the scene stays whole until the question's one change takes it (no coarse dots between);
  *   screen off (by hand, the nap), power off, a restart: the picture dissolves to an empty glass first, then the panel
  *     sleeps (and nothing is drawn) or the power goes; on again, it gathers from the empty glass;
- *   creatures: a creature change and the way home with one drawn in the fluid are each one change of picture.
+ *   creatures: a creature change and the way home with one drawn in the fluid are each one change of picture;
+ *   a scene closed by hand (the reject button, a held finger): one change of picture home, never a goodbye.
  *
  *   picture_flow_test <repo root> <case>   (picture_flow_build.sh runs every case)
  */
@@ -381,6 +382,28 @@ static void case_busy(const char *root) {
     free(astro); free(script);
 }
 
+/* a scene closed by hand (the reject button, a finger held still) leaves by one change of picture home, never at
+ * once; the power button held with a scene up closes it and never says goodbye */
+static void case_close(const char *root) {
+    char path[1024]; size_t len;
+    snprintf(path, sizeof(path), "%s/packages/astrology/astrology.json", root);
+    char *astro = slurp(path, &len);
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0 && wm_package(astro, len) == 0, "power on");
+    wm_device(1); wm_sense(1);
+    frames(150);
+    const char *how[] = { "the reject button", "a finger held still", "the power button held" };
+    for (int q = 0; q < 3; q++) {
+        CHECK(wm_scene("globe", "{\"img\":\"moon\",\"lit\":0.5,\"side\":1,\"r\":0.3,\"spin\":0}", 40.f) == 0, "a scene"); frames(90);
+        const int starts = s_starts;
+        if (q == 1) { wm_touch(1, 160, 160); frames(36); wm_touch(0, 0, 0); }
+        else { wm_button(1, 1); frames(q == 2 ? 60 : 2); wm_button(1, 0); }
+        frames(60);
+        CHECK(!s_sp.cur && s_cur == ST_CREATURE && !fluid_draw_morphing(s_draw) && s_starts - starts == 1 && !s_cuts && !s_dir.bye,
+              "%s: the scene closed, one change home (%d, %d at once)", how[q], s_starts - starts, s_cuts);
+    }
+    free(astro);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -469,6 +492,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "creatures")) case_creatures(argv[1]);
     else if (!strcmp(c, "refused")) case_refused();
     else if (!strcmp(c, "busy")) case_busy(argv[1]);
+    else if (!strcmp(c, "close")) case_close(argv[1]);
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;
