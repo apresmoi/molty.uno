@@ -1,5 +1,5 @@
 /*
- * fluid_target.c — what the fluid relaxes toward: speed text, the rings and arcs.
+ * fluid_target.c: what the fluid relaxes toward: speed text, the rings and arcs.
  *
  * Port of device/creatures/js/fluid/targets.js (minus the 3D creature target —
  * mole_fluid.c exposes a per-cell target-source hook for that). Each fill writes

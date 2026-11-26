@@ -1,7 +1,7 @@
 /*
  * SPDX-License-Identifier: MIT
  *
- * blob_fixture.h — a breathing metaball for the sim's host tests (fluid_test.c, fluid_golden_test.c): a smooth moving
+ * blob_fixture.h: a breathing metaball for the sim's host tests (fluid_test.c, fluid_golden_test.c): a smooth moving
  * shape to step, draw and hash. It was the firmware's "no creature yet" stand-in (fluid_target.c) until the boot word
  * took that place; the tests keep it as their shape, so their numbers (and fluid_golden.txt's blob line) stay as
  * they were.
