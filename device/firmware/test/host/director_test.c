@@ -14,7 +14,8 @@
  * changes never change the state; ending the reel (pairing / restore) never re-enables it;
  * the boot screen: the word holds then melts into the boot's creature, which paddles in place
  * (no idle life) until the link is ready, the ttl, or at once without Wi-Fi, then dissolves into
- * the human's creature (or carries on when it is theirs); anything wanting the screen ends it.
+ * the human's creature (or carries on when it is theirs); anything wanting the screen ends it;
+ * a creature made late (or never): the word stays in its place, never the blob.
  *
  * Build + run: test/host/director_build.sh
  */
@@ -79,6 +80,59 @@ static void boot_screen(void) {
     fd_boot(&D);
     fd_set_creature(&D, true);
     frame(true);
+}
+
+/* power on with the boot screen, the creature made late (or never): the word stands in for it, never the blob */
+static void boot_screen_late(void) {
+    fd_init(&D, NULL, 12345);
+    s_melts = 0; s_nact = 0; s_now = 0.f;
+    fd_boot(&D);
+    frame(true);
+}
+static bool word_up(void) { return D.cur == FD_ST_TEXT && fd_boot_word(&D) && D.cur != FD_ST_BLOB && D.next != FD_ST_BLOB; }
+
+static void test_boot_late(void) {
+    /* early: the creature in before the word's time is over: nothing changes (test_boot_screen) */
+    boot_screen();
+    run(2.9f, true);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE && s_melts == 2, "early creature: the word, then the creature at 2.8 s");
+
+    /* late: the word holds past its 2.8 s, one melt straight into the creature the frame it is made */
+    boot_screen_late();
+    bool only_word = true;
+    for (int i = 0; i < 135; i++) { frame(true); only_word &= word_up() && !D.pending; }
+    CHECK(only_word && s_melts == 1, "late creature: only the word for 4.5 s (%d melts, state %d)", s_melts, D.cur);
+    fd_set_creature(&D, true);
+    frame(true);
+    CHECK(!D.boot && D.cur == FD_ST_CREATURE && s_melts == 2, "...then straight into the creature (state %d, %d melts)", D.cur, s_melts);
+
+    /* late, and the screen wanted meanwhile: a mood, an act, a listen, a question keep the word; never the blob */
+    boot_screen_late(); run(3.5f, true);
+    fd_agent_mood(&D, CM_HAPPY, -1.f); frame(false);
+    fd_agent_act(&D, CA_NOD, cute_act_dur(CA_NOD)); frame(false);
+    fd_set_busy(&D, true, false); frame(false);
+    fd_set_busy(&D, true, true); frame(false);
+    fd_set_busy(&D, false, false); frame(false);
+    fd_request_state(&D, FD_ST_CREATURE, 0, false); frame(false);
+    CHECK(word_up() && s_melts == 1, "mood, act, listen, question, creature request: the word stays (state %d, %d melts)", D.cur, s_melts);
+    fd_set_creature(&D, true); frame(false);
+    CHECK(D.cur == FD_ST_CREATURE && s_melts == 2 && D.held == CM_HAPPY, "the creature, in the mood it was given");
+
+    /* never: the word for good, a say over it and back to the word, a scene too; then one loads after all */
+    boot_screen_late();
+    only_word = true;
+    for (int i = 0; i < 300; i++) { frame(true); only_word &= word_up(); }
+    CHECK(only_word && s_melts == 1, "no creature: the word for 10 s, nothing else (%d melts)", s_melts);
+    request(FD_ST_TEXT, false);
+    CHECK(D.cur == FD_ST_TEXT && !fd_boot_word(&D), "a say over it shows its words");
+    run(2.f, true);
+    CHECK(word_up() && s_melts == 3, "then the word again, not the blob (state %d, %d melts)", D.cur, s_melts);
+    request(FD_ST_SCENE, false); fd_set_scene(&D, true);
+    CHECK(D.cur == FD_ST_SCENE && !fd_boot_word(&D), "a scene over it");
+    fd_set_scene(&D, false); run(0.5f, false);
+    CHECK(word_up() && s_melts == 5, "the scene over: the word again (state %d, %d melts)", D.cur, s_melts);
+    fd_set_creature(&D, true); frame(false);
+    CHECK(D.cur == FD_ST_CREATURE && !D.boot && s_melts == 6, "a creature after all: shown");
 }
 
 /* power off: "bye!", the pond fading out, done; nothing interrupts it, even mid boot screen */
@@ -631,6 +685,7 @@ int main(void) {
     printf("director host test\n");
     test_boot();
     test_boot_screen();
+    test_boot_late();
     test_guard();
     test_show_returns();
     test_idle_life();

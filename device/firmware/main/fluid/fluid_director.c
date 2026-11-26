@@ -116,20 +116,25 @@ static void start_act(fluid_director_t *d, int act, float dur) {
     d->acting_left = dur;
 }
 
-/* queue a transition; the creature falls back to the blob while none is loaded */
-static void go(fluid_director_t *d, int st, int fx) {
-    d->want_creature = st == FD_ST_CREATURE;
-    if (st == FD_ST_CREATURE && !d->has_creature) st = FD_ST_BLOB;
-    d->pending = true; d->next = st; d->next_fx = st == FD_ST_FX ? fx : 0;
-}
-
 static int target(const fluid_director_t *d) { return d->pending ? d->next : d->cur; }
 static int target_fx(const fluid_director_t *d) { return d->pending ? d->next_fx : d->cur_fx; }
 
-/* the boot screen is over (fd_boot): the word melts into the creature. A request that
- * follows replaces that transition. */
+/* queue a transition. While no creature is loaded it is wanted, and something stands in: after fd_boot the boot word
+ * (it stays, or comes back, and never melts into itself), else the blob */
+static void go(fluid_director_t *d, int st, int fx) {
+    d->want_creature = st == FD_ST_CREATURE;
+    if (st == FD_ST_CREATURE && !d->has_creature) {
+        if (!d->word_home) st = FD_ST_BLOB;
+        else if (d->boot && target(d) == FD_ST_TEXT) return;   /* the word is up (or on its way) */
+        else { st = FD_ST_TEXT; d->boot = true; d->boot_t = d->cfg.boot_word_s; d->text_hold = true; }
+    }
+    d->pending = true; d->next = st; d->next_fx = st == FD_ST_FX ? fx : 0;
+}
+
+/* the boot screen is over (fd_boot): the word melts into the creature, or stays while none is loaded (fd_set_creature
+ * ends it then). A request that follows replaces that transition. */
 static void boot_end(fluid_director_t *d) {
-    if (!d->boot) return;
+    if (!d->boot || !d->has_creature) return;
     go(d, FD_ST_CREATURE, 0);
     d->boot = false;
     d->next_idle = idle_gap(d);
@@ -152,7 +157,7 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
 
 void fd_boot(fluid_director_t *d) {
     if (d->bye) return;
-    d->boot = true; d->boot_t = 0.f;
+    d->boot = d->word_home = true; d->boot_t = 0.f;
     d->text_hold = true;
     go(d, FD_ST_TEXT, 0);
 }
@@ -182,16 +187,19 @@ bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cf
 
 void fd_set_creature(fluid_director_t *d, bool loaded) {
     d->has_creature = loaded;
-    if (loaded && d->want_creature && target(d) == FD_ST_BLOB) go(d, FD_ST_CREATURE, 0);
-    else if (!loaded && target(d) == FD_ST_CREATURE) go(d, FD_ST_CREATURE, 0);   /* → blob */
+    if (loaded && d->boot && d->boot_t >= d->cfg.boot_word_s) boot_end(d);   /* the word waited for it */
+    else if (loaded && d->want_creature && target(d) == FD_ST_BLOB) go(d, FD_ST_CREATURE, 0);
+    else if (!loaded && target(d) == FD_ST_CREATURE) go(d, FD_ST_CREATURE, 0);   /* → its stand-in */
 }
 
 void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
     if (d->bye) return;
     if (st < 0 || st >= FD_ST_COUNT) return;
     boot_end(d);
+    if (st != FD_ST_CREATURE) d->boot = false;   /* the word (waiting for the creature) gives the screen up */
     if (d->autoplay) { d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f; }
     if (st == FD_ST_TEXT) d->text_hold = text_hold;
+    if (st == FD_ST_CREATURE && !d->has_creature && d->word_home) { go(d, st, fx); return; }   /* the word: go's own guard */
     int mapped = st == FD_ST_CREATURE && !d->has_creature ? FD_ST_BLOB : st;
     /* the guard: the shown state again changes nothing (no ripple, no swirl, no melt) */
     if (st != FD_ST_TEXT && mapped == target(d) && (mapped != FD_ST_FX || fx == target_fx(d))) {
@@ -204,6 +212,7 @@ void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
 void fd_autoplay(fluid_director_t *d) {
     if (d->bye) return;
     boot_end(d);
+    d->boot = false;
     d->autoplay = true; d->reel = -1; d->reel_t = 0.f;
     d->flash = -1; d->asleep = false; d->convo_left = 0.f;
 }
@@ -288,7 +297,7 @@ static void reel_step(fluid_director_t *d) {
     d->reel = (d->reel + 1) % REEL_N; d->reel_t = 0.f;
     const reel_step_t *r = &REEL[d->reel];
     if (r->mood >= 0) { d->held = r->mood; d->held_left = -1.f; }
-    if (r->st >= 0) { if (r->st == FD_ST_TEXT) d->text_hold = false; go(d, r->st, r->fx); }
+    if (r->st >= 0) { if (r->st == FD_ST_TEXT) d->text_hold = d->boot = false; go(d, r->st, r->fx); }
 }
 
 void fd_tick(fluid_director_t *d, float dt, bool text_done) {

@@ -41,9 +41,12 @@
  *                screen's edge: never a state or mood change.
  *   boot screen  at power on only (fd_boot; without it boot lands on the creature as above):
  *                the word "molty.uno" condenses in the fluid's own dots (mole_fluid.c), holds,
- *                and after boot_word_s melts into the human's creature. Anything that wants
+ *                and after boot_word_s melts into the human's creature: later if it is not
+ *                loaded by then (the word stays till it is, never the blob; for good if it
+ *                never loads, and it comes back after a say or a scene). Anything that wants
  *                the screen ends it at once (any request, autoplay, a mood, work, an act, a
- *                listen, a say, a question).
+ *                listen, a say, a question); with no creature yet only what shows another
+ *                picture does.
  *
  *            request(st)            last word + 1.5 s
  *   boot ──▶ CREATURE ──────────▶ TEXT ─────────────────┐
@@ -134,7 +137,8 @@ typedef struct {
     bool  scene_on;                   /* the scene player has a scene (fd_set_scene)    */
     int   status, shown;              /* reported / on screen                          */
     float status_t;                   /* s the reported status has differed from shown */
-    bool  boot;                       /* fd_boot: the word is up                       */
+    bool  boot;                       /* fd_boot: the word is up (also while it waits for the creature) */
+    bool  word_home;                  /* fd_boot was called: the word, not the blob, stands in for no creature */
     float boot_t;                     /* s into it                                     */
     bool  bye;                        /* fd_bye: saying goodbye, the power goes off after */
     float bye_t;                      /* s into it                                     */
@@ -153,7 +157,7 @@ bool  fd_bye_word(const fluid_director_t *d);    /* the text state shows the goo
 float fd_bye_level(const fluid_director_t *d);   /* the panel's brightness, 1 → 0 over the pond */
 bool  fd_bye_done(const fluid_director_t *d);    /* the goodbye is over: power off now */
 /** A creature (.molty) is (not) loaded. Loading one while the creature was wanted but the
- *  blob stood in for it moves to the creature. */
+ *  boot word (after fd_boot) or the blob stood in for it moves to the creature. */
 void  fd_set_creature(fluid_director_t *d, bool loaded);
 /** An explicit state (HTTP / link). Ends autoplay. Re-requesting the shown (or already
  *  pending) state is a no-op; "text" always restarts the reader. text_hold: text only. */
