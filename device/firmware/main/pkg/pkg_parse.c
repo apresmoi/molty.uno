@@ -19,7 +19,7 @@
 #define PKG_FREE(p)   free(p)
 #endif
 
-const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot" };
+const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot", "beat", "dial", "centre" };
 
 /* ── arena: 16 KB blocks, linked; the package struct sits at the head of the first ── */
 
@@ -121,6 +121,12 @@ bool pkg_num_ok(int pf, float v) {
     case PF_ARC:              return v > 0.f && v <= 360.f;
     case PF_R0: case PF_R1:   return v >= 0.f && v <= 2.f;
     case PF_TTL:              return v >= 1.f && v <= PKG_DUR_MAX;
+    case PF_STEP:             return v > 0.f && v <= 360.f;
+    case PF_BY: case PF_FAST: return v >= -1000.f && v <= 1000.f;
+    case PF_MIN: case PF_MAX: case PF_VAL: return v >= -10000.f && v <= 10000.f;
+    case PF_FACE:             return v == 0.f || v == 1.f;
+    case PF_TICK_MS:          return v == 0.f || (v >= 5.f && v <= 60.f);    /* 0: the motor's own (haptic_plan.h) */
+    case PF_TICK:             return v == 0.f || (v >= 25.f && v <= 100.f);  /* percent; under 25 it does not turn */
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -192,42 +198,52 @@ static const char *parse_asset(arena_t *a, const cJSON *j, pkg_asset_t *as) {
 
 /* ── items ─────────────────────────────────────────────────────────────────── */
 
-enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY };
-#define KB(k) (1u << (k))
+enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY, T_LIST };
+#define KB(k) (1ull << (k))   /* a kind's bit, or a field's (PF_COUNT > 32) */
 #define XY (KB(PK_RING) | KB(PK_ARC) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
-#define ALL 0x3FFu
+#define ALL ((1u << PK_KINDS) - 1u)
+#define WHEEL (KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE))   /* the device's own pieces: in no group */
 static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELDS[] = {
     { "x", PF_X, T_NUM, XY }, { "y", PF_Y, T_NUM, XY },
-    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) },
+    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) | KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE) },
     { "w", PF_W, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_LINE) | KB(PK_CURVE) },
     { "a0", PF_A0, T_NUM, KB(PK_ARC) | KB(PK_TICKS) }, { "a1", PF_A1, T_NUM, KB(PK_ARC) },
     { "len", PF_LEN, T_NUM, KB(PK_TICKS) }, { "n", PF_N, T_NUM, KB(PK_TICKS) },
-    { "size", PF_SIZE, T_NUM, KB(PK_GLYPH) | KB(PK_TEXT) },
+    { "size", PF_SIZE, T_NUM, KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_BEAT) },   /* beat: its hits' dots */
     { "lit", PF_LIT, T_NUM, KB(PK_BALL) }, { "side", PF_SIDE, T_NUM, KB(PK_BALL) }, { "spin", PF_SPIN, T_NUM, KB(PK_BALL) },
     { "rot", PF_ROT, T_NUM, KB(PK_GLYPH) },
     { "on", PF_ON, T_NUM, ALL }, { "off", PF_OFF, T_NUM, ALL },
     { "color", PF_COLOR, T_COLOR, ALL },
     { "img", PF_ASSET, T_IMAGE, KB(PK_BALL) }, { "asset", PF_ASSET, T_ASSET, KB(PK_GLYPH) },
     { "str", PF_STR, T_STR, KB(PK_TEXT) },
-    { "say", PF_SAY, T_SAY, KB(PK_SPOT) }, { "id", PF_ID, T_STR, KB(PK_SPOT) },
+    { "say", PF_SAY, T_SAY, KB(PK_SPOT) }, { "id", PF_ID, T_STR, KB(PK_SPOT) | KB(PK_DIAL) },
     /* a highlight: a spot lights groups (names, spaces between), their items grow and brighten,
      * an item `when: "lit"` shows only then */
-    { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) },
+    { "group", PF_GROUP, T_STR, ALL & ~KB(PK_SPOT) & ~WHEEL }, { "when", PF_WHEN, T_STR, ALL & ~KB(PK_SPOT) & ~WHEEL },
     { "lights", PF_LIGHTS, T_STR, KB(PK_SPOT) },
     { "grow", PF_GROW, T_NUM, KB(PK_SPOT) },          /* what a tap on it lights grows this much */
     /* a spot is also tappable in a ring sector about the glass centre: arc degrees wide, centred on the spot's own
      * direction, from radius r0 (0 unless given) to r1 */
-    { "arc", PF_ARC, T_NUM, KB(PK_SPOT) }, { "r0", PF_R0, T_NUM, KB(PK_SPOT) }, { "r1", PF_R1, T_NUM, KB(PK_SPOT) },
+    { "arc", PF_ARC, T_NUM, KB(PK_SPOT) }, { "r0", PF_R0, T_NUM, KB(PK_SPOT) | KB(PK_DIAL) }, { "r1", PF_R1, T_NUM, KB(PK_SPOT) },
     /* a tap on it opens another layout of the package over this one (scene_player.h scene_open_build), for ttl
      * seconds when that layout is a held one (dur 0) */
     { "open", PF_OPEN, T_STR, KB(PK_SPOT) }, { "ttl", PF_TTL, T_NUM, KB(PK_SPOT) },
+    /* a dial: grabbed from r0 out, drawn at r; a click every `step` degrees adds `by` (`fast` turning fast) to its value
+     * (min..max, from `value`), or, with `labels` (a list param, each element's `label`), steps through them; `sets` the
+     * beat player's `tempo` or its `pick`; `face` 0 (while the beat plays) or 1 (while it is stopped); each click ticks
+     * the motor `tick_ms` at `tick` percent (0: the motor's own wheel tick) */
+    { "step", PF_STEP, T_NUM, KB(PK_DIAL) }, { "by", PF_BY, T_NUM, KB(PK_DIAL) }, { "fast", PF_FAST, T_NUM, KB(PK_DIAL) },
+    { "min", PF_MIN, T_NUM, KB(PK_DIAL) }, { "max", PF_MAX, T_NUM, KB(PK_DIAL) }, { "value", PF_VAL, T_NUM, KB(PK_DIAL) },
+    { "face", PF_FACE, T_NUM, KB(PK_DIAL) }, { "sets", PF_SETS, T_STR, KB(PK_DIAL) }, { "labels", PF_LABELS, T_LIST, KB(PK_DIAL) },
+    { "tick_ms", PF_TICK_MS, T_NUM, KB(PK_DIAL) }, { "tick", PF_TICK, T_NUM, KB(PK_DIAL) },
+    /* a centre: a tap within r plays and stops the beat (the layout has one) */
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
-static const uint32_t REQUIRED[PK_KINDS] = {
+static const uint64_t REQUIRED[PK_KINDS] = {
     [PK_RING] = KB(PF_R), [PK_ARC] = KB(PF_R) | KB(PF_A0) | KB(PF_A1), [PK_TICKS] = KB(PF_R) | KB(PF_N),
     [PK_DISC] = KB(PF_R), [PK_BALL] = KB(PF_R), [PK_GLYPH] = KB(PF_ASSET) | KB(PF_SIZE), [PK_TEXT] = KB(PF_STR),
-    [PK_SPOT] = KB(PF_R) | KB(PF_SAY),
+    [PK_SPOT] = KB(PF_R) | KB(PF_SAY), [PK_BEAT] = KB(PF_R), [PK_DIAL] = KB(PF_ID), [PK_CENTRE] = KB(PF_R),
 };
 
 typedef struct { const pkg_t *p; const pkg_layout_t *l; bool in_each; arena_t *a; } ictx_t;
@@ -247,7 +263,7 @@ static const char *parse_val(const ictx_t *c, const cJSON *j, int pf, int type, 
     if (cJSON_IsString(j) && j->valuestring[0] == '$') {
         int i = param_index(c->l, j->valuestring + 1);
         if (i < 0) return "binding: undeclared param";
-        if (c->l->params[i].type != (type == T_NUM ? PP_NUMBER : PP_TEXT)) return "binding: param of the wrong type";
+        if (c->l->params[i].type != (type == T_NUM ? PP_NUMBER : type == T_LIST ? PP_LIST : PP_TEXT)) return "binding: param of the wrong type";
         v->src = PV_PARAM; v->idx = (int16_t)i;
         return NULL;
     }
@@ -258,6 +274,7 @@ static const char *parse_val(const ictx_t *c, const cJSON *j, int pf, int type, 
         return v->s ? NULL : "oom";
     }
     switch (type) {
+    case T_LIST: return "item: labels is a list param ($name)";
     case T_NUM:
         if (!cJSON_IsNumber(j) || !pkg_num_ok(pf, (float)j->valuedouble)) return "item: number out of range";
         v->src = PV_NUM; v->num = (float)j->valuedouble;
@@ -297,7 +314,7 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
         it->each = (int8_t)i;
     }
     c->in_each = it->each >= 0;
-    uint32_t have = 0;
+    uint64_t have = 0;
     for (const cJSON *f = j->child; f; f = f->next) {
         if (!strcmp(f->string, "k") || !strcmp(f->string, "each")) continue;
         if (!strcmp(f->string, "polar")) {
@@ -335,9 +352,12 @@ static const char *parse_item(ictx_t *c, const cJSON *j, pkg_item_t *it) {
     if ((have & REQUIRED[kind]) != REQUIRED[kind]) return "item: a required field is missing";
     if ((kind == PK_LINE || kind == PK_CURVE) && !it->pts) return "item: pts";
     if (it->polar && (have & (KB(PF_X) | KB(PF_Y)))) return "item: polar or x / y, not both";
-    if (!(have & KB(PF_ARC)) != !(have & KB(PF_R1)) || ((have & KB(PF_R0)) && !(have & KB(PF_ARC)))) return "item: a sector is arc and r1 (and r0)";
+    if (kind == PK_SPOT && (!(have & KB(PF_ARC)) != !(have & KB(PF_R1)) || ((have & KB(PF_R0)) && !(have & KB(PF_ARC))))) return "item: a sector is arc and r1 (and r0)";
     if ((have & KB(PF_TTL)) && !(have & KB(PF_OPEN))) return "item: ttl is for open";
     if (it->f[PF_WHEN].src != PV_NONE && (it->f[PF_WHEN].src != PV_STR || strcmp(it->f[PF_WHEN].s, "lit"))) return "item: when is \"lit\"";
+    const pkg_val_t *sets = &it->f[PF_SETS];
+    if (sets->src != PV_NONE && (sets->src != PV_STR || (strcmp(sets->s, "tempo") && strcmp(sets->s, "pick")))) return "item: sets is \"tempo\" or \"pick\"";
+    if ((kind == PK_DIAL || kind == PK_CENTRE) && it->each >= 0) return "item: a dial or a centre is not repeated";
     return NULL;
 }
 
@@ -375,6 +395,15 @@ static const char *parse_layout(arena_t *a, const pkg_t *p, const cJSON *j, pkg_
         if (e) return e;
         l->nitems++;
     }
+    int beats = 0, centres = 0, dials[2] = { 0, 0 };
+    for (int i = 0; i < l->nitems; i++) {
+        const pkg_item_t *it = &l->items[i];
+        if (it->k == PK_BEAT && it->each >= 0) return "layout: a beat is not repeated";
+        beats += it->k == PK_BEAT; centres += it->k == PK_CENTRE;
+        if (it->k == PK_DIAL) dials[it->f[PF_FACE].src == PV_NUM && it->f[PF_FACE].num == 1.f]++;
+    }
+    if (beats > 1 || centres > 1 || dials[0] > 1 || dials[1] > 1) return "layout: one beat, one centre and one dial a face";
+    if (centres > beats) return "layout: a centre plays and stops a beat: the layout has none";
     return NULL;
 }
 
@@ -386,7 +415,8 @@ static const char *parse_root(arena_t *a, pkg_t *p, const cJSON *j) {
     const cJSON *v = cJSON_GetObjectItemCaseSensitive(j, "v"), *id = cJSON_GetObjectItemCaseSensitive(j, "id");
     const cJSON *name = cJSON_GetObjectItemCaseSensitive(j, "name"), *ver = cJSON_GetObjectItemCaseSensitive(j, "version");
     const cJSON *kind = cJSON_GetObjectItemCaseSensitive(j, "kind");
-    if (!cJSON_IsString(v) || strcmp(v->valuestring, "molty-pkg/1")) return "package: v";
+    /* 2: a creature's rig may pack its clips (docs/CREATURES.md section 12); an older firmware refuses it here, at install */
+    if (!cJSON_IsString(v) || (strcmp(v->valuestring, "molty-pkg/1") && strcmp(v->valuestring, "molty-pkg/2"))) return "package: v";
     if (!cJSON_IsString(id) || !pkg_id_ok(id->valuestring)) return "package: id";
     if (!cJSON_IsString(name) || !pkg_text_ok(name->valuestring, PKG_TEXT_MAX)) return "package: name";
     if (!cJSON_IsString(ver) || !version_ok(ver->valuestring)) return "package: version";

@@ -39,6 +39,8 @@ esp_err_t haptic_cue(const char *name) {
     strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
 }
 esp_err_t haptic_touch(void) { return haptic_cue("touch"); }   /* the touch feedback, among them */
+esp_err_t haptic_wheel(int ms, int strength) { (void)ms; (void)strength; return haptic_cue("wheel"); }
+bool haptic_wheel_due(uint32_t *last_ms, uint32_t now_ms) { *last_ms = now_ms; return true; }
 bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
@@ -54,6 +56,18 @@ void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t
     snprintf(open, open_size, "%s", on ? spot_opens : "");
 }
 bool mole_fluid_scene_event(mole_scene_evt_t *out) { (void)out; return false; }
+static int zone_hit;            /* the press lands on a scene's wheel (1), its centre (2), a beat's dot (3); 0 none */
+int mole_fluid_zone(int px, int py) { (void)px; (void)py; return zone_hit; }
+int mole_fluid_take_ticks(int *ms, int *strength) { *ms = *strength = 0; return 0; }
+bool mole_fluid_scene_up(void) { return false; }
+void mole_fluid_scene_close(void) { }
+int mole_fluid_take_closed(void) { return 0; }
+bool mole_fluid_ring_event(mole_ring_evt_t *out) { (void)out; return false; }
+bool rhythm_active(void) { return false; }
+void rhythm_local_play(void) { }
+void rhythm_local_stop(void) { }
+bool rhythm_take_event(rhythm_ev_t *e) { (void)e; return false; }
+cJSON *rhythm_event_frame(const rhythm_ev_t *e) { (void)e; return NULL; }
 bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }
@@ -221,6 +235,15 @@ static void test_spot(void) {
     touch(100, 100);
     assert(!atomic_load(&s_spot) && atomic_load(&s_tap));
     atomic_store(&s_tap, false);
+    /* a press on a scene's wheel, its centre or a beat's dot is the fluid's: never a spot or a tap; the centre and a dot
+     * buzz as a tap that does something, the wheel does not (its clicks tick) */
+    spot_hit = 0x105;
+    for (zone_hit = 1; zone_hit <= 3; zone_hit++) {
+        cues[0] = 0; sdk_now += 1000000;
+        touch(100, 100);
+        assert(!atomic_load(&s_spot) && !atomic_load(&s_tap) && (zone_hit == 1 ? !cues[0] : !strcmp(cues, "touch")));
+    }
+    zone_hit = 0; spot_hit = 0;
     /* the agent hears which spot, whatever tap is bound to */
     const unsigned n0 = nframes;
     spot_do(0x105, sdk_now / 1000, &(gesture_limit_t){ .min_ms = 250 });

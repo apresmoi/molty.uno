@@ -14,6 +14,8 @@
 // crossfades (graph.blend seconds, eased) only between clips of the same family. A loop listed in graph.sync (the walk) is
 // left and joined at the phase that matches, so a stepping paw is never cut mid-stride.
 
+import { unpackClip } from './clip-pack.js';
+
 export const MOODS = ['idle', 'listening', 'thinking', 'speaking', 'happy', 'sleepy', 'surprised'];
 
 const b64 = (s) => (typeof atob === 'function' ? Uint8Array.from(atob(s), (c) => c.charCodeAt(0)) : new Uint8Array(Buffer.from(s, 'base64')));
@@ -28,14 +30,17 @@ const COME_R = 0.08, COME_K = 3, COME_S = 8;   // at the front this near the mid
 const AWAY = 1.75;            // a chain that leaves it facing further from the viewer than this (rad) calls it
 const PACE = 0.6;   // the most the body moves a second (world units): above a walk's 0.36 (creature_clip.c CC_PACE)
 const EDGE = 0.25;  // walking past this far from the frame's centre (world units, across) turns it round (creature_clip.c CC_EDGE)
+const CUT_BLEND = 0.7;   // s: the crossfade home from a gesture cut short (stop), so it eases there (creature_clip.c CC_CUT_BLEND)
 const EPS = 1e-5;   // a clip's end, against float clocks (the C player's time is float steps)
 
 /** Decode a clip's channels: per channel the node, path, keys (frames) and float outputs. */
 const INTERP = { S: 'STEP', L: 'LINEAR', C: 'CUBICSPLINE' };
 export function decodeClip(c, scale) {
-  return { ...c, ch: c.ch.map((h) => {
-    if (Array.isArray(h)) h = { node: h[0], path: h[1], interp: INTERP[h[2]], ct: h[3] === 1 ? 'i8' : 'i16', in: h[4], out: h[5] };   // the package's compact form
-    const b8 = h.ct === 'i8', k = b8 ? 127 : scale[h.path], keys = c.frames < 256 ? b64(h.in) : u16(h.in), raw = b8 ? i8(h.out) : i16(h.out), out = new Float32Array(raw.length);
+  const ch = c.pk !== undefined ? unpackClip(c.pk).map((h) => ({ node: h.node, path: h.path, interp: INTERP[h.interp], ct: h.b8 ? 'i8' : 'i16', keys: h.keys, raw: h.vals }))   // packed
+    : c.ch.map((h) => (Array.isArray(h) ? { node: h[0], path: h[1], interp: INTERP[h[2]], ct: h[3] === 1 ? 'i8' : 'i16', in: h[4], out: h[5] } : h));   // the plain compact form
+  const { pk, ...rest } = c;
+  return { ...rest, ch: ch.map((h) => {
+    const b8 = h.ct === 'i8', k = b8 ? 127 : scale[h.path], keys = h.keys ?? (c.frames < 256 ? b64(h.in) : u16(h.in)), raw = h.raw ?? (b8 ? i8(h.out) : i16(h.out)), out = new Float32Array(raw.length);
     for (let i = 0; i < raw.length; i++) out[i] = raw[i] / k;
     return { node: h.node, path: h.path, cubic: h.interp === 'CUBICSPLINE', linear: h.interp === 'LINEAR', keys, out, w: WIDTH[h.path] };
   }) };
@@ -98,12 +103,14 @@ export function samplePose(rig, rest, c, t, pose) {
 }
 
 /** Blend two poses: lerp t and s, nlerp r (shortest way). */
-export function blendPose(a, b, w, out) {
+export function blendPose(a, b, w, out, keep = null) {   // keep: each node's way kept from the first frame (creature_clip.c)
   const n = a.length / POSE;
   for (let i = 0; i < n; i++) {
     const o = i * POSE;
     for (let k = 0; k < 3; k++) { out[o + k] = a[o + k] + (b[o + k] - a[o + k]) * w; out[o + 7 + k] = a[o + 7 + k] + (b[o + 7 + k] - a[o + 7 + k]) * w; }
-    const d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6], sg = d < 0 ? -1 : 1;
+    const d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6];
+    if (keep && !keep[i]) keep[i] = d < 0 ? -1 : 1;
+    const sg = keep ? keep[i] : d < 0 ? -1 : 1;
     let l = 0;
     for (let k = 3; k < 7; k++) { out[o + k] = a[o + k] + (sg * b[o + k] - a[o + k]) * w; l += out[o + k] * out[o + k]; }
     l = Math.sqrt(l) || 1; for (let k = 3; k < 7; k++) out[o + k] /= l;
@@ -214,11 +221,14 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
       });
       s.ox = ox; s.oz = oz; s.oyaw = y1;
     }
-    s.clip = ci; s.t = t0; s.blendT = 0; s.blendD = blend;
+    s.clip = ci; s.t = t0; s.blendT = 0; s.blendD = blend; s.cutting = false;
   }
 
-  // chained gestures (graph.chains): one of first, then rounds of then (never the same twice running), then one of last
-  const draw = (list, avoid = null) => {
+  // chained gestures (graph.chains): one of first, then rounds of then (never the same twice running), then one of last;
+  // after the first, each pick is among those that start in the pose the clip before ends in (none: that stage is over)
+  const draw = (all, avoid = null, fam = null) => {
+    const list = fam == null ? all : all.filter((n) => clips[byName[n]].from === fam);
+    if (!list.length) return null;
     const skip = list.length > 1 ? list.indexOf(avoid) : -1, m = skip >= 0 ? list.length - 1 : list.length;
     s.rng = (Math.imul(s.rng, 1664525) + 1013904223) >>> 0;
     let r = (s.rng >>> 8) % m; if (skip >= 0 && r >= skip) r++;
@@ -235,8 +245,9 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
   }
   function chainNext() {
     const ch = s.chain; if (!ch) return null;
-    if (ch.left > 0) { ch.left--; return (ch.prev = draw(ch.h.then, ch.prev)); }
-    if (!ch.stage && ch.h.last?.length) { ch.stage = 1; return draw(ch.h.last); }
+    const fam = clips[s.clip].to;
+    if (ch.left > 0) { ch.left--; const n = draw(ch.h.then, ch.prev, fam); if (n != null) return (ch.prev = n); ch.left = 0; }
+    if (!ch.stage && ch.h.last?.length) { ch.stage = 1; const n = draw(ch.h.last, null, fam); if (n != null) return n; }
     s.chain = null; return null;
   }
 
@@ -257,7 +268,8 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
     const next = s.queue.shift();
     if (next == null) return;
     if (s.gesture && next === byName[s.gesture.clip]) s.gesture.started = true;
-    start(next);
+    const cut = !!s.cut;
+    start(next, cut ? s.cut : g.blend); s.cut = 0; s.cutting = cut; s.csign = new Int8Array(N);   // (the paw lock then holds the paws that were down)
   }
 
   // The camera stays where it started, looking from the first clip's side: the floor never moves, so a walking frame
@@ -361,6 +373,9 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
       if (clip == null) return false;
       s.gesture = { name, clip, hold: g.hold?.[name] ?? 0, started: false }; chainStart(s.gesture); s.gestureT = 0; s.pending = true; return true;
     },
+    /** End the gesture playing (a habit cut short): it goes home to its mood now through the authored ways, as a call
+     *  does (creature_clip.c cc_stop). A call is left alone. */
+    stop() { if (!s.gesture || s.come) return false; s.gesture = null; s.chain = null; s.pending = true; s.cut = CUT_BLEND; interrupt(); return true; },
     /** Jump straight to a clip (the preview's route player). */
     play(name) { s.come = 0; s.gesture = null; s.chain = null; s.queue = []; start(byName[name], 0); },
     /** Queue a route from the current family to clip `name` (the preview's matrix). */
@@ -399,7 +414,7 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
       samplePose(rig, rest, clips[s.clip], s.t, pose);
       const w = ease(s.blendD > 0 ? s.blendT / s.blendD : 1);
       if (w < 1) {
-        blendPose(from, pose, w, cur);
+        blendPose(from, pose, w, cur, s.cutting ? s.csign : null);
         // a prop (a root-level node but the first) is never cross-faded: it is where the clip puts it (creature_clip.c)
         rig.nodes.forEach((n, i) => { if (i > 0 && n.parent < 0) cur.set(pose.subarray(i * POSE, (i + 1) * POSE), i * POSE); });
       } else cur.set(pose);
@@ -409,7 +424,7 @@ export function clipPlayer(rig, { seed = 1 } = {}) {
         let dx = 0, dz = 0, n = 0;
         for (const [node, at] of contacts) {
           const a = apply(fromWorld, node, at), b = apply(world, node, at);
-          if (a[1] < 0.03 && b[1] < 0.03) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
+          if (a[1] < 0.03 && (s.cutting || b[1] < 0.03)) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
         }
         if (n) { const k = (1 - w) / n; s.lockX = dx * k; s.lockZ = dz * k; forward(rig, cur, s.ox + s.lockX, s.oz + s.lockZ, world, s.oyaw); }
       } else { s.lockX = 0; s.lockZ = 0; }

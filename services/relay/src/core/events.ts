@@ -82,13 +82,33 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
           ...(spot(d.spot) ? { spot: d.spot } : {}),
           ...(typeof d.opened === "string" && LAYOUT_RE.test(d.opened) ? { opened: d.opened } : {}),
           ...(d.closed === true ? { closed: true } : {}),
+          ...(typeof d.muted === "boolean" ? { muted: d.muted } : {}),
         }
       : undefined,
   double_tap: (d) => (num(d.x, 0, 1) && num(d.y, 0, 1) ? { x: d.x as number, y: d.y as number } : undefined),
   button: (d) => (d.id === "accept" || d.id === "reject" ? { id: d.id } : undefined),
   answer: answerShape,
   scene: sceneShape,
+  ring: ringShape,
+  rhythm: (d) =>
+    (d.state === "playing" || d.state === "paused" || d.state === "stopped") && int(d.bpm, 1, 1000)
+      ? { state: d.state, bpm: d.bpm as number, ...(typeof d.rhythm === "string" && RHYTHM_ID_RE.test(d.rhythm) ? { rhythm: d.rhythm } : {}) }
+      : undefined,
 };
+
+const RHYTHM_ID_RE = /^[a-z0-9-]{1,24}$/;
+/** Device `ring`: a scene's wheel settled: a number (value) or a choice (index, label), and the rhythm a pick chose (id). */
+function ringShape(d: Record<string, unknown>): JsonObject | undefined {
+  if (!spot(d.spot)) return undefined;
+  if (num(d.value, -10000, 10000) && d.index === undefined) return { spot: d.spot, value: d.value as number };
+  if (!int(d.index, 0, 31)) return undefined;
+  return {
+    spot: d.spot,
+    index: d.index as number,
+    ...(typeof d.label === "string" && /^[\x20-\x7e]{1,24}$/.test(d.label) ? { label: d.label } : {}),
+    ...(typeof d.id === "string" && RHYTHM_ID_RE.test(d.id) ? { id: d.id } : {}),
+  };
+}
 
 /** A scene spot's id, as the package names it (the firmware's PKG_STR_MAX). */
 const SPOT_RE = /^[\w.:-]{1,40}$/;
@@ -99,7 +119,7 @@ export const SCENE_EVENT = "scene";
 
 /** Device `scene`: what is up now is a package and a layout, or neither; anything else is dropped. A bad spot goes, the event stays. */
 function sceneShape(d: Record<string, unknown>): JsonObject | undefined {
-  if (d.why !== "open" && d.why !== "back" && d.why !== "end") return undefined;
+  if (d.why !== "open" && d.why !== "back" && d.why !== "end" && d.why !== "close") return undefined;
   if (d.pkg === undefined && d.layout === undefined) return { why: d.why };
   if (typeof d.pkg !== "string" || !PKG_ID_RE.test(d.pkg) || typeof d.layout !== "string" || !LAYOUT_RE.test(d.layout)) return undefined;
   return { why: d.why, pkg: d.pkg, layout: d.layout, ...(spot(d.spot) ? { spot: d.spot } : {}) };
@@ -202,8 +222,9 @@ export const INBOX_ONLY_EVENTS: readonly string[] = [SCENE_EVENT];
 /** Every type an agent can receive and filter on (webhook `events`): device events + the relay's own, less the inbox-only ones. */
 export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES).filter((t) => !INBOX_ONLY_EVENTS.includes(t)), UTTERANCE_EVENT, PARTIAL_EVENT, DRAFT_USED_EVENT, DRAFT_DROPPED_EVENT, CREATURE_EVENT, DND_EVENT];
 
-/** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer. Pull and ride-along carry them. */
-export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT];
+/** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer (a wheel turned, a
+ *  rhythm stopped: the human acts on Molty itself). Pull and ride-along carry them. */
+export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT, "ring", "rhythm"];
 
 /** What a webhook without `events` receives. */
 export const DEFAULT_WEBHOOK_EVENTS = AGENT_EVENT_TYPES.filter((t) => !OPT_IN_EVENTS.includes(t));
@@ -226,6 +247,8 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   double_tap: { id: "e9", type: "double_tap", ts: 0, data: { x: 0.5, y: 0.5 } },
   button: { id: "e3", type: "button", ts: 0, data: { id: "accept" } },
   answer: { id: "e4", type: "answer", ts: 0, data: { job: "molty-xxxxxxxxxx.j_sample00", index: 0, label: "yes" } },
+  ring: { id: "e12", type: "ring", ts: 0, data: { spot: "tempo", value: 112 } },
+  rhythm: { id: "e13", type: "rhythm", ts: 0, data: { state: "paused", rhythm: "chacarera", bpm: 104 } },
   [UTTERANCE_EVENT]: {
     id: "e5",
     type: UTTERANCE_EVENT,
@@ -300,8 +323,14 @@ export function eventSentence(ev: AgentEvent): string {
     case DRAFT_DROPPED_EVENT:
       return `Your draft opener was dropped (${String(d.reason ?? "")}): answer the utterance as usual`;
     case "tap":
-      return "Molty's screen was tapped";
+      return typeof d.muted === "boolean" ? `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} on Molty's rhythm` : "Molty's screen was tapped";
+    case "ring":
+      if (d.spot === "region") return `The human is browsing ${String(d.label)} on Molty's wheel`;
+      return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it waits, stopped, for a tap in the middle` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
+    case "rhythm":
+      return d.state === "stopped" ? "The human stopped the rhythm on Molty and left it" : d.state === "paused" ? "The human stopped the rhythm on Molty: it waits on the clock, choosing" : `The human started ${String(d.rhythm ?? "the rhythm")} on Molty`;
     case SCENE_EVENT:
+      if (d.why === "close") return d.layout ? `The human closed a screen on Molty: ${d.layout} of ${d.pkg} is up now` : "The human closed Molty's screen: the creature is back, your screen is gone";
       if (!d.layout) return "Molty's scene ended: the creature is back";
       if (d.why === "open") return `Molty opened ${d.layout} of ${d.pkg}${d.spot ? ` (the human tapped ${d.spot})` : ""}`;
       return d.why === "back" ? `Molty went back to ${d.layout} of ${d.pkg}` : `Molty's scene ended: ${d.layout} of ${d.pkg} is up now`;

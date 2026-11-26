@@ -3,17 +3,15 @@
  *
  * Device port of device/creatures/fluid.html. One per-cell fluid (fluid_sim.h)
  * fills the round panel as braille dots; states are targets it flows toward:
- * creature (the .molty, home: boot lands here), blob (stands in while no creature is
- * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
- * ("autoplay", on request only). At power on the boot screen comes first: "molty.uno"
- * condenses out of the fluid, then the firmware default's creature paddles until the link is
- * up and dissolves into the chosen one (fluid_director.h "boot screen"). What is shown
+ * creature (the .molty, home: boot lands here), text (speed reader), a scene. Every change
+ * of picture is the one dissolve (fluid_draw.c, fluid_morph_t). At power on the boot screen
+ * comes first: "molty.uno" gathers on the empty glass, then dissolves into the creature once
+ * it is made; the word stands in while none is (fluid_director.h "boot screen"). What is shown
  * when (the same-state guard, idle mood flashes, sleep, the reader's return) is
  * fluid_director.h. Touch → ripple, IMU tilt → slosh.
  *
  * State via GET/POST /api/creature/state when "fluid" is active:
- *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
- *               |"effect:wave"|"autoplay",
+ *   POST {state: "creature"|"text" (any other is refused: ESP_ERR_INVALID_ARG),
  *         ring_color: "#rrggbb"|"accent" (the listening ring's default colour, kept in NVS;
  *               GET reports it the same way),
  *         listen_ms: 0 (unlimited) | 5000..30000 (the listen window an agent gets when it
@@ -42,7 +40,7 @@
  *         mood: idle|listening|thinking|speaking|happy|sleepy|surprised (alone: shows the creature),
  *         hold_s: 0..3600 (with mood: seconds before idle; 0 = until the next mood;
  *                 absent: happy / surprised revert after a few s, the rest persist)}
- *   Re-requesting the shown state changes nothing; autoplay is never persisted.
+ *   Re-requesting the shown state changes nothing. GET's state: "creature"|"text"|"scene".
  *   GET adds read-only fps, frame_ms, sim_ms, draw_ms, flush_ms, word, energy, asleep,
  *   indicator ("ok"|"wifi"|"relay"|"auth"), ...
  * POST /api/reader/text and /api/reader/append feed the speed reader.
@@ -129,7 +127,8 @@ void mole_fluid_event(mole_fluid_event_t ev);
  *  or a listen. It also goes off by itself a while after the creature fell asleep (screen_nap.h:
  *  the settings screen_off_battery_s / screen_off_usb_s); such a nap ends for those, for a
  *  pick-up and for anything the agent shows, the creature awake. An on by hand starts that
- *  timer again. Safe from any task; a no-op before init. */
+ *  timer again. Going off, the picture first dissolves to an empty glass (~0.85 s, fluid_draw.c MP_DARK); coming on,
+ *  it gathers from it (~0.65 s, from MP_BORN0). Safe from any task; a no-op before init. */
 void mole_fluid_screen(bool on);
 /** The screen is on (true before init). */
 bool mole_fluid_screen_on(void);
@@ -154,11 +153,14 @@ void mole_fluid_utc(double unix_s);
 double mole_fluid_utc_now(void);
 /** Do not disturb is on (power.c): no falling star while the creature sleeps then. Any task. */
 void mole_fluid_dnd(bool on);
-/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, "bye!" condenses, melts
- *  into a pond and the panel fades to black; then mole_fluid_goodbye_done. From here the
- *  screen stays on and every request is ignored. Safe from any task. */
+/** Power off's goodbye (fluid_director.h "fd_bye"): the screen on, the picture dissolves into "bye!", which holds, then
+ *  dissolves to an empty glass (about 2.5 s in all); then mole_fluid_goodbye_done. From here the screen stays on and
+ *  every request is ignored. Safe from any task. */
 void mole_fluid_goodbye(void);
 bool mole_fluid_goodbye_done(void);
+/** Before a restart the firmware chose (an update, /api/reboot): the picture dissolves to an empty glass. Waits for it
+ *  at most max_ms (a task's, never the screen's): true once the glass is empty (or the screen is off / not up). */
+bool mole_fluid_dark(uint32_t max_ms);
 
 /** The link's health as an FD_STATUS_* code (fluid_director.h): a small mark at the
  *  screen's edge, never a state change. One caller (sense.c). */
@@ -240,6 +242,23 @@ void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t
  *  Any one task. */
 typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
 bool mole_fluid_scene_event(mole_scene_evt_t *out);
+/** A press at panel pixel (px, py) is a scene's wheel's (scene_player.h: the dial up, from its r0 out: 1), its centre's
+ *  (2), on a beat's dot (3, while it plays) or on the region's label above a pick (4); 0: none. sense.c asks first: such a press is the fluid task's alone (it turns the wheel,
+ *  plays or stops the beat, mutes the drum), never a spot or a `tap`. Any task. */
+int mole_fluid_zone(int px, int py);
+/** A skill's scene shows (any task). mole_fluid_scene_close: close it whole, the creature back (the reject button,
+ *  sense.c; the fluid task does it at its next frame, a `scene` event why "close"). mole_fluid_take_closed: holds on
+ *  the glass that closed a scene since the last call (a touch buzz each, sense.c). */
+bool mole_fluid_scene_up(void);
+void mole_fluid_scene_close(void);
+int  mole_fluid_take_closed(void);
+/** Clicks of a scene's wheel since the last call (sense.c ticks the motor for them, haptic_wheel_due), and its dial's
+ *  tick: *ms, *strength (0: haptic_plan.h HAPTIC_WHEEL_*). */
+int mole_fluid_take_ticks(int *ms, int *strength);
+/** A wheel settled (the finger left it, or a choice was made): evt `ring` (link_protocol.h link_evt_ring_frame). index
+ *  -1: a number (value); id: the beat player's rhythm a pick chose. False: none since the last call. */
+typedef struct { char spot[41], label[25], id[25]; double value; int index; } mole_ring_evt_t;
+bool mole_fluid_ring_event(mole_ring_evt_t *out);
 /* how many of the sim's hot fields sit in internal RAM (the last frame's count) */
 int mole_fluid_internal_fields(void);
 

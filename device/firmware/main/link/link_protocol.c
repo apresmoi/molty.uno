@@ -97,7 +97,7 @@ cJSON *link_forget_frame(void) { return frame("forget"); }
 bool link_mood_map(const char *mood, const char **state)
 {
     /* Every mood is a mood of the .molty creature (fluid "creature" state, which
-     * falls back to the blob when no creature is loaded); names match CUTE_MOOD_NAMES. */
+     * shows the boot word while no creature is loaded); names match CUTE_MOOD_NAMES. */
     static const struct { const char *mood, *state; } map[] = {
         {"idle", "creature"}, {"listening", "creature"}, {"thinking", "creature"},
         {"speaking", "creature"}, {"happy", "creature"}, {"sleepy", "creature"},
@@ -309,6 +309,29 @@ cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why
     return j;
 }
 
+cJSON *link_evt_ring_frame(const char *spot, double value, int index, const char *label, const char *id)
+{
+    cJSON *data, *j = evt("ring", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "spot", spot);
+        if (index < 0) cJSON_AddNumberToObject(data, "value", round(value * 1000) / 1000);
+        else { cJSON_AddNumberToObject(data, "index", index); if (label && label[0]) cJSON_AddStringToObject(data, "label", label); }
+        if (id && id[0]) cJSON_AddStringToObject(data, "id", id);
+    }
+    return j;
+}
+
+cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm)
+{
+    cJSON *data, *j = evt("rhythm", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "state", state);
+        if (rhythm && rhythm[0]) cJSON_AddStringToObject(data, "rhythm", rhythm);
+        cJSON_AddNumberToObject(data, "bpm", bpm);
+    }
+    return j;
+}
+
 cJSON *link_evt_tap_frame(double x, double y)
 {
     cJSON *data, *j = evt("tap", &data);
@@ -353,8 +376,7 @@ char *link_restore_body(const char *saved_state_json)
     cJSON *saved = saved_state_json ? cJSON_Parse(saved_state_json) : NULL;
     const cJSON *st = cJSON_GetObjectItemCaseSensitive(saved, "state");
     const char *name = cJSON_IsString(st) ? st->valuestring : "creature";
-    if (!strcmp(name, "text") || !strcmp(name, "autoplay") ||
-        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved, "autoplay"))) name = "creature";
+    if (strcmp(name, "scene")) name = "creature";   /* (text, and the states before the demo ones went, are the creature) */
     cJSON *j = cJSON_CreateObject();
     char *body = NULL;
     if (j && cJSON_AddStringToObject(j, "state", name)) body = cJSON_PrintUnformatted(j);

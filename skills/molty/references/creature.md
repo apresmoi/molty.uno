@@ -30,5 +30,6 @@ looks like on it. The relay hands that to you:
 - **The cat comes when called.** A tap on the screen or a shake brings it to the front, facing your
   human, by itself (a shake jostles it first). You need do nothing for it.
 - **While you think or work, Molty animates itself** with the animal's own small glances, ear
-  flicks and blinks. Never send gestures to fill the wait.
+  flicks and blinks. Never send gestures to fill the wait. Left alone, the cat now and then
+  grooms itself (its face, its flank, a leg up); whatever you send stops it at once.
 - Sparingly, as ever ([etiquette.md](etiquette.md#emotes)): a move answers a moment.

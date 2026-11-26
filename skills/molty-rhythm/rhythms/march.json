@@ -1,0 +1,36 @@
+{
+  "id": "march",
+  "name": "March, two four",
+  "label": "MARCH",
+  "status": "verified",
+  "region": "basics",
+  "country": "Europe",
+  "steps": 4,
+  "tempo": {
+    "bpm": 112,
+    "per": 2,
+    "range": [108, 120]
+  },
+  "beats": [1, 3],
+  "layers": {
+    "bass": {
+      "name": "Bass drum on each step",
+      "sound": "low",
+      "hits": [1, 3],
+      "accent": [1]
+    }
+  },
+  "source": "Soundbrenner march rhythm (2/4, bass drum on the beats, beat 1 strongest, 108 to 120 bpm); Wikipedia March (music) (first beat stressed, bass drum on the downbeats, about 120 bpm); pulse only",
+  "sources": [
+    {
+      "title": "Soundbrenner: march rhythm",
+      "url": "https://www.soundbrenner.com/blogs/articles/march-rhythm",
+      "shows": "Usually 2/4; bass drum on 1 2; beat 1 strongest; parade marches about 108 to 120 bpm"
+    },
+    {
+      "title": "Wikipedia: March (music)",
+      "url": "https://en.wikipedia.org/wiki/March_(music)",
+      "shows": "Common meters 4/4, 2/2, 6/8; first beat stressed; bass drum on downbeats; modern march about 120 bpm"
+    }
+  ]
+}

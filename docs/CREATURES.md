@@ -25,7 +25,7 @@ What ships, all three built into the firmware:
 |---|---|---|---|---|
 | duck | 1.0.0 | channel layers (sections 1 to 8) | a body the fluid flows toward | none |
 | octopus | 1.0.0 | channel layers | a body the fluid flows toward | none |
-| cat | 2.2.0 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` |
+| cat | 2.3.2 | a Blender rig with baked clips and a life block (section 12) | crisp dots, straight on the panel's lattice | `eat`, `yarn`, `walk`, `shaken` (and its own habits: `groom`, `wash_l`, `wash_r`, `leg_up`) |
 
 The motion model of the channel creatures is the one the creature lab's animals were written in: a shared pose from the
 mood engine and the gestures, then the creature's own layers on top. Every line of that code became a channel; nothing
@@ -269,7 +269,7 @@ Compared over the full reels (every scene, mood and gesture) against the approve
 ## 12. Rigged creatures (clips, routes, dots)
 
 A creature package may carry a **rig** instead of channel layers: a skeleton, its body as rounded primitives per bone, baked
-clips, and the route map between its poses. The cat (2.2.0) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
+clips, and the route map between its poses. The cat (2.3.2) is the first: modelled, rigged and animated in Blender, every clip baked, with an authored transition between every pair of resting poses. Its source is the folder `moltys/cat/`, and [The Molty format](CREATURE.md) is how one is made. Its channel layers stay empty; `gestures` and `moods` only declare what it plays (and their
 lengths for the mood engine), so agents and the console see the same names as for any creature. It has its own reference player in JavaScript and a
 C port on the device.
 
@@ -304,6 +304,24 @@ per output component.
   0.008 (other quaternions), 0.02 (the int8 tail, ears and face), 0.02 (scale; 0.05 for eyelids and mouth) of every
   sample; each channel takes LINEAR or CUBICSPLINE, whichever is smaller.
 
+**Packed clips** (`"v": "molty-pkg/2"`). A clip may hold `pk` instead of `ch`: the same channels, the same keys and the same
+integers, written as one base64 string of bits (least significant first in each byte), so it plays exactly as its plain
+form (the clip test plays every frame of every clip both ways and wants the same world matrices, bit for bit). It is how
+the Molty tools write every rig: the cat 2.2.0's channels take 130 KB instead of 227 KB.
+
+```
+clip      count of channels (16 bits), then each channel
+channel   node (8), path (2: t r s), interp (2: S L C), one byte a value (1: the int8 rotations), keys n (16)
+          keys: the first (16), then if n > 1 a width w (5) and the n - 1 steps less one (w bits each)
+          each value component (3 for t and s, 4 for r; three times that for C): the first (16, or 8, two's complement),
+          then if n > 1 a width w (5) and the n - 1 steps (w bits each, zigzag: 0, -1, 1, -2, ...)
+```
+
+A series costs the bits of its largest step, and a turn moves little from one key to the next. `device/creatures/js/clip-pack.js`
+writes and reads it (the JS player's decoder; the C one is `creature_clip.c` `unpack_clip`). A package with packed clips says
+`"v": "molty-pkg/2"`: firmware before it refuses the file at install ("package: v", answered as `bad_package`), so it is never
+stored, and never fails at a boot. A plain clip (`ch`) still plays, in either version.
+
 **Shape** `{ k, b, g, c, p, ... }`: `k` the kind, `b` the node, `g` the outline group, `c` a palette name, `p` its centre:
 - `blob` (`q`, `r` radii, `st` stiffness): one element of the merged body: a metaball field st (1 - q)^3, threshold 0.6
   (Blender's), so the back, rump and legs are one smooth shape in every pose;
@@ -331,15 +349,22 @@ chains: { gesture: { first: [clip], then: [clip], rounds: [min, max], last: [cli
   **light paw lock** holds the paws that were on the floor where they were, fading out with the blend.
 - Every ordered pair of resting families has its own authored clip, and so do sitting and standing into and out of the walk
   (the cat: sit, stand, loaf, crouch, walk; 16 clips); from the loaf or the crouch the walk is two authored hops (it stands up
-  first). A crossfade only ever joins clips of the same family (a mood to a mood while sitting, a transition into its loop).
+  first). A habit's own pose (the cat's paw raised, its leg up) has ways only to and from sitting, so from anywhere else it
+  is two hops. A crossfade only ever joins clips of the same family (a mood to a mood while sitting, a transition into its loop).
 - A loop in `sync` (the walk) is joined at the phase that best matches the pose on screen and left only on a stride
   boundary, so a stepping paw is never cut.
 - A gesture or mood name the package lacks is refused (`unknown_gesture`), as for channel creatures.
 - **Chains.** A gesture in `chains` plays one clip of `first`, then `rounds` (a count drawn between min and max) clips of
   `then`, never the same one twice running, then one of `last`; then it routes back to its mood as any gesture does. Each
   pick is a draw from the creature's seed (`cc_seed`: the same seed as the life's), so the same seed plays the same game
-  and two boots differ. A chain's clips join without a crossfade: the tools check that each starts in the pose the one
-  before ends in (the body, and each prop where it was from the root).
+  and two boots differ. After the first, a pick is only among the clips that start in the family the clip before ends in
+  (none of `then`: on to `last`; none of `last`: the chain is over), so a chain may walk between families: a paw raised,
+  the other paw. The first is reached by routing, as any gesture's clip is. A chain's clips join without a crossfade: the
+  tools check that each that can follow another starts in the pose that one ends in (the body, and each prop where it was
+  from the root).
+- **Cut short** (`cc_stop`: a habit when someone comes, "Moments" below): the gesture and its chain end now and the player
+  goes home to its mood as a call does: a clip of one family (a lick with the paw up) crossfades into the authored way back
+  (paw down), a way between families with more than 1.2 s to go likewise, a shorter one finishes first. A call is left alone.
 - **The heading carries** between clips as the place does: a clip that turns its root about up (a turn on its feet)
   leaves the creature facing that way, and the next clip, whatever it is, starts from there (`oyaw`, turning the root and
   the props about up through the origin before `ox, oz`). No clip before the cat 2.2.0 turns its root, so they play as
@@ -355,8 +380,9 @@ The cat's clips, by what they are for:
 | moods | `idle`, `listening`, `thinking`, `speaking`, `happy` (sitting), `sleepy` (the loaf), `surprised` (standing, arched) |
 | shared gestures | `wiggle`, `nod`, `shake_head`, `bounce`, `peek` (also `inspect`), `glance_left`, `glance_right`, `blink`, `wobble`, `stretch`, `look_up`, `yawn`, `paddle` |
 | its own gestures | `eat` (a chain: the bowl comes in `eat_left` or `eat_right`, then `eat_dish`), `yarn` (a chain: `yarn_in`, 1 to 4 of `yarn_bat_l` and `yarn_bat_r`, then `yarn_away`), `walk` (held 6 s), `shaken` (3.4 s) |
-| resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk` |
-| transitions | 16 edges: every ordered pair of sit, stand, loaf and crouch, plus sit and stand into and out of the walk |
+| its habits (moments only) | `groom` (3 to 8 of the licks `groom_lick(2)_l/_r`, wipes `groom_wipe(2)_l/_r` and the switches `paw_l_to_paw_r`, `paw_r_to_paw_l`, a paw raised), `wash_l`, `wash_r` (one side a session: 2 to 4 of `wash_chest_x`, `wash_shoulder_x`, `wash_flank_x`; for the flank it steps round a little to show it), `leg_up` (2 to 4 of `legup_lick`, `legup_lick2`, `legup_blep`, the leg up); its moment: every 40 to 90 s one of groom 3, wash_l 1, wash_r 1, leg_up 2, stretch 1, yawn 0.5, glance_left, glance_right, look_up 1 |
+| resting loops | `idle` (sit), `stand_idle`, `loaf_idle`, `crouch_idle`, `walk`; its habits' poses `paw_l_idle`, `paw_r_idle`, `legup_idle` |
+| transitions | 24 edges: every ordered pair of sit, stand, loaf and crouch, sit and stand into and out of the walk, and sit into and out of each habit's pose (`sit_to_paw_l` ... `legup_to_sit`), one paw to the other |
 
 ### Life
 
@@ -384,6 +410,31 @@ existed (the creature test pins the duck, the octopus and the cat 2.0.0 frame fo
   multiplied; only its `nodes` (all when left out), and only channels that move. A turn layer turns its `nodes` by
   `rot` degrees a unit of `by` (as a bone's turn) and stretches them by `sq` a unit (up, thinner across). The clips'
   own pose stays apart, so a crossfade never starts from a layered pose.
+
+### Moments
+
+A Molty's habits: gestures it plays by itself now and then, while it is idle and left alone.
+
+```jsonc
+"life": { ..., "moments": [ { "every": [40, 90], "pick": [["groom", 3], ["wash", 2], ["stretch", 1]] } ] }
+```
+
+Each moment waits a time drawn from `every` (seconds), then plays one of its picks by weight (never its last one again),
+by name among the rig's gestures (`graph.gestures`: a habit the Molty keeps to itself, which `creature.gestures` and
+`about` leave out, so agents never see it, or any other). The clock is the device's (`fluid_director.c`): the creature
+parses the list (`cc_moments`), the director keeps the time and hands one out, the player plays it (`cpk_moment`), never
+with a sound or the motor. A creature that lists moments lives its own idle life: the director's library of small actions
+(glances, a blink, a wobble) stops for it; the yawn before dozing off and the happy flash after a good conversation stay.
+
+- **When.** A clock counts only while the library could play (the creature on screen in the idle mood, nothing owning
+  the screen: no question, listen, say, scene, agent mood, working, flash or sleep; idle life not off) and the creature
+  plays nothing else (`cc_free`: no gesture, call, way between poses or walk). One moment at a time; the others wait on.
+- **The owner's setting.** `idle_life` lively: the wait as written; calm: twice as long; off: never.
+- **Cut short.** A touch, a shake, any agent command (a mood, a gesture, a say, a scene) or anything taking the screen
+  stops the habit at once (`cc_stop`, above), and every clock waits again, at least 10 s (`moment_rest_s`).
+- **Randomness**: the director's seed draws the waits and the picks, the creature's seed the chain inside a habit, so the
+  same seeds play the same schedule (the director test) and two boots differ.
+- Old firmware refuses `moments` ("creature: life"); the format version (`molty-pkg/2`) stops it at install first.
 
 ### Drawing (the device's look)
 
@@ -498,11 +549,12 @@ is about 2 us a frame on a computer (about 0.2 ms on the device) plus its merge,
 
 | | limit | the cat |
 |---|---|---|
-| file (rigged) | 256 KB | 255 KB |
-| nodes, shapes, clips | 80, 128, 64 | 43 (2 of them props), 109, 54 (4 of them pose clips for its life, 7 links of its eat and yarn chains) |
-| families, edges, gestures, chains | 8, 64, 32, 4 (8 clips a step) | 5, 16, 18, 2 |
-| channels (all clips) | | 2046 (1368 LINEAR, 678 STEP, no CUBICSPLINE) |
+| file (rigged) | 256 KB | 212 KB (its clips packed; 2.2.1 with 54 clips was 158 KB) |
+| nodes, shapes, clips | 80, 128, 96 | 43 (2 of them props), 109, 82 (4 of them pose clips for its life, 7 links of its eat and yarn chains, 28 of its habits) |
+| families, edges, gestures, chains | 8, 64, 32, 8 (16 clips a step) | 8, 24, 22 (4 habits), 6 |
+| channels (all clips) | | 3207 (1885 LINEAR, 1322 STEP, no CUBICSPLINE) |
 | life: channels, events, layers; engine steps a frame | 256, 16, 16 (8 played a frame); 600 | 16, 3, 6; 44 |
+| moments, picks each | 16, 16 | 1, 9 |
 
 Per frame on the device: sampling (a binary search and a Hermite per channel, ~100 channels) and FK of ~50 nodes are a few
 µs; the dots are the cost: the field and parts over the creature's box, then a hash per dot for the world.
@@ -520,7 +572,7 @@ steps, six layers over about 40 channels) adds about 0.15 ms a frame by the same
 | The creature packages and their build scripts | `packages/duck/`, `packages/cat/`, `packages/octopus/` |
 | The cat's Blender sources | `moltys/cat/` (`cat.blend`, exported by `tools/blender/molty_export.py`) |
 | The shared kit and the player tests | `tools/creatures/` |
-| Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js`, `clip-dots.js` |
+| Reference players (JavaScript) | `device/creatures/js/creature-player.js`, `clip-player.js` (its clips packed by `clip-pack.js`), `clip-dots.js` |
 | Players on the device (C) | `device/firmware/main/creature/` |
 | Host tests and goldens | `device/firmware/test/host/` |
 | The package check | `packages/tools/format.mjs` |

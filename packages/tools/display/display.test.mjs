@@ -97,7 +97,8 @@ test('round trip: build(convert(v1)) is the v1 file for every scenes package in 
     const r = build(dir, out);
     assert.deepEqual(r.errors, [], id);
     assert.ok(readFileSync(out).equals(readFileSync(src)), `${id}: the same bytes`);
-    assert.ok(r.warnings.filter((w) => w.message.includes('TODO')).length > 10, 'convert cannot know what an input means: every about is reported until someone writes it');
+    const inputs = Object.values(JSON.parse(readFileSync(src, 'utf8')).layouts).reduce((n, l) => n + Object.keys(l.params ?? {}).length, 0);   // (the rhythm clock has none)
+    assert.ok(r.warnings.filter((w) => w.message.includes('TODO')).length >= Math.min(inputs, 11), 'convert cannot know what an input means: every about is reported until someone writes it');
   }
   assert.throws(() => convert(join(ROOT, 'packages/duck/duck.json'), fresh()), /creature package/);
 });
@@ -288,6 +289,22 @@ test('a tap zone as a wedge of a ring, and a tap that opens another screen', () 
   convert(folder({ 'demo.json': r.bytes }) + '/demo.json', dir);
   assert.deepEqual(build(dir, out).errors, []);
   assert.deepEqual(JSON.parse(readFileSync(out, 'utf8')), r.pkg);
+});
+
+test("a beat clock, a wheel and a centre: the device's own pieces, a list wheel reading each element's label", () => {
+  const r = checked((d) => {
+    one(d).inputs.signs = { type: 'list', max: 12, about: 'The signs.', of: { label: { type: 'text', about: 'Its name.' } }, example: [{ label: 'ARIES' }] };
+    one(d).draw.push({ beat_clock: { radius: 0.672 } }, { wheel: { id: 'sign', step: 30, labels: '{{ signs }}' } }, { wheel: { id: 'tempo', sets: 'tempo', step: 12, by: 2, min: 40, max: 220, value: 100, face: 1, tick_ms: 22, tick: 80 } }, { centre_tap: { radius: 0.26 } });
+  });
+  assert.deepEqual([r.errors, r.warnings], [[], []]);
+  assert.deepEqual(r.pkg.layouts.one.items.slice(-4), [{ k: 'beat', r: 0.672 }, { k: 'dial', id: 'sign', step: 30, labels: '$signs' }, { k: 'dial', id: 'tempo', sets: 'tempo', step: 12, by: 2, min: 40, max: 220, value: 100, face: 1, tick_ms: 22, tick: 80 }, { k: 'centre', r: 0.26 }]);
+  catches({
+    'sets must be one of: tempo, pick': (d) => one(d).draw.push({ wheel: { id: 'x', sets: 'volume' } }),
+    'must be a list input': (d) => one(d).draw.push({ wheel: { id: 'x', labels: 'ARIES' } }),
+  });
+  assert.ok(checked((d) => one(d).draw.push({ beat_clock: { radius: 0.6 } }, { beat_clock: { radius: 0.5 } })).errors.some((e) => /one beat/.test(e.message)), 'one beat a screen');
+  assert.ok(checked((d) => one(d).draw.push({ centre_tap: { radius: 0.26 } })).errors.some((e) => /centre plays and stops a beat/.test(e.message)), 'a centre needs a beat');
+  assert.ok(checked((d) => one(d).draw.push({ beat_clock: { radius: 0.6 } }, { wheel: { id: 'x', tick: 10 } })).errors.length, 'a tick under 25 percent does not turn the motor');
 });
 
 test('the astrology chart: a tap on a sign opens its close-up with what the skill itself would send', () => {

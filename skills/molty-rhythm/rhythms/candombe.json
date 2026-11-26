@@ -1,0 +1,51 @@
+{
+  "id": "candombe",
+  "name": "Candombe",
+  "label": "CANDOMBE",
+  "status": "verified",
+  "region": "south-america",
+  "country": "Uruguay",
+  "steps": 16,
+  "tempo": {
+    "bpm": 120,
+    "per": 4,
+    "range": [110, 150]
+  },
+  "beats": [1, 5, 9, 13],
+  "layers": {
+    "chico": {
+      "name": "Chico, hand and stick",
+      "sound": "head",
+      "hits": [2, 3, 4, 6, 7, 8, 10, 11, 12, 14, 15, 16],
+      "accent": [2, 6, 10, 14]
+    },
+    "madera": {
+      "name": "Madera, stick on the shell",
+      "sound": "rim",
+      "hits": [1, 4, 7, 11, 13]
+    }
+  },
+  "source": "chico: Wikipedia Tambores de candombe and Paredes (UNCuyo) 2025 fig. 15 after Ferreira; madera: Rocamora (UdelaR) 3+3+4+2+4 and Gonzalez 2023 score; tempo range Rocamora",
+  "sources": [
+    {
+      "title": "Wikipedia (es), Tambores de candombe: Chico",
+      "url": "https://es.wikipedia.org/wiki/Tambores_de_candombe",
+      "shows": "Chico de 2: each quarter split in four, 's M p p': a sixteenth rest, an accented semi-open hand stroke, two stick strokes"
+    },
+    {
+      "title": "Paredes, tesina (UNCuyo 2025), fig. 15 and 18 after Luis Ferreira",
+      "url": "https://25.bdigital.uncu.edu.ar/objetos_digitales/21695/paredes-juan-pablo-tesina.pdf",
+      "shows": "Chico: sixteenth rest, open stroke, stick, stick on every beat. Repique madera bar: sixteenths 1, 4, 7, 11, 13 and 16 (the last read here as a pickup, left out)"
+    },
+    {
+      "title": "Martin Rocamora, PhD thesis page on candombe (FING, UdelaR)",
+      "url": "https://iie.fing.edu.uy/~rocamora/phdthesis/candombe.html",
+      "shows": "The clave divides the 16-pulse cycle 3+3+4+2+4 (sixteenths 1, 4, 7, 11, 13); the chico's beat is felt at about 110 to 150 BPM"
+    },
+    {
+      "title": "Anibal Gonzalez, Patron de acompanamiento de candombe (agswingmusica 2023)",
+      "url": "https://gazelle-manatee-sd5n.squarespace.com/s/tutorial-tambores-base-Partitura-completa.pdf",
+      "shows": "Madera/clave staff: dotted eighth, sixteenth, rest, eighth, rest, eighth, eighth, rest (sixteenths 1, 4, 7, 11, 13)"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "id": "dembow",
+  "name": "Dembow",
+  "label": "DEMBOW",
+  "status": "verified",
+  "region": "caribbean",
+  "country": "Puerto Rico",
+  "steps": 16,
+  "tempo": {
+    "bpm": 92,
+    "per": 4,
+    "range": [85, 100]
+  },
+  "beats": [1, 5, 9, 13],
+  "layers": {
+    "kick": {
+      "name": "The kick, four on the floor",
+      "sound": "low",
+      "hits": [1, 5, 9, 13]
+    },
+    "snare": {
+      "name": "The snare, the tresillo bounce",
+      "sound": "snare",
+      "hits": [4, 7, 12, 15]
+    }
+  },
+  "source": "MusicRadar, Beat building: reggaeton (snares on 4/16 7/16 12/16 15/16, 85-100 bpm); Orphiq, Dembow rhythm explained",
+  "sources": [
+    {
+      "title": "MusicRadar, Beat Building: how to make a reggaeton beat",
+      "url": "https://www.musicradar.com/news/beat-building-how-to-produce-a-reggaeton-beat",
+      "shows": "kick on all four quarter notes; key snares on 4/16, 7/16, 12/16 and 15/16; tempos typically 85-100 bpm"
+    },
+    {
+      "title": "Orphiq, Dembow Rhythm Explained",
+      "url": "https://orphiq.com/resources/what-is-dembow",
+      "shows": "kick on beats 1, 2, 3, 4; snare or rimshot on the last sixteenth of beats 1 and 3 and the 'and' of beats 2 and 4"
+    },
+    {
+      "title": "UJAM, How to make a dembow groove",
+      "url": "https://www.ujam.com/tutorials/how-to-make-a-dembow-groove/",
+      "shows": "text grid 'boom - - chick boom - chick -' (half a bar: hits on 1, 4, 5, 7 of 8 sixteenths)"
+    }
+  ]
+}

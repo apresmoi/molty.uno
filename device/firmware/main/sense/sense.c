@@ -19,6 +19,12 @@
  * a click (pressed and let go) switches the screen, a double click do not disturb, held
  * 1.5 s it says goodbye and powers off (power_off); or hold: held to talk; pairing
  * and a pending question always come first). A talk names its input on the shake event. A shake's phantom taps are dropped (gesture_tap_guarded).
+ * A press on a scene's wheel, its centre or a beat's dot (mole_fluid_zone) is the fluid task's alone: no spot, no tap
+ * event; the centre and a dot buzz as a tap that does something, the wheel ticks once a click with its own firmer
+ * tick (mole_fluid_take_ticks, haptic_wheel: at most one every HAPTIC_WHEEL_GAP_MS, so a fast turn feels fewer ticks
+ * than it makes). It sends a `ring` event once it settles. While a skill's scene shows the reject button closes it
+ * (mole_fluid_scene_close), whatever it is bound to; with a rhythm on it the accept button plays and stops it (as the
+ * centre does). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
  * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
  * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
  * tap, a drag), never a physical button (it clicks by itself).
@@ -43,6 +49,7 @@
 #include "pkg_parse.h"
 #include "screen_nap.h"
 #include "haptic.h"
+#include "rhythm.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -80,6 +87,9 @@ void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
         int w = molty_display_width(), h = molty_display_height();
         /* a pending question takes the tap as its answer: no `tap` event for it */
         if (link_ask_tap((float)xs[0] + 0.5f - w * 0.5f, (float)ys[0] + 0.5f - h * 0.5f)) { down = true; return; }
+        /* a scene's wheel, its centre, a beat's dot: the fluid task's (it turns, plays and stops, mutes), never a spot or a tap */
+        const int zone = link_audio_listening(NULL) ? 0 : mole_fluid_zone(xs[0], ys[0]);
+        if (zone) { if (zone != 1) acted(); down = true; return; }
         uint32_t x = w > 1 ? (uint32_t)xs[0] * 65535u / (uint32_t)(w - 1) : 0;
         uint32_t y = h > 1 ? (uint32_t)ys[0] * 65535u / (uint32_t)(h - 1) : 0;
         atomic_store(&s_tap_xy, (x > 65535u ? 65535u : x) << 16 | (y > 65535u ? 65535u : y));
@@ -207,8 +217,17 @@ static void sense_task(void *arg)
             }
         }
 
+        /* a skill's scene shows: the reject button closes it (the creature comes back), whatever it is bound to; with a
+         * rhythm on it the accept button plays and stops it (as the centre does). Never a buzz: a button clicks by itself */
+        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && rhythm_active();
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
+            if (up && (b == MOLTY_BTN_REJECT || beat)) {
+                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
+                presser[b].pending = false; gesture_switch_reset(&sw[b]); sw[b].down = on;
+                prev[b] = on;
+                continue;
+            }
             const bool screen = gesture_binds_get(mole_fluid_gestures(), b == MOLTY_BTN_ACCEPT ? GESTURE_IN_BUTTON_ACCEPT
                                                   : GESTURE_IN_BUTTON_REJECT) == GESTURE_DO_SCREEN && !link_ask_pending();
             const gesture_sw_t click = gesture_switch_feed(&sw[b], on, now);
@@ -244,6 +263,16 @@ static void sense_task(void *arg)
         if (spot && !pairing) spot_do(spot, now, &tap_l);
         mole_scene_evt_t sv;                            /* the screen changed on the device itself: the relay hears what is up */
         if (mole_fluid_scene_event(&sv)) emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
+        if (mole_fluid_take_closed()) acted();         /* a hold on the glass closed a scene: the touch buzz */
+        {   /* a wheel's clicks: its own tick (haptic_plan.h HAPTIC_WHEEL_*, or the dial's), one at most every 60 ms */
+            static uint32_t tick_at;
+            int ms, strength;
+            if (mole_fluid_take_ticks(&ms, &strength) && haptic_wheel_due(&tick_at, (uint32_t)(esp_timer_get_time() / 1000))) haptic_wheel(ms, strength);
+        }
+        mole_ring_evt_t re;                             /* a wheel settled */
+        if (mole_fluid_ring_event(&re)) emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
+        rhythm_ev_t rv;                                 /* the beat player's own: a mute, a pause, a stop */
+        while (rhythm_take_event(&rv)) emit(rhythm_event_frame(&rv));
         xTaskDelayUntil(&wake, period);
     }
 }

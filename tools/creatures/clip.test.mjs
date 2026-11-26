@@ -38,8 +38,11 @@ for (const { id, pkg } of rigged) {
       }
       rows.push(row);
     }
-    // between resting families every pair is one authored clip; in and out of the walk at most one stop on the way (standing up first)
-    for (const a of fams) for (const b of fams) if (a !== b) assert.ok(route(g, a, b).length <= (a === 'walk' || b === 'walk' ? 2 : 1), `${a} -> ${b}: ${route(g, a, b).join(' + ')}`);
+    // between resting families every pair is one authored clip; in and out of the walk at most one stop on the way (standing up first);
+    // a habit's own pose (a paw raised, the leg up: its ways only to and from sitting) is reached through sitting
+    const moodFam = new Set(Object.values(g.moods ?? {}).map((m) => rig.clips[m]?.from)), H = new Set(fams.filter((f) => f !== 'sit' && f !== 'walk' && !moodFam.has(f)));
+    for (let changed = true; changed;) { changed = false; for (const e of Object.keys(g.edges)) { const [x, y] = e.split('>'); for (const [u, v] of [[x, y], [y, x]]) if (H.has(u) && v !== 'sit' && !H.has(v)) { H.delete(u); changed = true; } } }
+    for (const a of fams) for (const b of fams) if (a !== b) assert.ok(route(g, a, b).length <= (a === 'walk' || b === 'walk' || H.has(a) || H.has(b) ? 2 : 1), `${a} -> ${b}: ${route(g, a, b).join(' + ')}`);
     console.log(`routes (${id}):\n` + fams.map((a, i) => `  ${a.padEnd(7)} ${rows[i].map((c) => c.padEnd(15)).join(' ')}`).join('\n'));
   });
 
@@ -125,7 +128,7 @@ for (const { id, pkg } of rigged) {
       for (let i = 0; i < on.length; i++) if (on[i]) { if (pri[i] === 2) lines++; else if (pri[i] >= 3) feats++; else if (pri[i] === 0) world++; }
       assert.ok(lines > 100, `${f}: ${lines} outline dots`);
       assert.ok(world > 150, `${f}: ${world} floor and dust dots`);
-      if (f !== 'walk') assert.ok(feats > 5, `${f}: ${feats} feature dots`);
+      if (f !== 'walk' && !/^(paw_|legup)/.test(f)) assert.ok(feats > 5, `${f}: ${feats} feature dots`);   // (a habit's pose may face its paw)
     }
   });
 }

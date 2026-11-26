@@ -13,16 +13,17 @@ import { dirname, join } from 'node:path';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { clipDots } from '../../../device/creatures/js/clip-dots.js';
-import { clipPlayer } from '../../../device/creatures/js/clip-player.js';
+import { packClip, unpackClip } from '../../../device/creatures/js/clip-pack.js';
+import { clipPlayer, decodeClip } from '../../../device/creatures/js/clip-player.js';
 import { ANNOTATIONS, KEYWORDS, validate } from '../display/schema.mjs';
 import { checkPackage } from '../format.mjs';
-import { r6 } from './bake.mjs';
+import { bakeAction, r6 } from './bake.mjs';
 import { readGltf } from './body.mjs';
 import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'c3b4e1c401f386dede91a8011b89c5d206445e8433e66406acf66310339da067';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'a3918d352d778c3b641a39f2db9db9638efc1f4277c8634e05eefbf0d138a0ee';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -62,7 +63,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 261252);
+  assert.equal(bytes.length, 217253);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');
@@ -70,12 +71,12 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
 
 test('the cat: what its names wire up, with nothing said about it in molty.json', () => {
   const g = check(CAT).pkg.creature.rig.graph, clips = check(CAT).pkg.creature.rig.clips;
-  assert.deepEqual(g.rest, { sit: 'idle', stand: 'stand_idle', loaf: 'loaf_idle', crouch: 'crouch_idle', walk: 'walk' }, 'a pose rests in <pose>_idle, <pose>, or idle');
+  assert.deepEqual(g.rest, { sit: 'idle', stand: 'stand_idle', loaf: 'loaf_idle', crouch: 'crouch_idle', walk: 'walk', paw_l: 'paw_l_idle', paw_r: 'paw_r_idle', legup: 'legup_idle' }, 'a pose rests in <pose>_idle, <pose>, or idle');
   assert.deepEqual([g.edges['sit>stand'], g.edges['sit>walk'], g.edges['walk>sit'], g.edges['sit>loaf'], g.edges['loaf>sit']], ['sit_to_stand', 'walk_start', 'walk_stop', 'lie_down', 'get_up'], 'a way is <a>_to_<b>, or the one free action that goes that way');
-  assert.equal(Object.keys(g.edges).length, 16);
+  assert.equal(Object.keys(g.edges).length, 24);
   assert.deepEqual(g.enter, { surprised: { sit: 'sit_surprised', stand: 'stand_surprised' } }, '<pose>_<mood> is the way into a mood');
   assert.deepEqual([clips.bounce.from, clips.bounce.to, clips.sleepy.from, clips.surprised.to, clips.walk_stop.from], ['sit', 'crouch', 'loaf', 'stand', 'walk'], 'the pose an action starts and ends in is worked out');
-  assert.deepEqual(Object.keys(clips).filter((n) => clips[n].loop).sort(), ['crouch_idle', 'happy', 'idle', 'listening', 'loaf_idle', 'sleepy', 'speaking', 'stand_idle', 'surprised', 'thinking', 'walk'], 'moods and resting actions loop');
+  assert.deepEqual(Object.keys(clips).filter((n) => clips[n].loop).sort(), ['crouch_idle', 'happy', 'idle', 'legup_idle', 'listening', 'loaf_idle', 'paw_l_idle', 'paw_r_idle', 'sleepy', 'speaking', 'stand_idle', 'surprised', 'thinking', 'walk'], 'moods and resting actions loop');
 });
 
 test('the exporter (only where Blender 5.3 is): cat.blend still gives the committed cat.glb', { skip: !/^Blender 5\.3\./.test(spawnSync('blender', ['--version'], { encoding: 'utf8' }).stdout ?? '') && 'Blender 5.3 is not on the PATH' }, () => {
@@ -107,7 +108,7 @@ test('a second Molty from the cat, by editing only its JSON: renamed, recoloured
   doc.gestures.wiggle = { about: 'a big stretch instead of a shimmy', plays: 'stretch' };      // remapped
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));
   const miss = check(dir);
-  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:56', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
+  assert.deepEqual(miss.errors.map((e) => [e.at, e.message.slice(0, 96)]), [['molty.json:59', 'gesture inspect: there is no action named inspect. Name an action inspect, or say which one it p']], 'the name alone must find an action');
   delete doc.gestures.inspect;
   doc.gestures.lie_down = 'folds down into a loaf';                                            // a new gesture, wired by its name alone
   writeFileSync(join(dir, 'molty.json'), JSON.stringify(doc, null, 2));
@@ -185,7 +186,7 @@ test('check: a problem names molty.json, the line and the fix', () => {
     'moods needs idle': (d) => { d.moods = { happy: 'smiles' }; },
     'must be molty/2': (d) => { d.molty = 'molty/3'; },
     'must be #rrggbb in lower case': (d) => { d.colors.body = 'green'; },
-    'is one line about what it does, or { about, plays, chain, hold, lasts }': (d) => { d.gestures.hop = 5; },
+    'is one line about what it does, or { about, plays, chain, hold, lasts, habit }': (d) => { d.gestures.hop = 5; },
     'must be the name of a .glb or .gltf file in this folder, or the body written out': (d) => { d.body = 'pip.fbx'; },
     'pip.glb: does not exist': (d) => { d.body = 'pip.glb'; },
     'must be three numbers: [x, y, z]': (d) => { d.body.bones[1].at = [0, 1]; },
@@ -245,6 +246,68 @@ test('chains: a gesture strung from actions picked at random, checked to join', 
   });
 });
 
+test('chains: after the first link, a pick is among those that start in the pose the last one ended in', () => {
+  const two = (d) => {
+    d.poses = ['sit', 'tall'];
+    d.body.actions.tall_idle = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 1, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.sit_to_tall = { keys: [{ time: 0, body: { at: [0, 0.25, 0] } }, { time: 0.5, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.tall_to_sit = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 0.5, body: { at: [0, 0.25, 0] } }] };
+    d.body.actions.reach = { keys: [{ time: 0, body: { at: [0, 0.5, 0] } }, { time: 0.3, body: { at: [0, 0.55, 0] } }, { time: 0.6, body: { at: [0, 0.5, 0] } }] };
+    d.body.actions.hop2 = structuredClone(d.body.actions.hop);
+    d.gestures.hop = { about: 'hops, stands up, reaches, sits again', habit: true, chain: { then: ['hop', 'hop2', 'sit_to_tall', 'reach', 'tall_to_sit'], rounds: [6, 10] } };
+  };
+  const r = checked(two);
+  assert.deepEqual(r.errors, [], 'links of different poses need not join each other, only those that can follow');
+  const rig = r.pkg.creature.rig, from = (n) => rig.clips[n].from, to = (n) => rig.clips[n].to;
+  for (const seed of [1, 2, 3, 4, 5, 6]) {
+    const p = clipPlayer(rig, { seed }), seen = [];
+    p.act('hop');
+    for (let f = 0; f < 24 * 30 && (seen.length < 2 || p.clip !== 'idle'); f++) { p.update(1 / 24); if (p.clip !== seen.at(-1)) seen.push(p.clip); }
+    const links = seen.filter((n) => n !== 'idle');
+    for (let i = 1; i < links.length; i++) assert.equal(from(links[i]), to(links[i - 1]), `${links[i]} starts where ${links[i - 1]} ends: ${links}`);
+    assert.equal(seen.at(-1), 'idle', `home to its mood: ${seen}`);
+  }
+  catches({ 'must join': (d) => { two(d); d.body.actions.reach.keys[0].body.at = [0.2, 0.5, 0]; } });
+});
+
+test('habits: a gesture only its moments play is never told to agents; moments compile for the device', () => {
+  const r = checked((d) => {
+    d.body.actions.hop2 = structuredClone(d.body.actions.hop);
+    d.gestures.groom = { about: 'washes a paw', plays: 'hop2', habit: true };
+    d.life = { moments: [{ every: [40, 90], pick: { groom: 3, hop: 1 } }, { every: [300, 600], play: 'groom' }] };
+  });
+  assert.deepEqual(r.errors, []);
+  const cr = r.pkg.creature;
+  assert.deepEqual([Object.keys(cr.gestures), Object.keys(cr.about.gestures), cr.rig.graph.gestures.groom], [['hop'], ['hop'], 'hop2'], 'the rig plays it; agents never hear of it');
+  assert.deepEqual(cr.life.moments, [{ every: [40, 90], pick: [['groom', 3], ['hop', 1]] }, { every: [300, 600], pick: [['groom', 1]] }]);
+  assert.deepEqual(checkPackage(r.pkg, 'pip'), []);
+});
+
+test('packed clips: the same keys and numbers as the plain form, about half the room', () => {
+  const r = check(CAT), nodes = r.body.nodes;
+  let plain = 0, packed = 0;
+  for (const a of r.body.actions) {
+    const c = r.pkg.creature.rig.clips[a.name], b = bakeAction(nodes, a, 24, c.loop, !!r.life?.clips.has(a.name) && !Object.values(r.pkg.creature.rig.graph.gestures).includes(a.name) && !Object.values(r.pkg.creature.rig.graph.moods).includes(a.name) && !Object.values(r.pkg.creature.rig.graph.rest).includes(a.name));
+    assert.equal(c.pk, packClip(b.ch, b.frames), `${a.name}: packed from its bake`);
+    const x = decodeClip({ ...c, pk: undefined, ch: b.ch }, r.pkg.creature.rig.scale), y = decodeClip(c, r.pkg.creature.rig.scale);
+    assert.equal(x.ch.length, y.ch.length);
+    x.ch.forEach((h, i) => {
+      const g = y.ch[i];
+      assert.deepEqual([h.node, h.path, h.cubic, h.linear, [...h.keys]], [g.node, g.path, g.cubic, g.linear, [...g.keys]], `${a.name} channel ${i}`);
+      assert.ok(h.out.every((v, k) => Object.is(v, g.out[k])), `${a.name} channel ${i}: the same numbers`);
+    });
+    plain += JSON.stringify(b.ch).length; packed += c.pk.length;
+  }
+  assert.ok(packed < plain * 0.62, `${packed} of ${plain} bytes`);
+  const wild = new Int16Array(Array.from({ length: 36 }, (_, i) => (i * 7919) % 65536 - 32768));   // cubic: 3 x 4 a key, every step size
+  const odd = [[3, 'r', 'C', 2, Buffer.from([0, 5, 9]).toString('base64'), Buffer.from(wild.buffer).toString('base64')],
+    [7, 'r', 'S', 1, Buffer.from([0]).toString('base64'), Buffer.from(new Int8Array([127, -127, 0, 5]).buffer).toString('base64')]];
+  const back = unpackClip(packClip(odd, 10));
+  assert.deepEqual(back.map((h) => [h.node, h.path, h.interp, h.b8, [...h.keys], [...h.vals]]),
+    [[3, 'r', 'C', false, [0, 5, 9], [...wild]], [7, 'r', 'S', true, [0], [127, -127, 0, 5]]], 'cubic, int8, extremes');
+  assert.throws(() => unpackClip(packClip(odd, 10).slice(0, 8)), /ends early/);
+});
+
 test('chains: the cat plays a different game each seed, the same game for the same seed, no link twice running', () => {
   const rig = check(CAT).pkg.creature.rig, ch = rig.graph.chains.yarn;
   const game = (seed) => {
@@ -290,7 +353,7 @@ test('props: a bowl or a ball is never dragged by a crossfade, and is gone once 
   assert.equal(after, 0, 'no prop shows once the cat is back in its mood');
 });
 
-test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
+test('limits: 80 bones, 128 shapes, 96 actions, 8 poses, 32 gestures, names of 24 letters, 256 KB', () => {
   const lacks = (r, want) => assert.ok(r.errors.some((e) => e.message.includes(want)), `${want}: got ${JSON.stringify(r.errors).slice(0, 600)}`);
   const bones = (n) => (d) => { for (let i = d.body.bones.length; i < n; i++) d.body.bones.push({ name: `b${i}`, parent: 'body' }); };
   const shapes = (n) => (d) => { for (let i = d.body.shapes.length; i < n; i++) d.body.shapes.push({ ...d.body.shapes[0], at: [0, i / 1000, 0] }); };
@@ -301,13 +364,13 @@ test('limits: 80 bones, 128 shapes, 64 actions, 8 poses, 32 gestures, names of 2
   lacks(checked(shapes(LIMITS.shapes + 1)), 'body.shapes holds at most 128 (it has 129)');
   assert.deepEqual(checked(actions(33)).errors, [], '32 gestures and idle');
   lacks(checked(actions(34)), 'gestures holds at most 32 (it has 33)');
-  lacks(checked((d) => { for (let i = 0; i < 63; i++) d.body.actions[`a${i}`] = d.body.actions.hop; }), 'body.actions holds at most 64 (it has 65)');
+  lacks(checked((d) => { for (let i = 0; i < 95; i++) d.body.actions[`a${i}`] = d.body.actions.hop; }), 'body.actions holds at most 96 (it has 97)');
   lacks(checked((d) => { d.poses = 'abcdefghi'.split(''); }), 'poses holds at most 8 (it has 9)');
   lacks(checked((d) => { d.body.bones[3].name = 'a'.repeat(25); }), 'must be 1 to 24 of letters, digits, _ . and -');
   // the size: many long actions on many bones
   const heavy = (n) => (d) => { bones(60)(d); for (let i = 0; i < n; i++) { d.body.actions[`a${i}`] = { keys: Array.from({ length: 240 }, (_, k) => ({ time: k / 24, ...Object.fromEntries(d.body.bones.slice(4).map((b, j) => [b.name, { turn: [Math.sin(k * 0.7 + j + i) * 40, Math.cos(k * 1.3 + j) * 40, 0] }])) })) }; d.gestures[`a${i}`] = 'wriggles'; } };
   assert.deepEqual(checked(heavy(1)).errors, []);
-  lacks(checked(heavy(6)), 'KB: the device takes 256.0 KB. Its largest actions: a');
+  lacks(checked(heavy(12)), 'KB: the device takes 256.0 KB. Its largest actions: a');
 });
 
 // ---- life (docs/CREATURE.md, "Life")
@@ -332,7 +395,7 @@ test('life: a layer\'s clip keeps only what moves, and counts as played', () => 
     d.life.layers.push({ layer: 'nodding', clip: 'nod_pose', by: 'breath', zero: 0.5, weight: 'free' });
   });
   assert.deepEqual([r.errors, r.warnings], [[], []], 'no "nothing plays the action nod_pose"');
-  assert.deepEqual(r.pkg.creature.rig.clips.nod_pose.ch.map((c) => c[0]), [2], 'the head only: the held tail is left out');
+  assert.deepEqual(unpackClip(r.pkg.creature.rig.clips.nod_pose.pk).map((c) => c.node), [2], 'the head only: the held tail is left out');
   assert.deepEqual(r.pkg.creature.life.layers[1], { by: 'breath', w: '_lw.nodding', clip: 'nod_pose', zero: 0.5 });
   assert.deepEqual(r.pkg.creature.life.ch.at(-1), ['_lw.nodding', [[1, '@free']], { sp: [36, 12], keep: 1 }], 'its weight eased');
 });
@@ -377,7 +440,10 @@ test('life: check says what is wrong in plain words', () => {
     'layer breathing: by "breth" is not a signal': (d) => { breathing(d); d.life.layers[0] = { layer: 'breathing', clip: 'hop', by: 'breth' }; },
     'layer breathing: ripple is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers[0].turn.ripple = 0.06; },
     'layer mouth: mode replace is not in Molty\'s firmware yet': (d) => { breathing(d); d.life.layers.push({ layer: 'mouth', clip: 'hop', by: 'breath', mode: 'replace' }); },
-    'life.moments: moments (gestures started by a signal) are not in Molty\'s firmware yet': (d) => { breathing(d); d.life.moments = [{ on: 'breath', play: 'hop' }]; },
+    'life.moments[0] has no "on": it takes every, play, pick': (d) => { breathing(d); d.life.moments = [{ on: 'breath', every: [20, 40], play: 'hop' }]; },
+    'life.moments[0]: skip is not a gesture (gestures: hop)': (d) => { d.life = { moments: [{ every: [20, 40], pick: { hop: 1, skip: 2 } }] }; },
+    'life.moments[0]: every must be [least, most] seconds, from 5 to 3600, the least first': (d) => { d.life = { moments: [{ every: [40, 20], play: 'hop' }] }; },
+    'life.moments[0]: say what it plays: play (a gesture) or pick': (d) => { d.life = { moments: [{ every: [20, 40] }] }; },
   });
 });
 

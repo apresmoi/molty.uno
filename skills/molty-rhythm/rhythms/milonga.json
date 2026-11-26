@@ -1,0 +1,5 @@
+{ "id": "milonga", "name": "Milonga campera", "label": "MILONGA", "status": "verified",
+  "region": "argentina", "country": "Argentina",
+  "steps": 8, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5],
+  "layers": { "bass": { "name": "The bass", "sound": "low", "hits": [1, 4, 7] } },
+  "source": "Garcia Brunelli 2008 p. 21 via Martinez (UNCuyo) 2.1.9; tangoindepth 2021 (3+3+2); tempo a practice default" }

@@ -42,6 +42,7 @@ struct cpk {
     int in_free, in_idle, in_life; float idle_s, life;
     int16_t lay_by[CC_LAYERS_MAX], lay_w[CC_LAYERS_MAX];
     cp_mark_t marks[MARKS_MAX];
+    bool moment;                /* the gesture playing is one of its moments (cpk_moment), not an agent's */
 };
 
 /* the life layers' signals by name (creature.life.layers[i].by and .w), as the player's slots */
@@ -107,9 +108,29 @@ void cpk_listen(cpk_t *k, int32_t rgb, float ink) { if (k && k->ring) cr_listen(
 void cpk_sky(cpk_t *k, const struct sky *s) { if (k) k->sky = s; }
 void cpk_weather(cpk_t *k, const struct weather *w) { if (k) k->wx = w; }
 void cpk_weather_dots(const cpk_t *k, int out[4]) { if (k && k->dots) cd_weather_dots(k->dots, out); else for (int q = 0; q < 4; q++) out[q] = 0; }
-bool cpk_gesture(cpk_t *k, const char *name) { return k && k->clip && cc_free(k->clip) && cc_act(k->clip, name); }
+bool cpk_gesture(cpk_t *k, const char *name) {
+    if (!k || !k->clip || !cc_free(k->clip) || !cc_act(k->clip, name)) return false;
+    k->moment = false;
+    return true;
+}
+bool cpk_free(const cpk_t *k) { return !k || !k->clip || cc_free(k->clip); }
+int  cpk_moments(const cpk_t *k, fd_moment_t *out, int max) {
+    const int n = k && k->clip ? cc_moments(k->clip) : 0;
+    for (int i = 0; i < n && i < max; i++) {
+        out[i].n = cc_moment(k->clip, i, &out[i].lo, &out[i].hi, out[i].w);
+        if (out[i].n > FD_PICKS_MAX) out[i].n = FD_PICKS_MAX;
+    }
+    return n < max ? n : max;
+}
+bool cpk_moment(cpk_t *k, int m, int pick) {
+    const char *g = k && k->clip ? cc_moment_name(k->clip, m, pick) : NULL;
+    if (!g || !cc_act(k->clip, g)) return false;
+    k->moment = true;
+    return true;
+}
+void cpk_moment_stop(cpk_t *k) { if (k && k->clip && k->moment) { k->moment = false; cc_stop(k->clip); } }
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }
-void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) cc_come(k->clip, first); }
+void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) { k->moment = false; cc_come(k->clip, first); } }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
 
 static const char *const MOOD_NAMES[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
@@ -123,7 +144,7 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     me_update(&k->eng, dt, &e);
     const mood_engine_t *g = &k->eng;
     if (g->mood >= 0 && g->mood < 7) cc_mood(k->clip, MOOD_NAMES[g->mood]);
-    if (g->act >= 0 && g->act_n != k->act_n && !cc_coming(k->clip)) { cc_act(k->clip, cp_gesture_name(k->cp, g->act)); }   /* a call first */
+    if (g->act >= 0 && g->act_n != k->act_n && !cc_coming(k->clip)) { cc_act(k->clip, cp_gesture_name(k->cp, g->act)); k->moment = false; }   /* a call first */
     k->act_n = g->act_n;
     if (cp_life(k->cp)) {                          /* its life: the device's inputs, its signals, its layers' places */
         cp_set(k->cp, k->in_free, cc_free(k->clip) ? 1.f : 0.f);

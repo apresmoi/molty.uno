@@ -1,0 +1,40 @@
+{
+  "id": "rupak",
+  "name": "Rupak, seven beats",
+  "label": "RUPAK",
+  "status": "verified",
+  "region": "india",
+  "country": "India",
+  "steps": 7,
+  "tempo": {
+    "bpm": 100,
+    "per": 1
+  },
+  "beats": [1, 2, 3, 4, 5, 6, 7],
+  "layers": {
+    "theka": {
+      "name": "The tabla, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6, 7],
+      "accent": [1]
+    },
+    "clap": {
+      "name": "The hand claps (the khali is a wave, no clap)",
+      "sound": "clap",
+      "hits": [4, 6]
+    }
+  },
+  "source": "Rupak 3+2+2, sam 1 is khali, claps 4 and 6; Wikipedia Rupak Tala; DigiTabla; tempo a practice default; bol syllables differ between sources so only the beat structure is modelled",
+  "sources": [
+    {
+      "title": "Wikipedia: Rupak Tala",
+      "url": "https://en.wikipedia.org/wiki/Rupak_Tala",
+      "shows": "Rupak 7 matras, vibhags 3+2+2, sam and khali both on matra 1; theka Tin Tin Na X | Dhin Na 2 | Dhin Na 3 (Ram Avatar Vir 2002 p.33)"
+    },
+    {
+      "title": "DigiTabla: Rupak Tal",
+      "url": "https://digitabla.com/reference/tals-and-thekas/rupak-tal/",
+      "shows": "Rupak 7 matras, 3-2-2, sam is khali (wave), tali vibhags begin at matras 4 and 6"
+    }
+  ]
+}

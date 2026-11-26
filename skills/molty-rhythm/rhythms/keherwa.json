@@ -1,0 +1,40 @@
+{
+  "id": "keherwa",
+  "name": "Keherwa, eight beats",
+  "label": "KEHERWA",
+  "status": "verified",
+  "region": "india",
+  "country": "India",
+  "steps": 8,
+  "tempo": {
+    "bpm": 120,
+    "per": 1
+  },
+  "beats": [1, 2, 3, 4, 5, 6, 7, 8],
+  "layers": {
+    "theka": {
+      "name": "The tabla, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8],
+      "accent": [1]
+    },
+    "clap": {
+      "name": "The hand claps (the khali is a wave, no clap)",
+      "sound": "clap",
+      "hits": [1]
+    }
+  },
+  "source": "Keherwa 4+4, sam 1, khali 5; Wikipedia Tala; Sangtar (also Wikipedia Keherwa); tempo a practice default; bol syllables differ between sources so only the beat structure is modelled",
+  "sources": [
+    {
+      "title": "Wikipedia: Tala (music), Common Hindustani talas",
+      "url": "https://en.wikipedia.org/wiki/Tala_(music)",
+      "shows": "Keherwa 8, 4+4, marked X 0"
+    },
+    {
+      "title": "Sangtar: How to learn, read and play taals",
+      "url": "https://www.sangtar.com/2007/04/11-how-to-learn-read-and-play-taals/",
+      "shows": "Kehrva 8 beats, sam beat 1 clapped, khali beat 5 waved, two sections"
+    }
+  ]
+}

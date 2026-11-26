@@ -101,6 +101,9 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `scene.clear` | none | none | melts back to the creature |
 | `creature.select` | `{"id"}` | `{id, name}` | which creature Molty is: a built-in one (`duck`, `cat`, `octopus`) or an installed creature package (`kind: "creature"`); kept across reboots; `not_installed`, `bad_package` |
 | `creature.list` | none | `{current, creatures: [{id, name, version, source}]}` | the creatures this Molty can be (`source`: `builtin` or `installed`) |
+| `rhythm.play` | `{"rhythms": [1..16 patterns], "pick", "bpm": 40..220, "mute"?: [ids], "buzz"?, "paused"?}` | `{rhythm, bpm, muted, paused, buzz}` | cap `rhythm`: Molty loops a rhythm by itself, its drums on its speaker; the molty-rhythm skill sends it ([its commands](https://github.com/apresmoi/molty.uno/blob/main/skills/molty-rhythm/references/commands.md)) |
+| `rhythm.set` | any of `{"bpm", "pick", "mute", "next": true, "buzz", "paused"}` | as `rhythm.play` | a tempo at once, never a restart; `not_playing` before `rhythm.play` |
+| `rhythm.stop` | none | none | silence; its clock leaves the screen |
 
 **Timing.** Short commands answer inline within ~10 s. `say` and `listen` are
 **async jobs**: they return `{job}` at once; poll `GET /v1/jobs/<job>?wait_s=0..8` until
@@ -449,6 +452,10 @@ only for an update, and switch with `creature.select`.
 first: Molty asks `INSTALL <NAME>?` and they tap `install` (`declined` = they tapped `not now` or didn't tap
 in a minute; don't retry unasked). A ring then grows round the screen while Molty downloads the file and
 flashes when it is in. Installs are kept; never reinstall what is `installed` and current.
+
+**Closing.** Your human can close any scene on Molty itself: the reject button, or a finger held still on the glass
+for a second (a ring of dots fills round the rim). You then get a `scene` event with `why: "close"` (`layout`: the
+one now up, none when the creature is back): the screen is gone, do not put it back unasked.
 
 **Playing.** Don't send `scene.*` by hand: the entry's `skills` know the package, e.g. **molty-astro**
 for the sky (`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`); its `layouts` are

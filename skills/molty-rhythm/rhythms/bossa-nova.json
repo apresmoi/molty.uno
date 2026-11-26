@@ -1,0 +1,5 @@
+{ "id": "bossa-nova", "name": "Bossa nova", "label": "BOSSA NOVA", "status": "verified",
+  "region": "brazil", "country": "Brazil",
+  "steps": 16, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5, 9, 13],
+  "layers": { "clave": { "name": "The clave", "sound": "rim", "hits": [1, 4, 7, 11, 14] } },
+  "source": "Wikipedia Clave (rhythm); Toussaint 2005 (E(5,16) from its third onset); tempo a practice default" }

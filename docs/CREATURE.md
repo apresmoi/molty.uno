@@ -125,6 +125,10 @@ right), never the same one twice running, then `last` (a swat that knocks it out
 the Molty's seed: a new one each time the device starts, a fixed one in tests, so a test plays the same game every time.
 Agents ask for it by its name, as for any gesture.
 
+After the first, each pick is one that starts in the pose the one before ends in, so a chain can go from pose to pose.
+The cat's paw wash: with a front paw raised (a pose of its own, `paw_l`), licks and wipes of that paw, and a switch to the
+other paw (`paw_l_to_paw_r`), after which only the other paw's licks and wipes can follow.
+
 Each action in a chain starts in the pose the one before it ends in, and a prop is where it was (`check` names any two that
 do not join). Where the Molty stands and the way it faces carry on: an action that walks or turns it on its feet leaves it
 there, facing the new way, and the next one starts from there. That is how a Molty turns without turning as a block. The
@@ -216,8 +220,30 @@ looks to the side; `look_y` and `head_y` do the same up and down):
 ```
 
 `check` names any signal it cannot find, a loop between signals, an action or a bone a layer names that is not there,
-and a life that is more than the device gives it. Gestures started by a signal (`moments`), a pulse on a touch (`on`) and
-the mouth following the voice (`peaks`) come in a later firmware.
+and a life that is more than the device gives it.
+
+### Habits
+
+`moments` are the gestures a Molty plays by itself now and then, while it is idle and nobody drives it: a cat grooms.
+
+```json
+"moments": [{ "every": [40, 90], "pick": { "groom": 3, "wash": 2, "stretch": 1 } }]
+```
+
+It waits a random 40 to 90 seconds, then plays one of them, as likely as its number, never the same one twice running.
+`"play": "stretch"` plays one gesture. The waiting counts only while the Molty is idle and left alone: never while it
+listens, speaks, thinks or works, nor over a scene or a question, nor while another gesture plays. A touch, a shake or
+anything an agent sends stops a habit at once, and it goes home to its mood the way it would from any gesture; the next
+one waits at least 10 seconds. The owner's "idle life" setting: lively waits as written, calm twice as long, off never.
+Habits never make a sound.
+
+A gesture with `"habit": true` is one only the Molty plays: agents are never told of it and cannot ask for it.
+
+```json
+"groom": { "about": "licks a front paw and washes its face with it", "habit": true, "chain": { ... } }
+```
+
+A pulse on a touch (`on`) and the mouth following the voice (`peaks`) come in a later firmware.
 
 ## Commands and limits
 
@@ -226,9 +252,10 @@ device installs; `preview` shows every mood, gesture and action moving, on your 
 
 | what | limit |
 |---|---|
-| bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 64, 8, 32; 24 |
-| the built Molty | 256 KB, as every file in this repo, which is also the agents' plugin (its loaders refuse a file of 256 KB or more); the cat, with 54 actions, is 255 KB |
+| bones, shapes, actions, poses, gestures; letters in a name | 80, 128, 96, 8, 32; 24 |
+| the built Molty | 256 KB, as every file in this repo, which is also the agents' plugin (its loaders refuse a file of 256 KB or more); `build` packs the actions' keys, so the cat, with 82 actions, is 212 KB |
 | life: signals, layers; its work a frame | 64, 16; 600 steps (`build` says how many; the cat's are 44) |
+| moments, gestures each picks from | 16, 16 |
 | words in `about`, `look`, a mood's or a gesture's line | plain ASCII; 160, 240, 100 letters |
 | action keys in a body file | straight-line or held keys; curve keys are refused: save one key a frame |
 

@@ -1,0 +1,5 @@
+{ "id": "carnavalito", "name": "Carnavalito", "label": "CARNAVALITO", "status": "verified",
+  "region": "argentina", "country": "Argentina",
+  "steps": 8, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5],
+  "layers": { "bombo": { "name": "The bombo", "sound": "head", "hits": [1, 3, 4, 5, 7, 8], "accent": [1, 4, 5, 8] } },
+  "source": "Diaz Capello 2024 p. 39 ex. 2; Clang (FBA-UNLP) on the huayno figure; tempo a practice default" }

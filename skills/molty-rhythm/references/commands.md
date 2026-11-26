@@ -1,0 +1,57 @@
+# Sending the commands yourself
+
+For agents with no shell and no node. `scripts/rhythm.mjs` and `scripts/library.mjs` do exactly
+this; read them as the reference.
+
+All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with `Authorization: Bearer <token>` (the
+molty skill's pairing), body `{"name": …, "args": {…}}`.
+
+## Show and play
+
+1. **Install** the `rhythm` package once, exactly as the astro skill installs `astrology`
+   (`pkg.list`, then `pkg.install` with the entry of `packages/index.json`; Molty asks its human).
+2. **The clock**: `{"name":"scene.play","args":{"pkg":"rhythm","layout":"clock","params":{"tick_ms":0,"tick":0},"ttl_s":600}}`.
+   It draws whatever Molty's beat player holds; the sound stops when the clock leaves the screen.
+   `tick_ms` (5 to 60) and `tick` (25 to 100 percent) set the rim's tick on the motor; 0 is Molty's own.
+3. **The rhythm**: `{"name":"rhythm.play","args":{"regions":[…],"rhythms":[…],"pick":0,"bpm":100}}`
+   (`library.mjs` `wireLibrary()` makes both lists; about 16 KB for the whole library).
+   - `regions`: optional, 1 to 16 `{"label":"ARGENTINA","color":"#8cc4ff"}`: the level above the
+     rhythms on Molty's wheel. Without it the wheel is one list.
+   - `rhythms`: the library, 1 to 96 of them, each as `library.mjs` `wire()` makes it, plus
+     `"region"` (its index in `regions`):
+     `{"id":"chacarera","label":"CHACARERA","steps":6,"per":3,"beats":[1,4],"count_in":1,
+     "layers":[{"id":"aro","sound":"rim","color":"#9fc0ff","hits":[1,4]},
+     {"id":"parche","sound":"head","color":"#ff9a7a","hits":[3,5],"accent":[5]}],
+     "bars":[{"name":"A","hits":[[1,4],[3,5]]},{"name":"B","hits":[[],[3,5]]}],"order":[0,0,1,0]}`.
+     `lengths` (one a step) and `swing` (0 to 0.33) are optional. Up to 32 steps, 4 layers, 8 bars, 16 in an order.
+   - `pick`: which one plays; `bpm` 40 to 220; optional `mute` (layer ids), `buzz` (true: the motor
+     on each main beat), `paused` (true: stopped, ready to choose, until a tap in the middle),
+     `sync` (ms, -250 to 250: the picture against the sound, positive earlier; kept on Molty).
+   - Answers `{"rhythm":"chacarera","bpm":100}`. Errors: `invalid_args`, `unsupported` (no `rhythm` in `relay.caps`).
+4. **Change it**: `{"name":"rhythm.set","args":{…}}` with any of `bpm`, `pick`, `mute` (the whole
+   list, `[]` for none), `next: true` (the next bar of the phrase, at the bar line), `buzz`, `sync`, `paused`
+   (true: stopped, choosing, back at the phrase's start; false: it plays after a count-in).
+   A tempo change takes effect at once and never restarts; a new `pick` starts after a count-in
+   (stopped: it is shown, silent).
+   Answers the player's state `{rhythm, bpm, muted, paused, buzz}`; `not_playing` when nothing was played.
+5. **Stop**: `{"name":"rhythm.stop"}`: silence, and the clock leaves the screen.
+
+## Events you get
+
+Molty handles every click and tap itself and tells you where things settled. A tap in the middle
+plays and stops; stopped, the rim chooses the rhythm; playing, it sets the tempo.
+
+| event | data | when |
+|---|---|---|
+| `ring` | `{"spot":"tempo","value":112}` | the finger left the rim after a tempo change |
+| `ring` | `{"spot":"rhythm","index":6,"label":"SON CLAVE","id":"son-clave"}` | stopped, the rim was turned to another rhythm (it shows, silent; a tap in the middle plays it) |
+| `ring` | `{"spot":"region","index":2,"label":"CARIBBEAN"}` | at the regions (a tap on the region's name went up), the rim was turned to another region |
+| `scene` | `{"why":"close"}` | the human closed the clock (the other button, or a finger held a second): it stopped and left |
+| `tap` | `{"spot":"aro","muted":true}` | a drum's dot was tapped (muted, or back) |
+| `rhythm` | `{"state":"paused","rhythm":"chacarera","bpm":104}` | `playing` (a tap in the middle or the accept button), `paused` (stopped on the clock, choosing: the same), `stopped` (the other button, or the clock went: it left) |
+
+## Conventions
+
+- One beat is `per` units; a step is one unit unless `lengths` says otherwise. A bar lasts
+  `sum(lengths) / per` beats, `60 / bpm` seconds each.
+- Step angles: step 1 at 12 o'clock, each step `360 * its start / the bar's length` further clockwise.

@@ -15,7 +15,7 @@
  *
  * While a browser talks Improv, the fluid holds "hi" so the user sees which device is on
  * the cable (like the pairing code, link/link_pair.c); a minute of silence goes back
- * to the creature (or the state before it, never the demo reel).
+ * to the creature (or the state before it).
  *
  * Sharing the UART with logs: the UART driver serves both (uart_vfs_dev_use_driver),
  * a packet is written raw (no "\n" → "\r\n") while holding stdout's lock, so a log
@@ -78,8 +78,8 @@ static void hello_show(void)
     s_prev_state = NULL;
 }
 
-/* as link_pair_cancel: back to the previous creature and state (the creature for text
- * or the demo reel, link_restore_body) */
+/* as link_pair_cancel: back to the previous creature and state (the creature for text,
+ * link_restore_body) */
 static void hello_restore(void)
 {
     if (!s_hello) return;

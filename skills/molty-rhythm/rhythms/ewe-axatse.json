@@ -1,0 +1,44 @@
+{
+  "id": "ewe-axatse",
+  "name": "Ewe bell and rattle",
+  "label": "EWE BELL",
+  "status": "verified",
+  "region": "west-africa",
+  "country": "Ghana",
+  "steps": 12,
+  "tempo": {
+    "bpm": 110,
+    "per": 3
+  },
+  "beats": [1, 4, 7, 10],
+  "layers": {
+    "bell": {
+      "name": "Gankogui, the standard bell",
+      "sound": "bell",
+      "hits": [1, 3, 5, 6, 8, 10, 12]
+    },
+    "pa": {
+      "name": "Axatse pa, on the knee",
+      "sound": "shaker",
+      "hits": [1, 3, 5, 6, 8, 10, 12]
+    },
+    "ti": {
+      "name": "Axatse ti, on the hand",
+      "sound": "click",
+      "hits": [4, 7, 9, 11]
+    }
+  },
+  "source": "Wikipedia Ewe drumming (Ladzekpo 1977 via Penalosa); Pressing 1983 Agbadza support drums; as in agbekor and agbadza; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Ewe drumming, Standard bell pattern and accompanying axatse part",
+      "url": "https://en.wikipedia.org/wiki/Ewe_drumming",
+      "shows": "The axatse part that accompanies the standard pattern is: pa ti pa pa ti pa ti pa ti pa pa. The pa's sound the standard pattern... the ti's sound pulses in between the bell strokes... begins (first pa) on the second stroke of the bell (1a), and the last pa coincides with 1"
+    },
+    {
+      "title": "Jeff Pressing, Rhythmic design in the support drums of Agbadza, African Music 6(3) 1983",
+      "url": "https://journal.ru.ac.za/index.php/africanmusic/article/view/1165/626",
+      "shows": "the strokes on the leg (PA mnemonic) coincide exactly with the bell strokes, while the strokes against the hand (TI mnemonic) fill in every other 8th note of the cycle except the second"
+    }
+  ]
+}

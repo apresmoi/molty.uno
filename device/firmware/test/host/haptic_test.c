@@ -47,6 +47,12 @@ int main(void) {
     assert(named == 4 && !haptic_plan_name(-1));
     assert(haptic_plan_named(&p, "double", 100) && p.n == 3 && p.seg[0] == 60 && p.seg[1] == 90 && p.seg[2] == 60);
     assert(haptic_plan_named(&p, "tick", 100) && haptic_plan_ms(&p) <= 40);   /* a tick, not a buzz */
+    /* a wheel's click: its own, firmer than the touch buzz yet a tick (under 30 ms); a dial's own ms and strength pass
+     * through; a long turn's ticks keep the shake gate deaf between them (one every 60 ms at most: 22 + 250 > 60) */
+    assert(haptic_plan_wheel(&p, 0, 0) && p.n == 1 && p.seg[0] == HAPTIC_WHEEL_MS && p.strength == HAPTIC_WHEEL_STRENGTH);
+    assert(HAPTIC_WHEEL_MS > HAPTIC_TOUCH_MS && HAPTIC_WHEEL_MS < 30 && HAPTIC_WHEEL_STRENGTH > HAPTIC_TOUCH_STRENGTH);
+    assert(haptic_plan_wheel(&p, 18, 95) && p.seg[0] == 18 && p.strength == 95);
+    assert(haptic_plan_wheel(&p, 0, 0) && haptic_plan_quiet_until(&p, 0) > 60 * 1000);
     /* unknown: refused, whatever its case */
     assert(!haptic_plan_named(&p, "bogus", 100) && !haptic_plan_named(&p, "Double", 100) && !haptic_plan_named(&p, "", 100));
     assert(!haptic_plan_named(&p, NULL, 100));

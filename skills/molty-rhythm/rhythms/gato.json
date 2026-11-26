@@ -1,0 +1,45 @@
+{
+  "id": "gato",
+  "name": "Gato",
+  "label": "GATO",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 6,
+  "tempo": {
+    "bpm": 108,
+    "per": 3
+  },
+  "beats": [1, 4],
+  "layers": {
+    "aro": {
+      "name": "Aro, the rim",
+      "sound": "rim",
+      "hits": [1, 4]
+    },
+    "parche": {
+      "name": "Parche, the head",
+      "sound": "head",
+      "hits": [3, 5],
+      "accent": [5]
+    }
+  },
+  "source": "the chacarera's bombo: Pablo Cruz Vol. I (gato norteno equal to the normal chacarera); Albarino and Balut (FBA-UNLP); Mola (FBA-UNLP) 2019; tempo a practice default",
+  "sources": [
+    {
+      "title": "Pablo Cruz, El bombo leguero en el folklore argentino, Vol. I (method book)",
+      "url": "https://pdfcoffee.com/libro-bombo4-calidad-prensa-copia-4-pdf-free.html",
+      "shows": "Gato norteno: the rhythm section 'es igual a la de la chacarera normal (no trunca)', a little more agile"
+    },
+    {
+      "title": "Albarino and Balut, Proyecto Bombo: fundamentacion (Laboratorio de Sonido, FBA-UNLP)",
+      "url": "http://proyectobombo.blogspot.com/p/papper.html",
+      "shows": "Gato, escondido and chacarera trunca left out of the sample library 'ya que pueden reemplazarse por el ritmo de chacarera'"
+    },
+    {
+      "title": "Mola, Bombo leguero: una propuesta metodologica para la ensenanza de su ejecucion (FBA-UNLP, JIDAP 2019)",
+      "url": "https://sedici.unlp.edu.ar/bitstream/handle/10915/80536/Documento_completo.pdf-PDFA.pdf?sequence=1&isAllowed=y",
+      "shows": "Chacarera base (aro 1 and 4, parche 3 and 5, marked third quarter); the same patterns accompany a gato, escondido or huella"
+    }
+  ]
+}

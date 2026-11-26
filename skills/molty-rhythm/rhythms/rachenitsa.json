@@ -1,0 +1,40 @@
+{
+  "id": "rachenitsa",
+  "name": "Rachenitsa, seven eight",
+  "label": "RACHENITSA",
+  "status": "verified",
+  "region": "balkans",
+  "country": "Bulgaria",
+  "steps": 3,
+  "lengths": [2, 2, 3],
+  "tempo": {
+    "bpm": 120,
+    "per": 2
+  },
+  "beats": [1, 2, 3],
+  "layers": {
+    "drum": {
+      "name": "The drum, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3]
+    }
+  },
+  "source": "Rachenitsa 2+2+3; Wikipedia Bulgarian dances; Chromatone Balkan rhythms; Fiddling Around; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Bulgarian dances",
+      "url": "https://en.wikipedia.org/wiki/Bulgarian_dances",
+      "shows": "Rachenitsa: 7/16 (2+2+3 or 4+3); slower tempo has a distinctive 2+2+3"
+    },
+    {
+      "title": "Chromatone: Balkan rhythms",
+      "url": "https://chromatone.center/theory/rhythm/system/balkan/",
+      "shows": "Rachenitsa 7/16: Q,Q,S (1,2,1,2,1,2,3)"
+    },
+    {
+      "title": "Fiddling Around: Balkan rhythms in Celtic music",
+      "url": "https://www.fiddlingaround.co.uk/balkan%20rhythms.html",
+      "shows": "Ruchenitsa 7/8: 12,12,123"
+    }
+  ]
+}

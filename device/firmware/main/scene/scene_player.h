@@ -39,6 +39,7 @@ extern "C" {
 #endif
 
 #define SCENE_ITEMS_MAX   128           /* resolved items (each expands)                   */
+#define SCENE_LIVE_MAX    160           /* items a beat (scene_beat) draws after them      */
 #define SCENE_LIST_MAX    32            /* elements of a list param                        */
 #define SCENE_FIELDS      12            /* fields of a list element                        */
 #define SCENE_GROUPS      32            /* highlight groups a scene names                  */
@@ -72,6 +73,15 @@ typedef struct {
     uint16_t open, nopen;               /* spot: the layout a tap on it opens, in scene_t.say (nopen 0: none) */
     float ttl;                          /* ... for this long when that layout is a held one (0: until a tap beside it) */
     int8_t lst; uint8_t eln;            /* the list param it was repeated over (-1 none) and which element */
+    bool live;                          /* drawn anew each frame (a beat's hand, its swelling hits): a shape only,
+                                         * never in the kept dots, the fine dust or a key                         */
+    int8_t layer;                       /* a beat's hit: its layer (a tap mutes it), else -1                      */
+    /* a dial: a click every step degrees adds by (fast turning fast) to val, vmin..vmax; or steps through its labels
+     * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1;
+     * each click a tick of the motor, tick_ms at tick percent (0: haptic_plan.h HAPTIC_WHEEL_*) */
+    float step, by, fast, vmin, vmax, val;
+    uint8_t face, sets, nlab, tick_ms, tick;
+    uint16_t lab;
 } scene_item_t;
 
 typedef struct scene {
@@ -80,17 +90,98 @@ typedef struct scene {
     float dur, ttl;
     float caption_y;                    /* where the reading's words go (the layout's caption_y) */
     int nitems, npts, nchars, nsay;
-    unsigned serial;                    /* which build it is (scene_fill keeps its drawing)   */
+    int nfixed, nchars_fixed;           /* what the layout built; a beat's items follow (scene_beat)          */
+    int beat;                           /* the layout's beat item, -1 none                                      */
+    uint32_t beat_key;                  /* what its kept part was drawn from                                    */
+    unsigned serial;                    /* which drawing it is (scene_fill keeps it): a build, or a beat's kept part
+                                         * drawn again in place                                                 */
+    unsigned look;                      /* which picture it is: its build (a new one is a change of picture, the
+                                         * dissolve; a beat's kept part drawn again in place is not)            */
     int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
     float grow, glow;                   /* its scale (1 = as built) and how lit, 0..1 (scene_grow) */
     int ngroups;
     char groups[SCENE_GROUPS][PKG_KEY_MAX + 1];
-    scene_item_t items[SCENE_ITEMS_MAX];
+    scene_item_t items[SCENE_ITEMS_MAX + SCENE_LIVE_MAX];
     float pts[SCENE_PTS_MAX][2];
     cJSON *params;                      /* its params, kept when a spot of it opens a layout (they feed that one) */
     char chars[SCENE_LETTERS];
     char say[SCENE_SAY_CHARS];
 } scene_t;
+
+/* A beat (pkg item `beat`, docs/PACKAGES.md): the beat player's pattern as a clock, from the player's own clock
+ * (rhythm.h): one ring a layer (r, then 0.75, 0.525 and 0.3375 of it), a mark a step outside them (longer on a main
+ * beat), a dot a hit of this bar in its layer's colour (a muted layer's at SCENE_BEAT_MUTED), the hand on the step
+ * sounding, each hit swelling as it sounds, the count-in's clicks on their marks, the phrase as a row of pips, the
+ * rhythm's name; at rest (stopped, choosing: rest) the hand at 12 o'clock and a play mark in the middle, while it
+ * plays a small stop mark there. Only the rings and the marks are kept (the dots, the fine dust): they change with the
+ * pattern's shape alone, a new rhythm, and then are drawn again in place (scene_t.serial, never scene_t.look). All the
+ * rest is live items (scene_item_t.live): shapes each frame, so a bar of a phrase, a mute, a tempo, the name or the
+ * wheel's words change nothing kept and never the picture whole. */
+#define SCENE_BEAT_STEPS  32
+#define SCENE_BEAT_LAYERS 4
+#define SCENE_BEAT_MUTED  0.3f          /* a muted layer's dots: this much of its colour  */
+#define SCENE_BEAT_SWELL_S 0.25f        /* a hit swells and settles back in this long      */
+typedef struct {
+    bool on;                            /* a pattern is loaded                              */
+    int steps;
+    float angle[SCENE_BEAT_STEPS];      /* each step's angle (degrees, 90 = 12 o'clock, clockwise as it goes) */
+    uint32_t beats;                     /* the main beats (step bits)                       */
+    int nlayers;
+    uint32_t rgb[SCENE_BEAT_LAYERS], hits[SCENE_BEAT_LAYERS], muted;   /* this bar's hits a layer */
+    int step;                           /* sounding now, -1 none (a count-in)               */
+    int cin_step;                       /* the count-in's click (a step), -1 none           */
+    float since;                        /* s since that step or click began                  */
+    int slot, norder;                   /* where in the phrase                              */
+    bool rest;                          /* stopped, choosing: the hand at rest, the play mark */
+    bool enter;                         /* ... at the regions: the enter mark instead        */
+    bool hide_name;                     /* (a wheel shows its own words in the middle)       */
+    char label[13];
+} scene_beat_t;
+/** The beat's items after the layout's own (a no-op without a beat item). Each frame, before scene_fill. */
+void scene_beat(scene_t *sc, const scene_beat_t *b);
+/** The layer whose hit dot (x, y) is on (glass units, y up; a finger's reach round it), -1 none. */
+int scene_beat_hit(const scene_t *sc, float x, float y);
+
+/* Wheels (pkg items `dial` and `centre`, docs/PACKAGES.md): a ring at the edge the finger turns in clicks
+ * (sense/ring_input.h), on the device, with no round trip: a number (a tempo) or a choice among labels (a list, the beat
+ * player's library). Two faces, each its own dial: face 0 while the beat plays (or with no beat), face 1 while it is
+ * stopped; the centre's tap plays and stops it (mole_fluid.c). The agent hears where a wheel settled (a `ring` event).
+ * scene_wheel draws them, live, each frame: the rail, its ticks (a number) or one bead a label (a choice) stepping a
+ * click at a time (never sliding: a frame of a turn redraws only what a click changed), the notch at 12 o'clock that
+ * flashes on each click, and in the middle the value while it turns (and
+ * SCENE_WHEEL_SHOW_S after), or the choice, under the beat's play mark, all the while face 1 is up. */
+#define SCENE_WHEEL_SHOW_S 0.9f
+#define SCENE_WHEEL_SCALE  75.f        /* a number's ticks: this far each side of the notch */
+#define SCENE_WHEEL_LABELS 32
+#define SCENE_NOTCH_RGB   0x7be0a0u     /* the notch on face 0 (the tempo): Molty's green, the accent */
+#define SCENE_CHOOSE_RGB  0xffd88au     /* ... on face 1 (choosing): warm gold                       */
+#define SCENE_WHEEL_ABOVE_Y 0.27f       /* a pick's region label above the name (of the beat's 0.672 r), its zone's half */
+#define SCENE_WHEEL_ABOVE_W 0.30f       /* width and half height: a tap there goes up a level             */
+#define SCENE_WHEEL_ABOVE_H 0.075f
+typedef struct {
+    int face;                           /* 0, 1: the dial up                              */
+    float value;                        /* its value (a number dial)                      */
+    int index;                          /* its label (a choice)                           */
+    bool turning;                       /* a finger is on it                              */
+    float since;                        /* s since the finger left it                      */
+    float flash;                        /* the notch's flash: 1 at a click, down to 0     */
+    int nlabels;
+    const char (*labels)[PKG_KEY_MAX + 1];
+    const uint32_t *tints;              /* each label's tint (a bead), NULL: none            */
+    int level;                          /* a pick's: 0 a region's rhythms, 1 the regions     */
+    const char *above, *below;          /* small words over the name (the region, a tap goes up) and under it (a
+                                         * region's size), NULL: none                         */
+    uint32_t above_rgb;
+} scene_wheel_t;
+/** The dial on face f, the centre: item indices, -1 none. */
+int scene_dial(const scene_t *sc, int face);
+int scene_centre(const scene_t *sc);
+/** Dial item n's own labels into out (at most max), how many. */
+int scene_dial_labels(const scene_t *sc, int n, char (*out)[PKG_KEY_MAX + 1], int max);
+/** Wheel w's items after the layout's own and the beat's (call scene_beat first). */
+void scene_wheel(scene_t *sc, const scene_wheel_t *w);
+/** The words a wheel shows in the middle now (the beat's name gives way to them). */
+bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w);
 
 /** Build a scene from layout `layout` of p with `params` (an object, or NULL for none) and
  *  ttl_s (≤ 0 = SCENE_TTL_DEFAULT). NULL with *err = "no_layout" | "bad_params" | "oom". */
@@ -237,6 +328,16 @@ typedef struct {
 #define SCENE_RING_HW   1.5f            /* half its width, px                              */
 int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
                 uint32_t listen_rgb, uint32_t prog_rgb);
+/** A finger held to close the scene (hold: its share of SCENE_HOLD_S): from SCENE_HOLD_SHOW_S on, SCENE_HOLD_DOTS dots
+ *  round the glass at SCENE_HOLD_R (inside a wheel's rail), filling clockwise from 12 o'clock, the rest faint. Into
+ *  shp[n..) before the caption's letters; returns the new count. */
+#define SCENE_HOLD_S      1.0f          /* held this long, still: the scene closes                                */
+#define SCENE_HOLD_SHOW_S 0.25f         /* ... its ring shows from here (a tap never flashes it)                  */
+#define SCENE_HOLD_SLOP   0.05f         /* glass units it may move (~12 px; a wheel's click is 0.19 at its rim)   */
+#define SCENE_HOLD_DOTS   32
+#define SCENE_HOLD_R      0.885f
+#define SCENE_HOLD_RGB    0x7be0a0u     /* Molty's green, as the notch                                            */
+int scene_hold_ring(fluid_shape_t *shp, int n, int stage, float hold);
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
  *  gathers round (fluid_fine_want). n of them (-1: too many); key: a hash of them (the same drawing, the same key). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);

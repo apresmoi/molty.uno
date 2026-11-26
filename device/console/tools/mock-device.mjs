@@ -41,7 +41,7 @@ const log = [];
 const WIFI0 = { state: 'connected', ssid: 'home-wifi', ip: '192.168.1.32', rssi: -61 };
 const wifi = { ...WIFI0 };
 const fluid = {
-  ok: true, creature: 'fluid', state: 'creature', autoplay: false, mood: 'idle', act: '', creature_info: { name: 'Duck', package: 'duck', tris: 620 }, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
+  ok: true, creature: 'fluid', state: 'creature', mood: 'idle', act: '', creature_info: { name: 'Duck', package: 'duck', tris: 620 }, text: 'hello, i am molty. i breathe in ascii.', wpm: 300,
   palette: 'pastel', ring_color: 'accent', listen_ms: 30000, ack: 'chirp', filler_ms: 2500, shake_talk: true, idle_life: 'lively', screen_off_battery_s: 60, screen_off_usb_s: 600, sky: true, weather_on: true, weather: { kind: 'clear', s_left: 0, level: 0, wet: 0 }, word: '', word_idx: 0, nwords: 7, fps: 33.1,
 };
 let current = 'fluid';
@@ -142,7 +142,8 @@ createServer(async (req, res) => {
     case 'GET /api/creature/state': return json(res, fluid);
     case 'POST /api/creature/state': {
       const o = b();
-      if (o.state === 'autoplay') { fluid.autoplay = true; } else if (o.state) { fluid.autoplay = false; fluid.state = o.state; }
+      if (o.state !== undefined && !['creature', 'text'].includes(o.state)) return json(res, { ok: false, error: 'set_failed', code: 258 });   // the device's refusal (ESP_ERR_INVALID_ARG)
+      if (o.state) fluid.state = o.state;
       if (o.ring_color !== undefined && !(o.ring_color === 'accent' || /^#[0-9a-fA-F]{6}$/.test(o.ring_color))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.listen_ms !== undefined && !(Number.isInteger(o.listen_ms) && (o.listen_ms === 0 || (o.listen_ms >= 5000 && o.listen_ms <= 30000)))) return json(res, { ok: false, error: 'invalid_args' }, 400);
       if (o.ack !== undefined && !['chirp', 'thinking', 'off'].includes(o.ack)) return json(res, { ok: false, error: 'invalid_args' }, 400);

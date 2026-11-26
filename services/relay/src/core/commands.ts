@@ -18,7 +18,7 @@ export const PROGRESS_CAP = "progress";
 export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop"] as const;
 /** `buzz {pattern | ms, strength?}`: the vibration motor (firmware cap `haptic`, only on boards that have one). A pattern is
  *  a name the device knows (tick, tap, double, nudge: unknown_pattern otherwise) or [on, off, on, ...] ms. */
 export const HAPTIC_CAP = "haptic";
@@ -50,6 +50,36 @@ export const MAX_PKG_URL_BYTES = 512;
 export const MAX_SCENE_PARAMS_BYTES = 8192;
 export const DEFAULT_SCENE_TTL_S = 60;
 export const MAX_SCENE_TTL_S = 600;
+
+// ---- the beat player (docs/AGENT-LINK.md "Rhythm"): a library of patterns and a tempo, sent once; Molty loops it ----
+
+/** Firmware cap: rhythm.* (boards with a speaker). */
+export const RHYTHM_CAP = "rhythm";
+/** rhythm.play's library as JSON: up to 16 patterns of a few hundred bytes (the device checks each strictly). */
+export const MAX_RHYTHM_BYTES = 32768;
+export const RHYTHM_BPM = [40, 220] as const;
+export const MAX_RHYTHMS = 96;
+/** rhythm.play's `regions` (the wheel's level above the rhythms): up to 16 {label, color}. */
+export const MAX_RHYTHM_REGIONS = 16;
+/** `sync`: the picture against the sound, ms, kept on the device. */
+export const RHYTHM_SYNC_MS = 250;
+function syncArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || Math.abs(v) > RHYTHM_SYNC_MS) throw invalid(`sync must be a whole number of ms, -${RHYTHM_SYNC_MS}..${RHYTHM_SYNC_MS}`);
+  return v;
+}
+const RHYTHM_LAYER_RE = /^[a-z][a-z0-9-]{0,15}$/;
+function bpmArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < RHYTHM_BPM[0] || v > RHYTHM_BPM[1]) throw invalid(`bpm must be a number ${RHYTHM_BPM[0]}..${RHYTHM_BPM[1]}`);
+  return v;
+}
+function muteArg(v: unknown): string[] {
+  if (!Array.isArray(v) || v.length > 4 || !v.every((x) => typeof x === "string" && RHYTHM_LAYER_RE.test(x))) throw invalid("mute must be a list of up to 4 layer ids");
+  return v as string[];
+}
+function boolArg(v: unknown, name: string): boolean {
+  if (typeof v !== "boolean") throw invalid(`${name} must be a boolean`);
+  return v;
+}
 
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
@@ -408,6 +438,40 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       if (new TextEncoder().encode(JSON.stringify(params)).byteLength > MAX_SCENE_PARAMS_BYTES) throw invalid(`params exceed ${MAX_SCENE_PARAMS_BYTES} bytes: send a few params, the package holds the drawing`);
       return { name: n, args: { pkg: pkgId(args.pkg, "pkg"), layout: pkgId(args.layout, "layout"), params: params as JsonObject, ttl_s: int(args.ttl_s, "ttl_s", 1, MAX_SCENE_TTL_S, DEFAULT_SCENE_TTL_S) }, job: false };
     }
+    case "rhythm.play": {
+      // the shape only: the device checks every pattern strictly (rhythm_wire.c) and answers invalid_args
+      only(args, ["rhythms", "regions", "pick", "bpm", "mute", "buzz", "paused", "sync"]);
+      const r = args.rhythms;
+      if (!Array.isArray(r) || r.length < 1 || r.length > MAX_RHYTHMS || !r.every(isRecord)) throw invalid(`rhythms must be a list of 1..${MAX_RHYTHMS} patterns (the molty-rhythm skill's library)`);
+      if (new TextEncoder().encode(JSON.stringify(r)).byteLength > MAX_RHYTHM_BYTES) throw invalid(`rhythms exceed ${MAX_RHYTHM_BYTES} bytes`);
+      const out: JsonObject = { rhythms: r as JsonObject[], pick: int(args.pick, "pick", 0, r.length - 1), bpm: bpmArg(args.bpm) };
+      if (args.regions !== undefined) {
+        const g = args.regions;
+        if (!Array.isArray(g) || g.length < 1 || g.length > MAX_RHYTHM_REGIONS || !g.every(isRecord)) throw invalid(`regions must be a list of 1..${MAX_RHYTHM_REGIONS} {label, color}`);
+        out.regions = g as JsonObject[];
+      }
+      if (args.sync !== undefined) out.sync = syncArg(args.sync);
+      if (args.mute !== undefined) out.mute = muteArg(args.mute);
+      if (args.buzz !== undefined) out.buzz = boolArg(args.buzz, "buzz");
+      if (args.paused !== undefined) out.paused = boolArg(args.paused, "paused");
+      return { name: n, args: out, job: false };
+    }
+    case "rhythm.set": {
+      only(args, ["bpm", "pick", "mute", "next", "buzz", "paused", "sync"]);
+      if (!Object.keys(args).length) throw invalid("rhythm.set needs bpm, pick, mute, next, buzz, paused or sync");
+      const out: JsonObject = {};
+      if (args.bpm !== undefined) out.bpm = bpmArg(args.bpm);
+      if (args.pick !== undefined) out.pick = int(args.pick, "pick", 0, MAX_RHYTHMS - 1);
+      if (args.mute !== undefined) out.mute = muteArg(args.mute);
+      if (args.next !== undefined) { if (args.next !== true) throw invalid("next must be true"); out.next = true; }
+      if (args.buzz !== undefined) out.buzz = boolArg(args.buzz, "buzz");
+      if (args.paused !== undefined) out.paused = boolArg(args.paused, "paused");
+      if (args.sync !== undefined) out.sync = syncArg(args.sync);
+      return { name: n, args: out, job: false };
+    }
+    case "rhythm.stop":
+      only(args, []);
+      return { name: n, args: {}, job: false };
     case "progress": {
       // relay-checked; step is the agent's words for the activity log (the device draws no text)
       only(args, ["pct", "step", "done"]);

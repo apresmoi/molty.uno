@@ -939,7 +939,10 @@ static void test_life(const char *pkgdir) {
     refused_life(json, "\"by\":\"blink\"", "\"by\":\"blinq\"", "life: a layer's signal");
     refused_life(json, "\"clip\":\"shut\"", "\"clip\":\"shot\"", "life: a layer's clip");
     refused_life(json, "\"sq\":0.04", "\"sq\":0.04,\"ripple\":1", "life: a layer");
-    refused_life(json, "\"life\":{", "\"life\":{\"moments\":[],", "creature: life");
+    refused_life(json, "\"life\":{", "\"life\":{\"moments\":[{\"every\":[40,90],\"pick\":[[\"nope\",1]]}],", "life: a moment's pick");
+    refused_life(json, "\"life\":{", "\"life\":{\"moments\":[{\"every\":[2,90],\"pick\":[[\"nope\",1]]}],", "life: a moment's every");
+    refused_life(json, "\"life\":{", "\"life\":{\"moments\":{},", "life: moments");
+    refused_life(json, "\"life\":{", "\"life\":{\"later\":1,", "creature: life");
     {   /* more work than a frame gives it */
         char heavy[8192] = "\"life\":{\"ch\":[[\"_heavy\",[";
         for (int i = 0; i < 76; i++) strcat(heavy, i ? ",[1,\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\"]" : "[1,\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\",\"@t\"]");

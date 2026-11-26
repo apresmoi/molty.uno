@@ -71,8 +71,7 @@ export interface CreatureList { ok: true; current: string; creatures: CreaturePa
 export interface FluidState {
   ok: true;
   creature: string;
-  state: string; // blob | thinking | text | creature | effect:<name>
-  autoplay?: boolean;
+  state: string; // creature | text | scene
   text?: string;
   wpm?: number;
   palette?: string;
@@ -107,7 +106,7 @@ export interface FluidState {
 
 /** Partial order accepted by POST /api/creature/state for the fluid creature. */
 export interface FluidOrder {
-  state?: string; // blob | thinking | text | creature | autoplay | effect:ripple|vortex|wave
+  state?: string; // creature | text (any other is refused)
   act?: string; // a one-shot gesture (cute_act.h names), as the link's act
   mood?: string; // idle | listening | thinking | speaking | happy | sleepy | surprised, as the link's mood
   text?: string;

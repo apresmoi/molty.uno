@@ -852,15 +852,21 @@ Out-of-range or mistyped values → `invalid_args`.
 
 Moods (`mood` cmd, and the implicit `listening`/`speaking` around audio jobs) are moods
 of the creature on screen: the device applies
-`{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (blob when no creature is loaded).
+`{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (the boot word "molty.uno" while no
+creature is loaded).
 During `say` the text state wins over the creature view.
 
 What the screen does between commands (`device/firmware/main/fluid/fluid_director.h`):
 
 - **The creature is home.** The device boots into it, and re-sending the state or mood it
-  already shows changes nothing: a mood blends inside the creature instead of melting it
-  and re-forming. The demo reel runs only on an explicit `state:"autoplay"` (never
-  saved; pairing and the Improv "hi" go back to the creature, not the reel).
+  already shows changes nothing: a mood blends inside the creature. `state` takes
+  `creature` or `text`; anything else is refused (`set_failed`), the old demo states
+  (`blob`, `thinking`, `effect:*`, `autoplay`) included.
+- **Every change of picture is the one dissolve.** The old picture breaks into dust over the
+  whole glass and the dust gathers into the new one (about 1.2 s): the creature, a say's
+  words, a question, a scene, another creature. Nothing else shows between two pictures; if
+  the next one is not ready the old one stays. At power on "molty.uno" gathers on the empty
+  glass and stays until the creature is made, then dissolves into it.
 - **Quick moods revert.** `happy` (3 s) and `surprised` (2 s) return to `idle` on their
   own; `listening`, `thinking`, `speaking`, `sleepy` persist until the next mood.
   `hold_s` overrides either (`0` = until the next mood).
@@ -902,6 +908,9 @@ What the screen does between commands (`device/firmware/main/fluid/fluid_directo
 | `pkg.remove`, `pkg.list` | `{id}`, none | `{removed}`, `{packages}` | cap `pkg` |
 | `scene.play`, `scene.queue` | `{pkg, layout, params?, ttl_s? 1..600 =60}` | `{pkg, layout, ttl_s}` | cap `scene`: a package's layout on screen; `scene.clear` melts back to the creature |
 | `creature.select`, `creature.list` | `{id}`, none | `{id, name}`, `{current, creatures}` | cap `creatures`: which built-in or installed creature Molty is |
+| `rhythm.play` | `{rhythms: 1..16 patterns, pick, bpm 40..220, mute?, buzz?, paused?}` | `{rhythm, bpm, muted, paused, buzz}` | cap `rhythm` (boards with a speaker): the [beat player](#rhythm) loops the picked pattern by itself; the library's rhythms (≤ 8192 bytes) are what the rim chooses among |
+| `rhythm.set` | any of `{bpm, pick, mute: [layer ids], next: true, buzz, paused}` | as `rhythm.play` | a tempo at once, never a restart; a new `pick` after a count-in; `next` moves the phrase one bar on at the bar line; `not_playing` before a `rhythm.play` |
+| `rhythm.stop` | none | none | silence; the clock leaves the screen |
 | `volume` | `{volume 0..21}` | none | `unsupported` without a speaker |
 | `imu` | — | snapshot | `unsupported` without an IMU |
 | `diag` | `{timeline? 0..180}` | `/api/diag` JSON | frame histograms, task CPU %, heap, stalls, net; `timeline` = seconds of 1 Hz rows |
@@ -1005,6 +1014,55 @@ A while after it dozes off the screen goes dark: [Screen off](#device-events).
 the device's ~11 ms creature work, a few µs of a 33 ms frame), the scheduler a few
 comparisons: no measurable change to the ~30 fps.
 
+### Rhythm
+
+The beat player (`device/firmware/main/rhythm/`, cap `rhythm` on boards with a speaker) keeps a rhythm going on Molty by
+itself: the agent sends the library and a tempo once (`rhythm.play`), the device loops the pattern, makes every drum's
+sound and places each hit on its exact sample (`rhythm_player.h`). Nothing beat by beat crosses the network.
+
+- **A pattern** is the molty-rhythm skill's `wire()` of a library file: `{id, label, steps, per, beats, layers: [{id,
+  sound, color, hits, accent?}], lengths?, swing?, bars?, order?, count_in?}`. Steps are 1-based; a beat is `per` units;
+  uneven `lengths` (aksak) and `swing` move the steps; `bars` and `order` make a phrase; `count_in` bars of clicks on the
+  beats come first (1 unless it says); `region`, its index in `regions`. The device refuses anything else (`invalid_args`).
+- **The library** is up to 96 patterns (32 KB through the relay), sent whole so Molty can browse it with no round trip,
+  and optionally `regions` (1 to 16 `{label, color}`): the wheel's level above the rhythms while it is stopped.
+- **The sound.** Each drum is synthesised (`low`, `head`, `tom`, `slap`, `snare`, `rim`, `hat`, `bell`, `shaker`, `clap`;
+  `click` for the count-in), mixed under a soft limit, 16 kHz. A tempo change takes the next sample; a mute fades the
+  drum in 5 ms. The step times are worked out once a step, never a sample (the player's share of a core stays small).
+- **Sync.** The picture shows where the sound will be when each frame is seen: the speaker's clock (the samples written,
+  less the DMA ring, plus the time since the last write, smoothed, never drifting) read ahead by the screen's own delay
+  (measured each frame: the sim's frame to its first window, half a refresh, half a frame; `beat.view` in `/api/log`),
+  plus `sync` (ms, -250 to 250, `rhythm.play` / `rhythm.set`, kept in NVS): positive draws the picture earlier.
+- **The speaker is shared.** One thing plays at a time, as ever: a `say`, a `listen` or the chirp after it takes the
+  speaker, the rhythm fades out and waits; after it, it starts again with a count-in at the bar it left. The agent's
+  voice is never mixed with it, and the microphone never hears it.
+- **The clock** is the rhythm package's screen (a `beat` item, [PACKAGES.md](PACKAGES.md#layouts)): it draws from the
+  speaker's own clock. The sound lives as long as its clock: with none on screen for 2 s it stops; stopped, the clock goes.
+- **On Molty itself:** a tap in the middle plays (after a count-in) and stops; stopped, the clock waits at rest with
+  a play mark in the middle and the rim chooses among the region's rhythms (shown at once, silent); a tap on the
+  region's name above the rhythm's goes up to the regions (the rim steps through them, a tap in the middle opens one
+  on its last rhythm); playing, the rim turns the tempo and a dot mutes a drum (`ring`, `tap` and `rhythm` events).
+  While a rhythm shows the accept button plays and stops it as the middle does; the reject button, or a finger held
+  on the glass, closes it like any scene ([Closing a screen](#closing-a-screen)). `paused: true` is the same rest
+  (back at the phrase's start); `rhythm.stop` leaves.
+- **The buzz** (`buzz: true`, off unless asked): a 30 ms buzz on each main beat, started 30 ms early so the motor is up
+  to speed when the beat is heard; dropped like any buzz (no motor, the mic open). While it buzzes the shake detector is
+  deaf, so shake to talk waits.
+
+## Closing a screen
+
+Every scene a skill shows can be closed by the human on Molty itself, whatever it is:
+
+- **The reject button** (the one that is not accept): one press closes the scene whole and the creature comes back,
+  whatever the button is bound to. With no scene up it does what it is bound to, as ever. It never buzzes.
+- **A finger held still** anywhere on the glass for a second (`SCENE_HOLD_S`): a ring of dots fills round the rim from
+  a quarter second on; lifting early, moving more than ~12 px, or a wheel's click under it cancels. Complete, it closes
+  one level with the touch buzz: a layout opened over another goes back to it (a press beside such a layout has already
+  gone back, as a tap does), the top one leaves to the creature.
+- Either way the scene leaves as scenes leave when they end, a rhythm on it stops, and the agent gets a `scene` event,
+  `why: "close"`: `layout` is the one now up, none when the creature is back. Treat the screen as gone and do not show
+  it again unasked.
+
 ## Device events
 
 Device→relay `{"t":"evt","name":...,"data":{...}}` frames, sent only while the link is up
@@ -1015,17 +1073,24 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 |---|---|---|
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
-| `tap` | `{x, y, spot?, opened?, closed?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
-| `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
+| `tap` | `{x, y, spot?, opened?, closed?, muted?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a rhythm clock's drum dot: `spot` the drum, `muted` whether it is silent now (Molty muted it itself). On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
+| `ring` | `{spot, value}` · `{spot, index, label?, id?}` | a scene's wheel settled ([PACKAGES.md](PACKAGES.md#layouts)): the finger left a wheel where it moved it: a number (`value`) or a choice (`index`, `label`; `id`: the rhythm a pick chose, shown stopped until a tap in the middle plays it; `spot: "region"`: a pick's regions, one level up). Never one a click |
+| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm, bpm}` | the beat player's state changed on the device itself: a tap in the middle or the accept button played it (`playing`) or stopped it on the clock, choosing (`paused`); the reject button, or its clock leaving the screen, stopped it and it left (`stopped`) ([Rhythm](#rhythm)) |
+| `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again), `close` (the human closed it: the reject button or a finger
+held a second, [Closing a screen](#closing-a-screen)) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
 | `answer` | `{job, index, label}` · `{job, index: null, reason: "timeout"\|"cancelled"}` | an `ask` ended: tapped (0-based `index`, `label` verbatim), timed out, or cancelled; one per job, never rate-limited |
 | `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` / `buzz` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a creature that is not a package. Relay-internal: kept per device (below) |
 
-Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
-simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
-words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
+Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the picture
+dissolves to an empty glass (about 0.9 s), then the fluid stops simulating and drawing and
+the panel sleeps; a touch (not a tap), a shake, a button, new words, a question or a listen
+turns it back on, and the picture gathers on the empty glass (about 0.65 s). Power off (PWR
+held) dissolves into "bye!", which holds a moment and dissolves to an empty glass before the
+power goes (about 2.5 s; the power goes after 4 s whatever the screen does). A restart the
+device chooses (an update, `POST /api/reboot`) dissolves to the empty glass first too. `GET /api/power` has the battery and the last
 12 h of per-minute samples (device/firmware/main/power/power.h).
 
 The screen also goes off by itself (`screen_nap.h`) once the creature has slept for the human's
@@ -1211,7 +1276,7 @@ flowchart TD
 | Step | Detail |
 |---|---|
 | Relay room | `DeviceRoom.onEvt`, over the device's WSS |
-| Allow list | `shake`, `tap`, `button`, `answer`; the rest stays internal |
+| Allow list | `shake`, `tap`, `button`, `answer`, `ring`, `rhythm`, `scene`; the rest stays internal |
 | Relay's own events | `utterance`, `utterance.partial`; `draft.used` / `draft.dropped` to one agent |
 | Cap | 30 a minute per device; the excess is dropped and counted |
 | Event ring | `ev:<seq>`, 200 events / 24 h, in Durable Object storage |
@@ -1229,8 +1294,10 @@ flowchart TD
 |---|---|
 | `shake` | `{peak_g: number 0..64, reversals: int, ms: int, listen?: string}` → agents get `{peak_g, reversals, ms}` plus `listening: true, turn_id` when the relay adopted `listen` |
 | `tap` | `{x: 0..1, y: 0..1}` (screen position, unit square); on a scene's spot also `spot: "<id>"`, with `opened: "<layout>"` when Molty itself opened that layout for the tap; `closed: true` when the tap beside an opened layout took Molty back to the one under it. A malformed extra is dropped, the tap is kept |
-| `scene` | `{why: "open" \| "back" \| "end", pkg?, layout?, spot?}`: Molty changed its own screen. `pkg` and `layout` are what is up now (both or neither: neither means no scene, the creature is back); `spot` is the one that opened it. Inbox only (pull and ride-along): no webhook gets it |
+| `scene` | `{why: "open" \| "back" \| "close" \| "end", pkg?, layout?, spot?}`: Molty changed its own screen (`close`: the human closed it). `pkg` and `layout` are what is up now (both or neither: neither means no scene, the creature is back); `spot` is the one that opened it. Inbox only (pull and ride-along): no webhook gets it |
 | `button` | `{id: "accept" \| "reject"}` |
+| `ring` | `{spot, value: number}` or `{spot, index: int 0..31, label?, id?}`: a wheel settled. Webhooks only when their `events` name it |
+| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm?, bpm}`. Webhooks only when their `events` name it |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
 
 **Who Molty is.** The device's `creature` frame (Device events) is checked and bounded (`creatureData` in

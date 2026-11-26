@@ -1,0 +1,40 @@
+{
+  "id": "lesnoto",
+  "name": "Lesnoto, seven eight",
+  "label": "LESNOTO",
+  "status": "verified",
+  "region": "balkans",
+  "country": "Bulgaria",
+  "steps": 3,
+  "lengths": [3, 2, 2],
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 2, 3],
+  "layers": {
+    "drum": {
+      "name": "The drum, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3]
+    }
+  },
+  "source": "Lesnoto 3+2+2; Wikipedia Bulgarian dances; Chromatone Balkan rhythms; Fiddling Around; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Bulgarian dances",
+      "url": "https://en.wikipedia.org/wiki/Bulgarian_dances",
+      "shows": "Lesnoto: 7/8 (3+2+2)"
+    },
+    {
+      "title": "Chromatone: Balkan rhythms",
+      "url": "https://chromatone.center/theory/rhythm/system/balkan/",
+      "shows": "Lesnoto 7/16: S,Q,Q (1,2,3,1,2,1,2)"
+    },
+    {
+      "title": "Fiddling Around: Balkan rhythms in Celtic music",
+      "url": "https://www.fiddlingaround.co.uk/balkan%20rhythms.html",
+      "shows": "Cetvorno 7/8: 123,12,12 (same grouping, other name)"
+    }
+  ]
+}

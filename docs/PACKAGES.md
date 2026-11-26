@@ -85,7 +85,7 @@ and the `skills` that play it. A check validates every package and the index (si
 
 ```jsonc
 {
-  "v": "molty-pkg/1",
+  "v": "molty-pkg/1",             // "molty-pkg/2": a creature whose rig packs its clips (CREATURES.md section 12)
   "id": "astrology",              // [a-z0-9-]{1,32}; the file name and the install id
   "name": "Astrology",            // shown in the install prompt and the console
   "version": "1.5.0",             // [0-9A-Za-z.-], at most 15 characters
@@ -130,6 +130,9 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `glyph` | `x`, `y`, `size`, `asset`, `rot` | a mask or image asset |
 | `text` | `x`, `y`, `size`, `str` | words, in the device font |
 | `spot` | `x`, `y`, `r`, `say`, `id`, `pts`, `lights`, `grow`, `arc`, `r0`, `r1`, `open`, `ttl` | nothing: a place to tap. Molty shows `say` as the subtitle; the `tap` event names `id` |
+| `beat` | `r`, `size`, `color` | the rhythm the beat player holds, as a clock (below); one a layout |
+| `dial` | `id`, `r`, `r0`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a wheel round the edge the finger turns (below); one a face |
+| `centre` | `r` | nothing: a tap in the middle plays and stops the beat (below) |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
@@ -165,6 +168,44 @@ A say over the scene replaces the reading. Both show as the reader does, one wor
 in the accent colour on the centre line, but small: low on the screen, under the drawing, or at the layout's `caption_y`
 (sized as at the bottom). In high definition the words sit on a dark backdrop in the fine dust: each forms from the dust,
 the one before breaks into specks that ride the water, and the last one dissolves slower.
+
+**Beats and wheels** are the device's own pieces: what they draw and what a finger does to them happen on Molty, each
+frame, with no round trip.
+
+- A **`beat`** draws the rhythm Molty's beat player holds (`rhythm.play`, [AGENT-LINK.md](AGENT-LINK.md#rhythm)) from the
+  speaker's own clock, so the picture shows what is heard: one ring a drum (`r`, then 0.75, 0.525 and 0.3375 of it),
+  a mark a step just outside them (longer on a main beat), a dot a hit of this bar in its drum's colour (`size`, default
+  0.057 of `r`; a muted drum's at 30 percent), the rhythm's name under the centre, the phrase as a row of pips, the
+  count-in's click on its mark. Its hand (`color`, white) sits on the step sounding and each hit swells as it sounds;
+  stopped, the hand rests at 12 o'clock (grey) and a play mark (a triangle of dots) fills the middle, playing a small
+  stop mark. Only the rings and the marks are kept (the dots, the fine dust), drawn again in place for a new rhythm;
+  everything else is shapes redrawn each frame, so a bar of a phrase, a mute, a tempo or a wheel's words redraw
+  nothing kept, and the scene forms from dust once, never again while it shows. A tap on a
+  dot mutes its drum, again brings it back (a `tap` event with `spot` and `muted`). Its steps sit at `90 - 360 * start /
+  bar` degrees, clockwise from 12 o'clock.
+- A **`dial`** is a ring at the edge (drawn at `r`, 0.95) that a finger turns: a touch that comes down at `r0` (0.85) or
+  further out is the wheel's until it lifts, so it never stirs the water, never taps a spot and never sends a `tap`.
+  Every `step` degrees (12) turned is one click: clockwise adds `by` (1; `fast` turning over 200 degrees a second) to its
+  value, held to `min`..`max`, from `value`; with `labels` (a list param, each element's `label` field) it steps through
+  them instead, one bead each, `step` apart, the chosen one under the notch at 12 o'clock; beads and ticks step a click at
+  a time, never sliding with the finger (a frame of a turn redraws only what a click changed). Each click flashes the notch
+  and ticks the motor, `tick_ms` (5 to 60) at `tick` percent (25 to 100); 0 or left out is the device's own wheel tick
+  (22 ms at 80, firmer than a tap's buzz), at most one every 60 ms. While a number turns, and 0.9 s after, it shows in
+  the middle; a choice's label shows all the while its face is up. `sets: "tempo"` makes the value the beat player's
+  tempo at once; `sets: "pick"` steps through the beat player's rhythms (its labels), the clock showing each at once;
+  when `rhythm.play` sent `regions`, it steps through one region's rhythms, the region's name small above the rhythm's
+  (a tap there goes up: the rim steps through the regions, each bead its tint, a tap on the centre opens the one
+  chosen on its last rhythm, a `ring` event `{spot: "region", index, label}` when it settles there).
+  `face: 0` is up while the beat plays (or with no beat), `face: 1` while it is stopped. When it settles where the
+  finger moved it the agent gets one `ring` event: `{spot: id, value}`, or `{spot, index, label}` (and `id`, the
+  rhythm a pick chose).
+- A **`centre`** is a disc of radius `r` round the centre: a tap there plays the beat (after a count-in) or stops it
+  at rest, back at the phrase's start (a `rhythm` event, `playing` or `paused`); at the regions it opens the one chosen
+  (its mark a ring of dots). A layout with a centre has a beat. A beat's dots take a tap only while it plays.
+
+The rhythm package's clock is all three: `{ "k": "beat", "r": 0.672 }`, a tempo dial (`step` 12, `by` 2, `fast` 4, 40 to
+220, `sets: "tempo"`), a pick dial on face 1 (`step` 30, `sets: "pick"`), both ticking `$tick_ms` at `$tick`, and a
+centre of 0.26.
 
 **Binding:** any field value may be a string `"$name"`, read from the params the agent sent (`"$title"`, `"$lit"`).
 **Repetition:** an item with `"each": "$list"` is drawn once per element of that list param; inside it, `"@field"` reads the element
@@ -266,6 +307,9 @@ Every declared param must be sent, and nothing else.
 - A tap lands on the visible `spot` that holds it on its disc or segment; if several do, the smallest (`r`), then the
   nearest (its centre, or its segment). If none does, on the spot whose sector holds it (the same order).
   The reference player has the same test.
+- A `beat`, a `dial` and a `centre` are never repeated (`each`) and join no group; a layout has at most one `beat`, one
+  `centre` and one `dial` a face, and a `centre` only with a `beat`. A press is the wheel's (from its `r0` out), else the centre's, else a beat's dot's,
+  before any spot. The reference player draws none of them (they draw from the device's own state).
 
 ## 4. Agents
 

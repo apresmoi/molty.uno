@@ -1,0 +1,34 @@
+{
+  "id": "buleria",
+  "name": "Buleria",
+  "label": "BULERIA",
+  "status": "verified",
+  "region": "spain",
+  "country": "Spain",
+  "steps": 12,
+  "tempo": {
+    "bpm": 160,
+    "per": 1
+  },
+  "beats": [3, 7, 8, 10, 12],
+  "layers": {
+    "palmas": {
+      "name": "The palmas",
+      "sound": "clap",
+      "hits": [3, 7, 8, 10, 12]
+    }
+  },
+  "source": "Diaz-Banez et al. 2004 (Bridges); Wikipedia Bulerias form 2; tempo a practice default",
+  "sources": [
+    {
+      "title": "El Compas Flamenco: A Phylogenetic Analysis (Bridges 2004)",
+      "url": "https://archive.bridgesmathart.org/2004/bridges2004-61.html",
+      "shows": "buleria as [. . x . . . x x . x . x]: loud claps 3 7 8 10 12"
+    },
+    {
+      "title": "Bulerias, Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Buler%C3%ADas",
+      "shows": "second form, accents on 12 3 7 8 10 in a count that starts at 12"
+    }
+  ]
+}

@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT
 // molty-creature preview (docs/CREATURE.md): a page on this computer that shows a Molty moving as the
 // device draws it: the built package through the device's reference player and dots
-// (device/creatures/js/clip-player.js, clip-dots.js). Ask for a mood or a gesture, or play one action.
+// (device/creatures/js/clip-player.js, clip-pack.js, clip-dots.js). Ask for a mood or a gesture, or play one action.
 // Local only: it listens on 127.0.0.1.
 import { readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { check } from './build.mjs';
 
-const JS = new URL('../../../device/creatures/js/', import.meta.url), SERVED = ['clip-player.js', 'clip-dots.js'];
+const JS = new URL('../../../device/creatures/js/', import.meta.url), SERVED = ['clip-player.js', 'clip-pack.js', 'clip-dots.js'];
 const PAGE = `<!doctype html><meta charset="utf-8"><title>molty-creature preview</title>
 <style>
   body { margin: 0; padding: 16px; background: #101114; color: #c8cce0; font: 14px/1.4 system-ui, sans-serif; display: flex; gap: 20px; flex-wrap: wrap; align-items: flex-start; }

@@ -1,0 +1,51 @@
+{
+  "id": "blues-shuffle",
+  "name": "Blues shuffle",
+  "label": "SHUFFLE",
+  "status": "verified",
+  "region": "usa",
+  "country": "United States",
+  "steps": 8,
+  "swing": 0.33,
+  "tempo": {
+    "bpm": 80,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "hat": {
+      "name": "Hi-hat, the swung eighths",
+      "sound": "hat",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8]
+    },
+    "kick": {
+      "name": "Kick on one and three",
+      "sound": "low",
+      "hits": [1, 5]
+    },
+    "snare": {
+      "name": "Snare on two and four",
+      "sound": "snare",
+      "hits": [3, 7],
+      "accent": [3, 7]
+    }
+  },
+  "source": "Soundbrenner Blues shuffle (hat on the first and third of each triplet, snare 2 and 4, kick 1 and 3); Musicians Institute shuffle lesson (shuffle drops the middle of the triplet); The Drum Ninja (kick 1 and 3, snare 2 and 4); tempo a practice default",
+  "sources": [
+    {
+      "title": "Soundbrenner: blues shuffle",
+      "url": "https://www.soundbrenner.com/blogs/articles/blues-shuffle",
+      "shows": "Hi-hat 1 - let 2 - let (middle triplet silent), snare 2 and 4, kick often 1 and 3"
+    },
+    {
+      "title": "Musicians Institute: shuffle",
+      "url": "https://www.mi.edu/?p=15567",
+      "shows": "The shuffle is based on the 8th note triplet and eliminates the second partition"
+    },
+    {
+      "title": "The Drum Ninja: blues drums",
+      "url": "https://thedrumninja.com/?p=455",
+      "shows": "Triplet pattern in 12/8, kick on one and three, snare on two and four"
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "id": "waltz",
+  "name": "Waltz, three four",
+  "label": "WALTZ",
+  "status": "verified",
+  "region": "basics",
+  "country": "Europe",
+  "steps": 3,
+  "tempo": {
+    "bpm": 170,
+    "per": 1
+  },
+  "beats": [1, 2, 3],
+  "layers": {
+    "oom": {
+      "name": "Oom, the bass on one",
+      "sound": "low",
+      "hits": [1],
+      "accent": [1]
+    },
+    "pah": {
+      "name": "Pah-pah, the chords on two and three",
+      "sound": "rim",
+      "hits": [2, 3]
+    }
+  },
+  "source": "Wikipedia Oom-pah (waltz is oom-pah-pah); Soundbrenner waltz rhythm (strongest accent on beat 1); tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Oom-pah",
+      "url": "https://en.wikipedia.org/wiki/Oom-pah",
+      "shows": "In triple time genres such as the waltz it is oom-pah-pah"
+    },
+    {
+      "title": "Soundbrenner: waltz rhythm",
+      "url": "https://www.soundbrenner.com/blogs/articles/waltz-rhythm",
+      "shows": "Strongest accent on beat 1, beats 2 and 3 lighter"
+    }
+  ]
+}

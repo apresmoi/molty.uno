@@ -1,0 +1,39 @@
+{
+  "id": "fandango-huelva",
+  "name": "Fandango de Huelva",
+  "label": "FANDANGO",
+  "status": "verified",
+  "region": "spain",
+  "country": "Spain",
+  "steps": 12,
+  "tempo": {
+    "bpm": 110,
+    "per": 3
+  },
+  "beats": [1, 4, 7, 10],
+  "layers": {
+    "palmas": {
+      "name": "The palmas",
+      "sound": "clap",
+      "hits": [1, 4, 7, 10]
+    }
+  },
+  "source": "Diaz-Banez et al. 2004 (Bridges, fandango [x . . x . . x . . x . .]); Chromatone flamenco compas, Berlanga (UGR) ch. 4: ternary, one strong beat in three, 12 as 3+3+3+3; tempo a practice default",
+  "sources": [
+    {
+      "title": "El Compas Flamenco: A Phylogenetic Analysis (Bridges 2004)",
+      "url": "https://archive.bridgesmathart.org/2004/bridges2004-61.html",
+      "shows": "fandango as [x . . x . . x . . x . .], four loud claps in 12 pulses"
+    },
+    {
+      "title": "Chromatone, Flamenco compas",
+      "url": "https://chromatone.center/theory/rhythm/system/flamenco/",
+      "shows": "Fandango de Huelva: 12 beats counted in groups of 3"
+    },
+    {
+      "title": "El compas y la sonoridad flamenca (Berlanga, UGR)",
+      "url": "https://www.ugr.es/~berlanga/captulo_4_el_comps_y_la_sonoridad_flamenca.html",
+      "shows": "fandango is ternary, one strong beat every three, 12 as 3+3+3+3"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../schema/display-2.json
+# What Molty draws for this skill (docs/DISPLAY.md). The clock draws the rhythm Molty's beat player holds (rhythm.play
+# sends it); build with `node packages/tools/molty-display.mjs build skills/molty-rhythm`.
+molty: display/2
+package:
+  id: rhythm
+  name: Rhythm
+  version: 1.1.0
+  about: A rhythm Molty plays and draws as a clock, a ring a drum. Tap the middle to play or stop; turn the rim to choose or for the tempo.
+  fallback: speech
+screens:
+  clock: screens/clock.yaml

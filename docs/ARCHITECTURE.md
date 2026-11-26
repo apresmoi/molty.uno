@@ -48,7 +48,7 @@ flowchart TD
 | `apps/cli/` | `molty` CLI + stdio MCP server, direct HTTP or via the relay | device or relay |
 | `device/creatures/` | The JS fluid engine and the JS reference players | console (imported at build time) |
 | `packages/` | Data-only packages the device plays: the duck, cat and octopus creatures (built in) and the astrology scenes ([PACKAGES.md](PACKAGES.md)) | firmware (embedded at build time, or downloaded by the device) |
-| `skills/` | What agents read: `molty` (pairing, talking, asking) and `molty-astro` (the sky, on the astrology package) | agents (they call the relay) |
+| `skills/` | What agents read: `molty` (pairing, talking, asking), `molty-astro` (the sky, on the astrology package) and `molty-rhythm` (a rhythm as a clock, on the rhythm package and the beat player) | agents (they call the relay) |
 | `services/molty-voice/` | The owner's optional voice box: Kyutai STT / TTS behind the relay | relay |
 
 ## Firmware layout
@@ -64,10 +64,11 @@ device/firmware/main/                 the core: no pins, no panel sizes
 ├── creature/       creature package players (channels: creature_player; rigged clips:
 │                   creature_clip, creature_dots, creature_ring)
 ├── pkg/            package store (flash), strict parser, pkg.* / scene.* / creature.* commands
-├── scene/          scene player: a package's layout on screen, its tap spots, the queue
+├── scene/          scene player: a package's layout on screen, its tap spots, the queue; a beat's clock, a wheel
 ├── link/           agent link: WSS client, identity, pairing, command dispatcher, audio, ask
 ├── audio/          VAD (end of speech) and the acknowledgement chirp
-├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark
+├── rhythm/         the beat player: a rhythm looped and synthesised on the device, sharing the speaker
+├── sense/          device events (IMU shake, taps, buttons) → agent + fluid; status mark; a wheel's clicks
 ├── power/          screen off, do not disturb, battery history, power off
 ├── update/         self-update from a release, confirmed by a tap
 └── diag/           log ring, frame histograms, heap guard, /api/diag, /api/log

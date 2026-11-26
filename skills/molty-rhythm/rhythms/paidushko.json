@@ -1,0 +1,35 @@
+{
+  "id": "paidushko",
+  "name": "Paidushko, five eight",
+  "label": "PAIDUSHKO",
+  "status": "verified",
+  "region": "balkans",
+  "country": "Bulgaria",
+  "steps": 2,
+  "lengths": [2, 3],
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 2],
+  "layers": {
+    "drum": {
+      "name": "The drum, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2]
+    }
+  },
+  "source": "Paidushko 2+3; Wikipedia Bulgarian dances; Chromatone Balkan rhythms; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Bulgarian dances",
+      "url": "https://en.wikipedia.org/wiki/Bulgarian_dances",
+      "shows": "Paidushko horo: 5/16 or 5/8 (2+3)"
+    },
+    {
+      "title": "Chromatone: Balkan rhythms",
+      "url": "https://chromatone.center/theory/rhythm/system/balkan/",
+      "shows": "Paidushko 5/16: Q,S (1,2 + 1,2,3)"
+    }
+  ]
+}

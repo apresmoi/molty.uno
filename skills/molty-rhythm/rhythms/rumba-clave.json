@@ -1,0 +1,5 @@
+{ "id": "rumba-clave", "name": "Rumba clave", "label": "RUMBA CLAVE", "status": "verified",
+  "region": "caribbean", "country": "Cuba",
+  "steps": 16, "tempo": { "bpm": 100, "per": 4 }, "beats": [1, 5, 9, 13],
+  "layers": { "clave": { "name": "The clave", "sound": "rim", "hits": [1, 4, 8, 11, 13] } },
+  "source": "Wikipedia Clave (rhythm); Absil 2004 table 1; 3-2; tempo a practice default" }

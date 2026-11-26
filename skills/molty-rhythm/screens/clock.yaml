@@ -1,0 +1,24 @@
+about: The rhythm Molty plays, as a clock, from the speaker's own clock. Tap the centre to play and to stop; stopped, turn the rim to choose a rhythm; playing, turn it for the tempo and tap a drum's dot to mute it.
+duration: hold
+inputs:
+  tick_ms:
+    type: number
+    min: 0
+    max: 60
+    about: "How long the motor ticks for each click of the rim, 5 to 60 ms; 0 for Molty's own (22)."
+    example: 0
+  tick:
+    type: number
+    min: 0
+    max: 100
+    about: "How strong that tick is, 25 to 100 percent; 0 for Molty's own (80)."
+    example: 0
+draw:
+  # the clock, drawn smaller inside the rim (0.84 of the design's 0.8)
+  - beat_clock: { radius: 0.672 }
+  # playing: the rim is the tempo, a click every 12 degrees, 2 beats a minute a click (4 turning fast), 40 to 220
+  - wheel: { id: tempo, sets: tempo, step: 12, by: 2, fast: 4, min: 40, max: 220, value: 100, tick_ms: "{{ tick_ms }}", tick: "{{ tick }}" }
+  # stopped: the rim chooses the rhythm, one bead every 30 degrees
+  - wheel: { id: rhythm, sets: pick, step: 30, face: 1, tick_ms: "{{ tick_ms }}", tick: "{{ tick }}" }
+  # the centre: a tap plays, another stops
+  - centre_tap: { radius: 0.26 }

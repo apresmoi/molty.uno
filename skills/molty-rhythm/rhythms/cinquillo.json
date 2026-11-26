@@ -1,0 +1,35 @@
+{
+  "id": "cinquillo",
+  "name": "Cinquillo",
+  "label": "CINQUILLO",
+  "status": "verified",
+  "region": "caribbean",
+  "country": "Cuba",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 4
+  },
+  "beats": [1, 5],
+  "layers": {
+    "cinquillo": {
+      "name": "The cinquillo",
+      "sound": "rim",
+      "hits": [1, 3, 4, 6, 7],
+      "accent": [1]
+    }
+  },
+  "source": "Toussaint 2005 fig. 1b E(5,8); Wikipedia Cinquillo (Mauleon 1993 p.51); tempo a practice default",
+  "sources": [
+    {
+      "title": "Toussaint, The Euclidean Algorithm Generates Traditional Musical Rhythms (2005)",
+      "url": "http://cgm.cs.mcgill.ca/~godfried/publications/banff.pdf",
+      "shows": "E(5,8) = [x . x x . x x .], the Cuban cinquillo"
+    },
+    {
+      "title": "Wikipedia, Cinquillo",
+      "url": "https://en.wikipedia.org/wiki/Cinquillo",
+      "shows": "2/4: eighth, sixteenth, eighth, sixteenth, eighth, which is onsets 1, 3, 4, 6, 7 of eight sixteenths"
+    }
+  ]
+}

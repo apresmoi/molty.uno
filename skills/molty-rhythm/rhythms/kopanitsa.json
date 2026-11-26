@@ -1,0 +1,40 @@
+{
+  "id": "kopanitsa",
+  "name": "Kopanitsa, eleven eight",
+  "label": "KOPANITSA",
+  "status": "verified",
+  "region": "balkans",
+  "country": "Bulgaria",
+  "steps": 5,
+  "lengths": [2, 2, 3, 2, 2],
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 2, 3, 4, 5],
+  "layers": {
+    "drum": {
+      "name": "The drum, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5]
+    }
+  },
+  "source": "Kopanitsa 2+2+3+2+2; Wikipedia Bulgarian dances; Chromatone Balkan rhythms; Fiddling Around; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Bulgarian dances",
+      "url": "https://en.wikipedia.org/wiki/Bulgarian_dances",
+      "shows": "Kopanitsa: 11/16 (2+2+3+2+2), quick-quick-slow-quick-quick"
+    },
+    {
+      "title": "Chromatone: Balkan rhythms",
+      "url": "https://chromatone.center/theory/rhythm/system/balkan/",
+      "shows": "Kopanitsa 11/16: QQSQQ"
+    },
+    {
+      "title": "Fiddling Around: Balkan rhythms in Celtic music",
+      "url": "https://www.fiddlingaround.co.uk/balkan%20rhythms.html",
+      "shows": "Kopanica 11/8: 12,12,123,12,12"
+    }
+  ]
+}

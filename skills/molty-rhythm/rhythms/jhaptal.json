@@ -1,0 +1,40 @@
+{
+  "id": "jhaptal",
+  "name": "Jhaptal, ten beats",
+  "label": "JHAPTAL",
+  "status": "verified",
+  "region": "india",
+  "country": "India",
+  "steps": 10,
+  "tempo": {
+    "bpm": 80,
+    "per": 1
+  },
+  "beats": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "layers": {
+    "theka": {
+      "name": "The tabla, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+      "accent": [1]
+    },
+    "clap": {
+      "name": "The hand claps (the khali is a wave, no clap)",
+      "sound": "clap",
+      "hits": [1, 3, 8]
+    }
+  },
+  "source": "Jhaptal 2+3+2+3, claps 1 3 8, khali 6; Wikipedia Jhaptal; DigiTabla; tempo a practice default; bol syllables differ between sources so only the beat structure is modelled",
+  "sources": [
+    {
+      "title": "Wikipedia: Jhaptal",
+      "url": "https://en.wikipedia.org/wiki/Jhaptal",
+      "shows": "Jhaptal 10 beats, 2+3+2+3, claps on 1, 3 and 8, wave on beat 6 (khali)"
+    },
+    {
+      "title": "DigiTabla: Jhaptal",
+      "url": "https://digitabla.com/reference/tals-and-thekas/jhaptal/",
+      "shows": "Jhaptal 10 matras, 2-3-2-3, X-2-0-3, clap-clap-wave-clap, khali matras 6 and 7"
+    }
+  ]
+}

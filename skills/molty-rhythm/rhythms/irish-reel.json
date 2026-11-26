@@ -1,0 +1,35 @@
+{
+  "id": "irish-reel",
+  "name": "Irish reel, four four",
+  "label": "REEL 4/4",
+  "status": "verified",
+  "region": "celtic",
+  "country": "Ireland",
+  "steps": 4,
+  "tempo": {
+    "bpm": 100,
+    "per": 1
+  },
+  "beats": [1, 2, 3, 4],
+  "layers": {
+    "drum": {
+      "name": "The bodhran, four counts",
+      "sound": "head",
+      "hits": [1, 2, 3, 4],
+      "accent": [1]
+    }
+  },
+  "source": "C. S. MacCath bodhran workshop (count to four, emphasis on the one); MIT session handout (reels 4/4, in 2); tempo a practice default",
+  "sources": [
+    {
+      "title": "Bodhran workshop outline (C. S. MacCath)",
+      "url": "https://csmaccath.com/files/blog/bodhran_workshop_outline_0.pdf",
+      "shows": "Reel: counting to four with emphasis on the one"
+    },
+    {
+      "title": "Irish session tunes handout (MIT)",
+      "url": "https://web.mit.edu/~santucci/www/tunes/tunes.pdf",
+      "shows": "Reels: 4/4, cut time (in 2)"
+    }
+  ]
+}

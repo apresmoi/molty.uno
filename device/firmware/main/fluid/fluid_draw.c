@@ -1701,6 +1701,7 @@ static bool hdc_room(fluid_draw_t *d) {
 #define MP_NEW_LINES0 0.85f    /* the new lines come in over this .. this (as the old: a cell's together), over the  */
 #define MP_NEW_LINES1 1.12f    /*  last landings                                                                      */
 #define MP_LEN        1.12f    /* the change's length (the dust down by 1.04, the lines full 2 frames after)         */
+#define MP_DARK       0.84f    /* a change into the empty glass ends here: the cloud gone (MP_MID + MP_MID1 + MP_GONE) */
 #define MP_GONE       0.2f     /* a pair with no new grain fades in the cloud over this, from its cloud point on    */
 #define MP_KNOWN      0.2f     /* the pull toward the new spot comes in over this, once the new picture is read    */
 #define MP_FPS        30.f     /* the change's frames a second (one step a frame drawn, never two)                 */
@@ -1978,6 +1979,15 @@ static void morph_end(fluid_draw_t *d, bool cut) {
     m->forced = m->keep = false;
 }
 
+void fluid_draw_morph_empty(fluid_draw_t *d, uint16_t *snap) {
+    if (!d || !snap) return;
+    fluid_morph_t *m = &d->m;
+    job_release(d);
+    if (m->on) morph_end(d, true);
+    memset(snap, 0, sizeof(uint16_t) * (size_t)d->fb_w * d->fb_h);
+    m->snap = snap; m->look = FLUID_LOOK_EMPTY; m->whole = morph_maps(d);
+}
+
 void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready) {
     if (!d) return;
     fluid_morph_t *m = &d->m;
@@ -1994,7 +2004,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     }
     /* nothing kept to change from, or into a look the panel's mirror keeps (it writes over the kept glass): at once */
     job_release(d);                                     /* (a change ends or another starts: the reading so far is the drawer's) */
-    if (!look || (look & FLUID_LOOK_GLASS) || !snap || !(m->on || m->whole) || !morph_maps(d)) {
+    if (!look || !snap || !(m->on || m->whole) || !morph_maps(d)) {
         if (m->on) morph_end(d, true);
         else d->force = true;
         m->look = look; m->whole = (look & (FLUID_LOOK_KEEP | FLUID_LOOK_GLASS)) && snap;
@@ -2998,7 +3008,8 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         if (!mm->passed) return;
         mm->clock = true;
         m->dg[FLUID_MD_PASS] = m->frames;
-        m->n = m->keep ? mq(MP_BORN0) : 0;              /* (its dust alone: from just before its grains come up) */
+        /* (its dust alone, or from an empty glass: from just before its grains come up, MP_BORN0: ~0.65 s) */
+        m->n = m->keep || (!mm->A.n && !mm->L0.n) ? mq(MP_BORN0) : 0;
         m->t = qtime(m->n);
         mm->slow = !m->ready && !m->keep;               /* (its dust built late: the dissolve a little slower) */
         mm->rate = mm->slow ? MP_SLOW : MP_RATE;
@@ -3203,7 +3214,7 @@ static void morph_begin(fluid_draw_t *d) {
     if (!r) return;
     m->dg[FLUID_MD_OLD] = m->frames;
     fluid_morph_mem_t *mm = m->mm;
-    m->dur = MP_LEN;
+    m->dur = m->look == FLUID_LOOK_EMPTY ? MP_DARK : MP_LEN;   /* (into the empty glass: the old dust gone, nothing gathers) */
     m->n = m->w = 0; m->t = 0.f;
     if (!mm->again) m->px = m->wins = 0;
 }

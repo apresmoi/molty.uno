@@ -178,6 +178,13 @@ cJSON *link_evt_creature_frame(const char *info);
  * (what is up now; neither: nothing), spot? (the tapped spot that opened it)} */
 cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot);
 cJSON *link_evt_button_frame(bool accept);
+/* evt `ring`: a scene's wheel settled (the finger left it where it moved it). data
+ * {spot: the wheel's id, value (a number wheel) | index + label (a list wheel), id? (the rhythm chosen)}. index < 0:
+ * a number. */
+cJSON *link_evt_ring_frame(const char *spot, double value, int index, const char *label, const char *id);
+/* evt `rhythm`: the beat player's state changed on the device (a button, the clock leaving the screen). data
+ * {state: "playing" | "paused" | "stopped", rhythm, bpm} */
+cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm);
 /* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
 cJSON *link_evt_dnd_frame(bool on);
 cJSON *link_evt_double_tap_frame(double x, double y);
@@ -226,6 +233,6 @@ const char *link_mood_name(int id);
  * plays it is the creature's (mole_fluid_gesture): the shared ones (cute_act.h) and its package's own. */
 #define LINK_GESTURE_MAX 24
 bool link_act_args(const cJSON *args, const char **name);
-/* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
- * the saved one unless it was text or the demo reel, which become the creature. */
+/* After the pairing code / the Improv "hi": the state body to go back to (malloc'd): a scene
+ * stays a scene, anything else (text, a state from older firmware) is the creature. */
 char *link_restore_body(const char *saved_state_json);

@@ -80,6 +80,9 @@ typedef struct {
     float swirl, swirl_freq;           /* ambient eddies                                 */
     float refr, crest;                 /* ripple refraction + crest highlight            */
     float speed_mul, hold;
+    bool  settle;                      /* the next frame's steps put the ink and its colour on their target at once
+                                        * (a change of picture brings the state: it is whole when the change reads
+                                        * it); fluid_sim_color clears it                                          */
     bool  still;                       /* only the surface moves (fluid_sim_step: the wave
                                         * alone; fluid_sim_color: each cell its target's colour):
                                         * the ink holds while nothing shows it              */
@@ -247,16 +250,6 @@ static inline float fluid_smooth(float a, float b, float x) {
 
 /* ── targets (targets.js) ─────────────────────────────────────────────────── */
 
-enum { FLUID_FX_RIPPLE, FLUID_FX_VORTEX, FLUID_FX_WAVE, FLUID_FX_COUNT };
-extern const char *const FLUID_FX_NAMES[FLUID_FX_COUNT];
-
-/** Breathing metaball. (ox,oy) leans it (IMU tilt). */
-void fluid_target_blob(fluid_sim_t *s, float t, float swell, float ox, float oy);
-void fluid_target_effect(fluid_sim_t *s, int fx, float t, float swell, float ox, float oy);
-void fluid_effect_enter(fluid_sim_t *s, int fx);
-void fluid_effect_tick(fluid_sim_t *s, int fx, float dt, float *st);   /* st: 1 float of fx state */
-void fluid_effect_exit(fluid_sim_t *s, int fx);
-
 typedef struct {
     char  ch;
     bool  acc;                         /* ORP letter                                      */
@@ -406,12 +399,14 @@ uint8_t fluid_braille_contour(const float *sub);
  * it moves: the glass is kept (snap), each frame the pixels it changes are composed there, and the cell rows they are
  * in are sent straight from there in windows of whole rows (fluid_draw.c morph_send). Its last frame draws the new look
  * whole where it changed since it was read. A look marked
- * FLUID_LOOK_KEEP is copied into snap as the drawer sends it; under FLUID_LOOK_GLASS the panel's own mirror keeps it (a
- * change goes from such a look, never into one: those come at once). */
+ * FLUID_LOOK_KEEP is copied into snap as the drawer sends it; under FLUID_LOOK_GLASS the panel's own mirror keeps it. From
+ * an empty glass (fluid_draw_morph_empty: no old dust, no old lines) the change is its second half alone: from MP_BORN0. */
 #define FLUID_LOOK_KEEP       0x80000000u  /* a look's number with this: the drawer keeps the glass as it sends it      */
 #define FLUID_LOOK_GLASS      0x40000000u  /* ... with this: the panel's mirror keeps it (windows on any rows)          */
 #define FLUID_LOOK_DUST       0x10000000u  /* ... with this: its dust is in. Gained by a look that showed without it: the
                                             * dust comes as a change of its own (the lines stay); lost: nothing      */
+#define FLUID_LOOK_EMPTY      0x90000000u  /* the empty glass (kept, nothing on it): what a change gathers from at power on
+                                            * and on waking, and goes into before the panel sleeps                     */
 /* a kept look's number: what it is (its kind, in its own bits: a scene numbered 1 is not the creature) and which one */
 enum { FLUID_LOOK_CREATURE, FLUID_LOOK_SCENE, FLUID_LOOK_ASK };
 static inline uint32_t fluid_look_of(int kind, uint32_t id, bool dust) {
@@ -729,6 +724,9 @@ void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
  *  A look that differs only by FLUID_LOOK_DUST changes nothing while a change runs; gained afterwards, its dust comes.
  *  A new look starts a change; the inputs are the new look's from the same frame. */
 void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready);
+/** The glass is empty (snap cleared, black): the next look gathers from it (FLUID_LOOK_EMPTY), on the change's short clock
+ *  (from MP_BORN0: ~0.65 s). With the drawer idle; a change running ends. */
+void fluid_draw_morph_empty(fluid_draw_t *d, uint16_t *snap);
 /** With the drawer idle, once a frame with the inputs: the cells (N) whose dots are the look's lines, not its dust (a
  *  creature's own cells; copied), or NULL: none. */
 void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells);

@@ -1,0 +1,40 @@
+{
+  "id": "cueca",
+  "name": "Cueca",
+  "label": "CUECA",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 6,
+  "tempo": {
+    "bpm": 80,
+    "per": 3
+  },
+  "beats": [1, 4],
+  "layers": {
+    "bajo": {
+      "name": "Bajo, the guitar's bass strings",
+      "sound": "low",
+      "hits": [1, 3, 5],
+      "accent": [5]
+    },
+    "chasquido": {
+      "name": "Chasquido, the muted treble slap",
+      "sound": "rim",
+      "hits": [4]
+    }
+  },
+  "source": "Sanchez (UNCuyo) 2004 fig. 3.80.1, cueca cuyana guitar; Duran (U. Playa Ancha) p. 101, Chilean cueca guitar basic pattern (adds treble strokes on 2 and 6); tempo a practice default",
+  "sources": [
+    {
+      "title": "Octavio Sanchez, La cueca cuyana contemporanea. Identidades sonora y socio-cultural (tesis de maestria, UNCuyo 2004), p. 222 fig. 3.80",
+      "url": "https://bdigital.uncu.edu.ar/objetos_digitales/2764/tesissanchez.pdf",
+      "shows": "Most frequent cueca cuyana rasguidos on a two-line staff (low strings below, treble above, triangle = chasquido). 3.80.1: low quarter on eighth 1, low eighth on 3, chasquido eighth on 4, low quarter on 5. Prose: the low stratum stresses 3/4 on the last two quarter beats, the treble chasquido always on the second dotted quarter (6/8); the last quarter is played slightly accented."
+    },
+    {
+      "title": "Fabian Duran B., Repertorio musical criollo latinoamericano: usos y practicas en Venezuela, Peru, Argentina y Chile (Universidad de Playa Ancha), pp. 99-101",
+      "url": "http://ciemchile.cl/documentos/Fabian_Duran_B_Repertorio_Musical_Criollo_Latinoamericano,_usos_y_pr%C3%A1cticas_en_Venezuela,_Per%C3%BA,_Argentina_y_Chile.pdf",
+      "shows": "Cueca, 6/8, 'Patron basico para la guitarra': six eighths stroked P M P CH P M (P thumb on the bass strings, M hand, CH chasquido), accents on eighths 2 and 5; text: bass strings (bordones) set apart from trebles, rasgueo plus chasquido."
+    }
+  ]
+}

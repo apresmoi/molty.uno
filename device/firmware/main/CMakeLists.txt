@@ -134,10 +134,16 @@ idf_component_register(
         # audio: listen end-of-speech detection (plain C, host-tested)
         "audio/vad.c"
         "audio/chirp.c"          # the turn acknowledgement blip (link_audio)
+        # rhythm: the beat player (a library and a tempo once; it loops, synthesises its drums, shares the speaker)
+        "rhythm/rhythm_player.c" # the clock, the drums, the mix (plain C, host-tested)
+        "rhythm/rhythm_wire.c"   # rhythm.play's patterns, strictly (plain C, host-tested)
+        "rhythm/rhythm_core.c"   # the one player: commands, the screen's acts, events (plain C)
+        "rhythm/rhythm_dev.c"    # its lock, the speaker, the buzz, the link's commands
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
         "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)
         "sense/sense.c"
+        "sense/ring_input.c"     # a scene's wheel turned by the finger, in clicks (plain C, host-tested)
         "power/power.c"          # screen off, do not disturb, the battery history (/api/power)
         "haptic/haptic_plan.c"   # the vibration motor: a buzz's segments, cap, quiet window (plain C, host-tested)
         "haptic/haptic.c"        # ... its PWM and timer, /api/haptic, the link's buzz
@@ -161,6 +167,7 @@ idf_component_register(
         "pkg"
         "scene"
         "audio"
+        "rhythm"
         "sense"
         "power"
         "haptic"

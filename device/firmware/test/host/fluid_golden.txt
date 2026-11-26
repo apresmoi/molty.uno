@@ -3,7 +3,7 @@
 # the 1.46 panel would show different pixels.
 blob-52x32-pastel-all 0x0fea16557ae863f5
 text-52x32-pastel-all 0xb1680ab665ffa976
-ripple-44x27-amber-contours 0x7ebb304fa145d181
-vortex-60x37-green-ascii 0xdc27ecf48a7680fe
-wave-52x32-pastel-ascii 0x97284f7b845b3958
 label-52x32-green-all 0x7c99a0800815142d
+blob-44x27-amber-contours 0x5548d75f184a7c45
+blob-60x37-green-ascii 0xfd90e664cb8d9f27
+text-52x32-pastel-ascii 0xf69991ee224cfd36

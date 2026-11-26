@@ -1,5 +1,5 @@
 /*
- * fluid_target.c — what the fluid relaxes toward: blob, effect interludes, speed text.
+ * fluid_target.c: what the fluid relaxes toward: speed text, the rings and arcs.
  *
  * Port of device/creatures/js/fluid/targets.js (minus the 3D creature target —
  * mole_fluid.c exposes a per-cell target-source hook for that). Each fill writes
@@ -23,102 +23,6 @@
 #define FLUID_FREE(p)   free(p)
 #endif
 
-#define RGB(hex) { ((hex) >> 16 & 255) / 255.f, ((hex) >> 8 & 255) / 255.f, ((hex) & 255) / 255.f }
-
-/* ── blob ───────────────────────────────────────────────────────────────────
- * A breathing metaball: 4 orbiting radial sources summed, iso-surfaced with a soft
- * edge, textured inside by a field-synth patch (radial sin × noise, "Lava"-like). */
-static const fluid_patch_t BLOB_PATCH = { 1.2f, 0.55f, 2, {
-    { FV_NOISE, FW_SIN, 2.6f, 0.45f, 1.f },
-    { FV_RADIAL, FW_SIN, 1.6f, 0.35f, 0.6f },
-} };
-static const float BLOB_A[3] = RGB(0xffb3c7), BLOB_B[3] = RGB(0xb9a4ff);
-
-void fluid_target_blob(fluid_sim_t *s, float t, float swell, float ox, float oy) {
-    FLUID_PROF_BEGIN(c0);
-    float C[4][3];
-    for (int q = 0; q < 4; q++) {
-        float w = 0.35f + q * 0.17f, ph = q * 1.7f, r = (0.19f + 0.025f * q) * swell;
-        C[q][0] = 0.2f * cosf(t * w + ph) + ox;
-        C[q][1] = 0.17f * sinf(t * w * 1.3f + ph) + oy;
-        C[q][2] = r * r;
-    }
-    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
-        const int k = j * s->W + i;
-        if (!s->mask[k]) { s->T[k] = 0; continue; }
-        float x = s->xs[i], y = s->ys[j], F = 0.f;
-        for (int q = 0; q < 4; q++) {
-            float dx = x - C[q][0], dy = y - C[q][1];
-            F += C[q][2] / (dx * dx + dy * dy + 1e-4f);
-        }
-        float edge = fluid_smooth(0.85f, 1.6f, F);
-        float tex = edge > 0.f ? fluid_patch(&BLOB_PATCH, x - ox, y - oy, t) : 0.f;
-        s->T[k] = fq(edge * (0.5f + 0.5f * tex), FQ_UNIT);
-        float m = fluid_clamp01(tex);
-        s->tcol[k] = fluid_pack_rgba8(BLOB_A[0] + (BLOB_B[0] - BLOB_A[0]) * m, BLOB_A[1] + (BLOB_B[1] - BLOB_A[1]) * m,
-                                      BLOB_A[2] + (BLOB_B[2] - BLOB_A[2]) * m, 0.f);
-    }
-    FLUID_PROF_END(FP_TARGET, c0);
-}
-
-/* ── effect interludes ─────────────────────────────────────────────────────
- * Each is a field-synth patch plus a PHYSICAL action on the fluid, so the interlude
- * is felt in the medium, not painted over it. */
-const char *const FLUID_FX_NAMES[FLUID_FX_COUNT] = { "ripple", "vortex", "wave" };
-
-static const fluid_patch_t FX_PATCH[FLUID_FX_COUNT] = {
-    { 1.5f, 0.15f, 2, { { FV_RADIAL, FW_SIN, 3.2f, 0.9f, 1.f }, { FV_NOISE, FW_SIN, 2.f, 0.3f, 0.3f } } },
-    { 1.3f, 0.25f, 2, { { FV_SPIRAL, FW_SAW, 2.5f, 0.8f, 1.f }, { FV_ANGULAR, FW_SIN, 3.f, -0.5f, 0.7f } } },
-    { 1.3f, 0.30f, 3, { { FV_LINY, FW_SIN, 1.6f, 0.6f, 1.f }, { FV_NOISE, FW_SIN, 2.4f, 0.5f, 0.8f },
-                        { FV_LINX, FW_SIN, 1.1f, 0.2f, 0.5f } } },
-};
-static const float FX_COL[FLUID_FX_COUNT][2][3] = {
-    { RGB(0x2effb0), RGB(0x7df9ff) },
-    { RGB(0xff7a45), RGB(0xffd24a) },
-    { RGB(0x7b5cff), RGB(0x2effb0) },
-};
-
-void fluid_target_effect(fluid_sim_t *s, int fx, float t, float swell, float ox, float oy) {
-    FLUID_PROF_BEGIN(c0);
-    if (fx < 0 || fx >= FLUID_FX_COUNT) fx = 0;
-    const fluid_patch_t *p = &FX_PATCH[fx];
-    const float *cA = FX_COL[fx][0], *cB = FX_COL[fx][1];
-    float inv = 1.f / swell;
-    for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
-        const int k = j * s->W + i;
-        if (!s->mask[k]) { s->T[k] = 0; continue; }
-        float x = (s->xs[i] - ox) * inv, y = (s->ys[j] - oy) * inv, rr = x * x + y * y;
-        float fade = 1.f - fluid_smooth(0.55f, 1.0f, rr);
-        float v = fade > 0.f ? fluid_patch(p, x, y, t) : 0.f;
-        s->T[k] = fq(v * fade * 0.9f, FQ_UNIT);
-        s->tcol[k] = fluid_pack_rgba8(cA[0] + (cB[0] - cA[0]) * v, cA[1] + (cB[1] - cA[1]) * v, cA[2] + (cB[2] - cA[2]) * v, 0.f);
-    }
-    FLUID_PROF_END(FP_TARGET, c0);
-}
-
-void fluid_effect_enter(fluid_sim_t *s, int fx) {
-    switch (fx) {
-    case FLUID_FX_RIPPLE: fluid_sim_impulse(s, 0.f, 0.f, 2.2f, 0.16f); s->swirl_kick = 2.f; break;
-    case FLUID_FX_VORTEX: s->swirl_kick = 4.f; break;
-    case FLUID_FX_WAVE:   s->sheet.amp = 1.2f; s->sheet.freq = 1.3f; break;
-    default: break;
-    }
-}
-
-void fluid_effect_tick(fluid_sim_t *s, int fx, float dt, float *st) {
-    if (fx == FLUID_FX_RIPPLE) {
-        *st += dt;
-        if (*st > 0.55f) { *st = 0.f; fluid_sim_impulse(s, 0.f, 0.f, 1.4f, 0.12f); }
-    } else if (fx == FLUID_FX_VORTEX) {
-        *st += dt * 0.9f; if (*st > 1.f) *st = 1.f;
-        s->rotate = 1.6f * *st;
-    }
-}
-
-void fluid_effect_exit(fluid_sim_t *s, int fx) {
-    if (fx == FLUID_FX_VORTEX) s->rotate = 0.f;
-    if (fx == FLUID_FX_WAVE) s->sheet.amp = 0.f;
-}
 
 /* ── speed text ('plain' look) ──────────────────────────────────────────────
  * The ink pools under each letter; real letters condense out of it (drawn by the
@@ -291,7 +195,7 @@ void fluid_text_fill(fluid_text_t *tx, fluid_sim_t *s, float t) {
     for (int j = 0; j < s->H; j++) for (int i = 0; i < s->W; i++) {
         const int k = j * s->W + i;
         if (!s->mask[k]) { s->T[k] = 0; continue; }
-        tx->near_s[k] += (tx->near[k] - tx->near_s[k]) * 0.2f;   /* re-shape smoothly between words */
+        tx->near_s[k] += (tx->near[k] - tx->near_s[k]) * (s->p.settle ? 1.f : 0.2f);   /* re-shape smoothly between words */
         float nr = tx->near_s[k], dk = tx->dark[k] - cov[k];
         if (dk < 0.f) dk = 0.f;
         float field = 0.f;

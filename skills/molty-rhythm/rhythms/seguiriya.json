@@ -1,0 +1,39 @@
+{
+  "id": "seguiriya",
+  "name": "Seguiriya",
+  "label": "SEGUIRIYA",
+  "status": "verified",
+  "region": "spain",
+  "country": "Spain",
+  "steps": 12,
+  "tempo": {
+    "bpm": 100,
+    "per": 1
+  },
+  "beats": [1, 3, 5, 8, 11],
+  "layers": {
+    "palmas": {
+      "name": "The palmas",
+      "sound": "clap",
+      "hits": [1, 3, 5, 8, 11]
+    }
+  },
+  "source": "Diaz-Banez et al. 2004 (Bridges); Wikipedia Palo (flamenco), canteytoque: soleá counted from beat 8; tempo a practice default",
+  "sources": [
+    {
+      "title": "El Compas Flamenco: A Phylogenetic Analysis (Diaz-Banez, Farigu, Gomez, Rappaport, Toussaint, Bridges 2004)",
+      "url": "https://archive.bridgesmathart.org/2004/bridges2004-61.html",
+      "shows": "seguiriya as [x . x . x . . x . . x .] in 12 pulses: loud claps 1 3 5 8 11"
+    },
+    {
+      "title": "Palo (flamenco), Wikipedia",
+      "url": "https://en.wikipedia.org/wiki/Palo_(flamenco)",
+      "shows": "if you start counting the soleá on the eighth beat you obtain a seguiriya rhythm; soleá accents 3 6 8 10 12 from beat 8 give 1 3 5 8 11 (computed)"
+    },
+    {
+      "title": "Compas exercises (canteytoque)",
+      "url": "https://canteytoque.es/compexp.htm",
+      "shows": "soleá accents 3 6 8 10 12; the seguiriya starts on beat 8 of that count"
+    }
+  ]
+}

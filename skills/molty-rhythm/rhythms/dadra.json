@@ -1,0 +1,40 @@
+{
+  "id": "dadra",
+  "name": "Dadra, six beats",
+  "label": "DADRA",
+  "status": "verified",
+  "region": "india",
+  "country": "India",
+  "steps": 6,
+  "tempo": {
+    "bpm": 120,
+    "per": 1
+  },
+  "beats": [1, 2, 3, 4, 5, 6],
+  "layers": {
+    "theka": {
+      "name": "The tabla, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6],
+      "accent": [1]
+    },
+    "clap": {
+      "name": "The hand claps (the khali is a wave, no clap)",
+      "sound": "clap",
+      "hits": [1]
+    }
+  },
+  "source": "Dadra 3+3, sam 1, khali 4; Wikipedia Tala; DigiTabla; tempo a practice default; bol syllables differ between sources so only the beat structure is modelled",
+  "sources": [
+    {
+      "title": "Wikipedia: Tala (music), Common Hindustani talas",
+      "url": "https://en.wikipedia.org/wiki/Tala_(music)",
+      "shows": "Dadra 6, 3+3, marked X 0"
+    },
+    {
+      "title": "DigiTabla: Dadra Tal",
+      "url": "https://digitabla.com/reference/tals-and-thekas/dadra-tal/",
+      "shows": "Dadra 6 matras, 3-3, sam first vibhag (X), khali second vibhag (0) at matras 4 to 6"
+    }
+  ]
+}

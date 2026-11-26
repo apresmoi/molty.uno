@@ -1,0 +1,40 @@
+{
+  "id": "malfuf",
+  "name": "Malfuf",
+  "label": "MALFUF",
+  "status": "verified",
+  "region": "middle-east",
+  "country": "Egypt",
+  "steps": 8,
+  "tempo": {
+    "bpm": 110,
+    "per": 4
+  },
+  "beats": [1, 5],
+  "layers": {
+    "dum": {
+      "name": "Dum, the low stroke",
+      "sound": "low",
+      "hits": [1],
+      "accent": [1]
+    },
+    "tek": {
+      "name": "Tek, the slap",
+      "sound": "slap",
+      "hits": [4, 7]
+    }
+  },
+  "source": "Baba Yaga Music diagrams; Jas Middle Eastern Rhythms FAQ (khafif); tempo a practice default",
+  "sources": [
+    {
+      "title": "Oriental dance rhythm diagrams and descriptions (Baba Yaga Music)",
+      "url": "https://www.babayagamusic.com/Music/oriental-dance-rhythm-diagrams-and-descriptions.htm",
+      "shows": "2/4: D . . T . . T ."
+    },
+    {
+      "title": "Middle Eastern Rhythms FAQ (Jas, khafif)",
+      "url": "https://khafif.pages.dev/rhy",
+      "shows": "2/4 = 3+3+2: D--T--T-"
+    }
+  ]
+}

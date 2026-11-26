@@ -2,7 +2,7 @@
   "molty": "molty/2",
   "id": "cat",
   "name": "Cat",
-  "version": "2.2.0",
+  "version": "2.3.2",
   "about": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
   "look": "A slim lavender cat drawn as a fine outline: pointy ears pink inside, round green eyes, a pink nose, whiskers, a white chest. A long darker tail. It sits, stands, lies in a loaf and walks.",
   "body": "cat.glb",
@@ -21,7 +21,7 @@
     "yarnline": "#8f1f2b",
     "yarn": "#ffc23d"
   },
-  "poses": ["sit", "stand", "loaf", "crouch", "walk"],
+  "poses": ["sit", "stand", "loaf", "crouch", "walk", "paw_l", "paw_r", "legup"],
   "moods": {
     "idle": "sits with its chest breathing, ears swiveling, tail tip curling, slow blinks",
     "listening": "both ears prick toward you and it goes still, only the tail tip twitching",
@@ -49,7 +49,15 @@
     "eat": { "about": "a bowl of kibble slides in to one side; it turns to it on its feet, eats, and the bowl slides away", "chain": { "first": ["eat_left", "eat_right"], "then": ["eat_dish"], "rounds": [1, 1] } },
     "yarn": { "about": "a ball of yarn bounces in; it swats it about and turns after it, new each time, then knocks it away", "chain": { "first": "yarn_in", "then": ["yarn_bat_l", "yarn_bat_r"], "rounds": [1, 4], "last": "yarn_away" } },
     "shaken": "jostled by the shake and dizzy a moment, it shakes it off like a wet cat and looks at you, ready",
-    "walk": { "about": "gets up and walks a few steps across the floor, then settles again", "hold": 6, "lasts": 8 }
+    "walk": { "about": "gets up and walks a few steps across the floor, then settles again", "hold": 6, "lasts": 8 },
+    "groom": { "about": "licks a raised front paw and wipes it over its ear and face, now and then switching paws", "habit": true,
+      "chain": { "first": ["groom_lick_l", "groom_lick_r"], "then": ["groom_lick_l", "groom_lick2_l", "groom_wipe_l", "groom_wipe2_l", "groom_lick_r", "groom_lick2_r", "groom_wipe_r", "groom_wipe2_r", "paw_l_to_paw_r", "paw_r_to_paw_l"], "rounds": [3, 8] } },
+    "wash_l": { "about": "washes its left side: chest, shoulder and flank in long strokes along the fur", "habit": true,
+      "chain": { "then": ["wash_chest_l", "wash_shoulder_l", "wash_flank_l"], "rounds": [2, 4] } },
+    "wash_r": { "about": "washes its right side: chest, shoulder and flank in long strokes along the fur", "habit": true,
+      "chain": { "then": ["wash_chest_r", "wash_shoulder_r", "wash_flank_r"], "rounds": [2, 4] } },
+    "leg_up": { "about": "sits back, one hind leg straight up, and licks under it; now and then it looks up, tongue out", "habit": true,
+      "chain": { "then": ["legup_lick", "legup_lick2", "legup_blep"], "rounds": [2, 4] } }
   },
   "feet": ["hand.L", "toe.L", "hand.R", "toe.R"],
   "center": ["pelvis", "head"],
@@ -73,6 +81,9 @@
       { "layer": "eyes_up", "clip": "look_ud", "by": "look_y", "zero": 0.5, "bones": ["eye.L", "eye.R"], "weight": "free" },
       { "layer": "gaze", "clip": "look_lr", "by": "head_x", "zero": 0.5, "bones": ["neck", "head", "ear.L", "ear.R"], "weight": "free" },
       { "layer": "gaze_up", "clip": "look_ud", "by": "head_y", "zero": 0.5, "bones": ["neck", "head"], "weight": "free" }
+    ],
+    "moments": [
+      { "every": [40, 90], "pick": { "groom": 3, "wash_l": 1, "wash_r": 1, "leg_up": 2, "stretch": 1, "yawn": 0.5, "glance_left": 1, "glance_right": 1, "look_up": 1 } }
     ]
   }
 }

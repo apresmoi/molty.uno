@@ -1,0 +1,45 @@
+{
+  "id": "samba",
+  "name": "Samba",
+  "label": "SAMBA",
+  "status": "verified",
+  "region": "brazil",
+  "country": "Brazil",
+  "steps": 4,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3],
+  "layers": {
+    "segunda": {
+      "name": "Surdo de segunda, beat 1",
+      "sound": "head",
+      "hits": [1]
+    },
+    "primeira": {
+      "name": "Surdo de primeira, beat 2",
+      "sound": "low",
+      "hits": [3],
+      "accent": [3]
+    }
+  },
+  "source": "Wikipedia Surdo (Rio carnival samba); Hudson Music, The Brazilian Groove Book sample p.4; 2/4; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia, Surdo (Rio-style Carnival samba, citing Fogo Azul NYC)",
+      "url": "https://en.wikipedia.org/wiki/Surdo",
+      "shows": "primeira (largest) sounds on the second beat of the basic one-two count; segunda answers on the first beat"
+    },
+    {
+      "title": "Hudson Music, The Brazilian Groove Book (sample), Part 1 Samba Layers",
+      "url": "https://hudsonmusic.com/wp-content/uploads/braziliangroovebook-sample.pdf",
+      "shows": "first surdo, the lowest, plays the second beat of the 2/4 measure, the strongest part; second surdo plays the first beat"
+    },
+    {
+      "title": "Brazilian Percussion blog, Heavy samba percussion instruments",
+      "url": "https://brazilianpercussion.blogspot.com/2014/02/heavy-samba-percussion-instruments.html",
+      "shows": "second surdo plays on the first beat (the downbeat), a counter beat for the first surdo"
+    }
+  ]
+}

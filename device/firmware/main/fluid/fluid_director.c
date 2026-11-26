@@ -5,7 +5,7 @@
  * Plain C: built into the firmware and by test/host/director_test.c.
  */
 #include "fluid_director.h"
-#include "fluid_sim.h"      /* FLUID_FX_*, fluid_clamp01 */
+#include "fluid_sim.h"      /* fluid_clamp01 */
 #include "cute_spec.h"      /* CM_* moods */
 #include "cute_act.h"       /* CA_* actions */
 
@@ -25,7 +25,8 @@ const fd_cfg_t FD_CFG_DEFAULT = {
     .status_after_s = 10.f,       /* boot: Wi-Fi join + TLS take a few seconds */
     .work_ttl_s = 120.f, .work_gap_min_s = 0.5f, .work_gap_max_s = 1.6f,
     .boot_word_s = 2.8f,
-    .bye_word_s = 1.8f, .bye_pond_s = 2.2f,
+    .bye_word_s = 1.5f,
+    .moment_rest_s = 10.f, .moment_calm = 2.f, .moment_scale = 1.f,
 };
 
 /* flashes: a say that ended well (happy), a shake (surprised) */
@@ -50,25 +51,6 @@ static const work_item_t WORK_LIB[] = {
 /* an agent's quick moods, when it gives no hold_s */
 #define HOLD_HAPPY_S       3.0f
 #define HOLD_SURPRISED_S   2.0f
-
-/* main.js REEL (the demo, only on "autoplay"): st −1 = keep the state, only change the
- * creature's mood (mood −1 = keep). dur ≤ 0: the text runs to its end. */
-typedef struct { int8_t st, fx, mood; float dur; } reel_step_t;
-static const reel_step_t REEL[] = {
-    { FD_ST_BLOB, 0, -1, 3.2f },
-    { FD_ST_CREATURE, 0, CM_IDLE, 2.8f },
-    { -1, 0, CM_HAPPY, 2.6f },
-    { FD_ST_FX, FLUID_FX_RIPPLE, -1, 2.8f },
-    { FD_ST_TEXT, 0, -1, 0.f },
-    { FD_ST_CREATURE, 0, CM_SPEAKING, 3.4f },
-    { -1, 0, CM_THINKING, 3.0f },
-    { FD_ST_FX, FLUID_FX_VORTEX, -1, 2.8f },
-    { FD_ST_BLOB, 0, -1, 2.4f },
-    { FD_ST_CREATURE, 0, CM_LISTENING, 2.6f },
-    { -1, 0, CM_SLEEPY, 3.0f },
-    { FD_ST_FX, FLUID_FX_WAVE, -1, 2.8f },
-};
-#define REEL_N ((int)(sizeof(REEL) / sizeof(REEL[0])))
 
 static float frand(fluid_director_t *d) {
     uint32_t x = d->rng;
@@ -98,6 +80,90 @@ static int idle_pick(fluid_director_t *d) {
     return pick;
 }
 
+/* ── moments ─────────────────────────────────────────────────────────────── */
+
+static float moment_gap(fluid_director_t *d, int i) {
+    const fd_moment_t *m = &d->mom[i];
+    const float k = (d->idle_life == FD_IDLE_CALM ? d->cfg.moment_calm : 1.f) * d->cfg.moment_scale;
+    return (m->lo + (m->hi - m->lo) * frand(d)) * k;
+}
+/* every clock new, and none under rest s */
+static void moments_wait(fluid_director_t *d, float rest) {
+    for (int i = 0; i < d->nmom; i++) { const float g = moment_gap(d, i); d->mom_left[i] = g > rest ? g : rest; }
+}
+/* weighted, never its last pick again */
+static int moment_pick(fluid_director_t *d, int i) {
+    const fd_moment_t *m = &d->mom[i];
+    float sum = 0.f;
+    for (int j = 0; j < m->n; j++) if (m->n == 1 || j != d->mom_last[i]) sum += m->w[j];
+    float r = frand(d) * sum;
+    int pick = -1;
+    for (int j = 0; j < m->n; j++) {
+        if (m->n > 1 && j == d->mom_last[i]) continue;
+        pick = j;
+        if ((r -= m->w[j]) < 0.f) break;
+    }
+    return pick;
+}
+/* something cut in: the moment playing stops, and every clock waits again (at least moment_rest_s) */
+static void moments_cut(fluid_director_t *d) {
+    if (!d->nmom) return;
+    if (d->mom_on) { d->mom_stop = true; d->mom_on = 0; }
+    d->mom_m = -1;
+    moments_wait(d, d->cfg.moment_rest_s * d->cfg.moment_scale);
+}
+
+void fd_set_moments(fluid_director_t *d, const fd_moment_t *m, int n) {
+    if (n < 0) n = 0;
+    if (n > FD_MOMENTS_MAX) n = FD_MOMENTS_MAX;
+    d->nmom = 0; d->mom_on = 0; d->mom_m = d->mom_req_m = -1; d->mom_stop = false;
+    for (int i = 0; i < n; i++) {
+        d->mom[i] = m[i];
+        if (d->mom[i].n > FD_PICKS_MAX) d->mom[i].n = FD_PICKS_MAX;
+        d->mom_last[i] = -1;
+    }
+    d->nmom = n;
+    moments_wait(d, 0.f);
+}
+void fd_set_creature_free(fluid_director_t *d, bool free) { d->cr_free = free; }
+bool fd_take_moment(fluid_director_t *d, int *m, int *pick) {
+    if (d->mom_m < 0) return false;
+    *m = d->mom_m; *pick = d->mom_j; d->mom_m = -1;
+    return true;
+}
+bool fd_take_stop(fluid_director_t *d) { const bool s = d->mom_stop; d->mom_stop = false; return s; }
+void fd_moment_now(fluid_director_t *d, int m, int pick) {
+    if (m < 0 || m >= d->nmom || pick < 0 || pick >= d->mom[m].n) return;
+    if (d->mom_on) { d->mom_stop = true; d->mom_on = 0; }
+    d->mom_req_m = m; d->mom_req_j = pick; d->mom_req_ttl = d->cfg.act_ttl_s * 4.f;
+}
+bool fd_moment_on(const fluid_director_t *d) { return d->mom_on != 0; }
+
+/* each frame: a moment playing is followed to its end (or cut when its ground goes); while one may start (ok), the clocks
+ * count and the first one out starts */
+static void moments_tick(fluid_director_t *d, float dt, bool ground, bool ok) {
+    if (d->mom_on) {
+        d->mom_on_t += dt;
+        if (!ground) moments_cut(d);                                   /* a mood, a flash, a listen, the screen taken */
+        else if (!d->cr_free) d->mom_on = 2;                           /* it plays */
+        else if (d->mom_on == 2 || d->mom_on_t > 1.f) d->mom_on = 0;   /* it is over (or never began) */
+        return;
+    }
+    if (d->mom_req_m >= 0) {                                           /* asked for now */
+        if (ok) { d->mom_m = d->mom_req_m; d->mom_j = d->mom_req_j; d->mom_req_m = -1; d->mom_on = 1; d->mom_on_t = 0.f; return; }
+        if ((d->mom_req_ttl -= dt) <= 0.f) d->mom_req_m = -1;
+    }
+    if (!ok) return;
+    for (int i = 0; i < d->nmom; i++) {
+        if ((d->mom_left[i] -= dt) > 0.f) continue;
+        d->mom_left[i] = moment_gap(d, i);
+        const int j = moment_pick(d, i);
+        if (j < 0) continue;
+        d->mom_last[i] = j; d->mom_m = i; d->mom_j = j; d->mom_on = 1; d->mom_on_t = 0.f;
+        return;                                                        /* one at a time; the others wait on */
+    }
+}
+
 static int work_pick(fluid_director_t *d) {
     float sum = 0.f;
     for (int i = 0; i < WORK_N; i++) if (WORK_LIB[i].act != d->work_last) sum += WORK_LIB[i].w;
@@ -116,21 +182,24 @@ static void start_act(fluid_director_t *d, int act, float dur) {
     d->acting_left = dur;
 }
 
-/* queue a transition; the creature falls back to the blob while none is loaded */
-static void go(fluid_director_t *d, int st, int fx) {
+static int target(const fluid_director_t *d) { return d->pending ? d->next : d->cur; }
+
+/* queue a transition. While no creature is loaded it is wanted, and the boot word stands in for it (it stays, or comes
+ * back, and never changes into itself) */
+static void go(fluid_director_t *d, int st) {
     d->want_creature = st == FD_ST_CREATURE;
-    if (st == FD_ST_CREATURE && !d->has_creature) st = FD_ST_BLOB;
-    d->pending = true; d->next = st; d->next_fx = st == FD_ST_FX ? fx : 0;
+    if (st == FD_ST_CREATURE && !d->has_creature) {
+        if (d->boot && target(d) == FD_ST_TEXT) return;   /* the word is up (or on its way) */
+        st = FD_ST_TEXT; d->boot = true; d->boot_t = d->cfg.boot_word_s; d->text_hold = true;
+    }
+    d->pending = true; d->next = st;
 }
 
-static int target(const fluid_director_t *d) { return d->pending ? d->next : d->cur; }
-static int target_fx(const fluid_director_t *d) { return d->pending ? d->next_fx : d->cur_fx; }
-
-/* the boot screen is over (fd_boot): the word melts into the creature. A request that
- * follows replaces that transition. */
+/* the boot screen is over (fd_boot): the word melts into the creature, or stays while none is loaded (fd_set_creature
+ * ends it then). A request that follows replaces that transition. */
 static void boot_end(fluid_director_t *d) {
-    if (!d->boot) return;
-    go(d, FD_ST_CREATURE, 0);
+    if (!d->boot || !d->has_creature) return;
+    go(d, FD_ST_CREATURE);
     d->boot = false;
     d->next_idle = idle_gap(d);
 }
@@ -139,22 +208,22 @@ void fd_init(fluid_director_t *d, const fd_cfg_t *cfg, uint32_t seed) {
     *d = (fluid_director_t){ 0 };
     d->cfg = cfg ? *cfg : FD_CFG_DEFAULT;
     d->rng = seed ? seed : 0x6d6f6c74u;
-    d->cur = FD_ST_BLOB;
-    d->reel = -1;
+    d->cur = FD_ST_TEXT;
     d->held = CM_IDLE; d->held_left = -1.f;
     d->flash = -1;
     d->idle_life = FD_IDLE_DEFAULT;
     d->last_idle = d->act_req = d->act_start = d->work_last = -1;
     d->since_convo = 1e9f;
     d->next_idle = idle_gap(d);
-    go(d, FD_ST_CREATURE, 0);              /* home: the blob until a creature loads */
+    d->mom_m = d->mom_req_m = -1; d->cr_free = true;
+    go(d, FD_ST_CREATURE);              /* home: the boot word until a creature loads */
 }
 
 void fd_boot(fluid_director_t *d) {
     if (d->bye) return;
     d->boot = true; d->boot_t = 0.f;
     d->text_hold = true;
-    go(d, FD_ST_TEXT, 0);
+    go(d, FD_ST_TEXT);
 }
 
 bool fd_boot_word(const fluid_director_t *d) { return d->boot; }
@@ -162,50 +231,36 @@ bool fd_boot_word(const fluid_director_t *d) { return d->boot; }
 void fd_bye(fluid_director_t *d) {
     if (d->bye) return;
     d->boot = false;
-    d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f;
+    d->held = CM_IDLE; d->held_left = -1.f;
     d->act_req = -1; d->work_left = 0.f; d->flash = -1; d->asleep = false;
     d->bye = true; d->bye_t = 0.f;
     d->text_hold = true;
-    go(d, FD_ST_TEXT, 0);
+    go(d, FD_ST_TEXT);
 }
 
-bool fd_bye_word(const fluid_director_t *d) { return d->bye && d->bye_t < d->cfg.bye_word_s; }
-
-float fd_bye_level(const fluid_director_t *d) {
-    if (!d->bye || d->bye_t <= d->cfg.bye_word_s) return 1.f;
-    const float f = 1.f - (d->bye_t - d->cfg.bye_word_s) / d->cfg.bye_pond_s;
-    return f > 0.f ? f : 0.f;
-}
-
-bool fd_bye_done(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s + d->cfg.bye_pond_s; }
+bool fd_bye_word(const fluid_director_t *d) { return d->bye; }
+bool fd_bye_dark(const fluid_director_t *d) { return d->bye && d->bye_t >= d->cfg.bye_word_s; }
 
 
 void fd_set_creature(fluid_director_t *d, bool loaded) {
     d->has_creature = loaded;
-    if (loaded && d->want_creature && target(d) == FD_ST_BLOB) go(d, FD_ST_CREATURE, 0);
-    else if (!loaded && target(d) == FD_ST_CREATURE) go(d, FD_ST_CREATURE, 0);   /* → blob */
+    if (loaded && d->boot && d->boot_t >= d->cfg.boot_word_s) boot_end(d);   /* the word waited for it */
+    else if (!loaded && target(d) == FD_ST_CREATURE) go(d, FD_ST_CREATURE);   /* → the word stands in */
 }
 
-void fd_request_state(fluid_director_t *d, int st, int fx, bool text_hold) {
+void fd_request_state(fluid_director_t *d, int st, bool text_hold) {
     if (d->bye) return;
-    if (st < 0 || st >= FD_ST_COUNT) return;
+    if (st != FD_ST_TEXT && st != FD_ST_CREATURE && st != FD_ST_SCENE) return;
     boot_end(d);
-    if (d->autoplay) { d->autoplay = false; d->held = CM_IDLE; d->held_left = -1.f; }
+    if (st != FD_ST_CREATURE) d->boot = false;   /* the word (waiting for the creature) gives the screen up */
     if (st == FD_ST_TEXT) d->text_hold = text_hold;
-    int mapped = st == FD_ST_CREATURE && !d->has_creature ? FD_ST_BLOB : st;
-    /* the guard: the shown state again changes nothing (no ripple, no swirl, no melt) */
-    if (st != FD_ST_TEXT && mapped == target(d) && (mapped != FD_ST_FX || fx == target_fx(d))) {
+    if (st == FD_ST_CREATURE && !d->has_creature) { go(d, st); return; }   /* the word: go's own guard */
+    /* the guard: the shown state again changes nothing (no change of picture) */
+    if (st != FD_ST_TEXT && st == target(d)) {
         d->want_creature = st == FD_ST_CREATURE;
         return;
     }
-    go(d, st, fx);
-}
-
-void fd_autoplay(fluid_director_t *d) {
-    if (d->bye) return;
-    boot_end(d);
-    d->autoplay = true; d->reel = -1; d->reel_t = 0.f;
-    d->flash = -1; d->asleep = false; d->convo_left = 0.f;
+    go(d, st);
 }
 
 float fd_default_hold(int mood) {
@@ -215,6 +270,7 @@ float fd_default_hold(int mood) {
 void fd_activity(fluid_director_t *d) {
     d->asleep = false; d->quiet = 0.f; d->yawned = false;
     d->next_idle = idle_gap(d);            /* no idle action right after a command */
+    moments_cut(d);                        /* nor a moment: one playing stops */
 }
 
 void fd_agent_mood(fluid_director_t *d, int mood, float hold_s) {
@@ -238,12 +294,13 @@ bool fd_working(const fluid_director_t *d) { return d->work_left > 0.f; }
 
 void fd_set_own_work(fluid_director_t *d, bool own) { d->own_work = own; }
 
-void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; }
+void fd_user(fluid_director_t *d) { d->asleep = false; d->quiet = 0.f; d->yawned = false; moments_cut(d); }
 
 void fd_set_idle_life(fluid_director_t *d, int level) {
     if (level < 0 || level >= FD_IDLE_COUNT || level == d->idle_life) return;
     d->idle_life = level;
     d->next_idle = idle_gap(d);
+    if (d->nmom) moments_wait(d, 0.f);
     if (level == FD_IDLE_OFF) d->convo_left = 0.f;
 }
 
@@ -284,30 +341,16 @@ void fd_set_status(fluid_director_t *d, int status) {
     if (status >= 0 && status < FD_STATUS_COUNT) d->status = status;
 }
 
-static void reel_step(fluid_director_t *d) {
-    d->reel = (d->reel + 1) % REEL_N; d->reel_t = 0.f;
-    const reel_step_t *r = &REEL[d->reel];
-    if (r->mood >= 0) { d->held = r->mood; d->held_left = -1.f; }
-    if (r->st >= 0) { if (r->st == FD_ST_TEXT) d->text_hold = false; go(d, r->st, r->fx); }
-}
-
 void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     d->state_t += dt;
-    if (d->bye) {                          /* the goodbye: the word, then the pond, then off */
-        d->bye_t += dt;
-        if (d->bye_t >= d->cfg.bye_word_s && target(d) != FD_ST_FX) go(d, FD_ST_FX, FLUID_FX_RIPPLE);
-        return;
-    }
+    if (d->bye) { d->bye_t += dt; return; }   /* the goodbye: the word, then the glass goes dark (fd_bye_dark) */
     bool reading = d->cur == FD_ST_TEXT && !d->pending;
     d->text_done_t = reading && text_done ? d->text_done_t + dt : 0.f;
 
-    if (d->autoplay) {
-        d->reel_t += dt;
-        if (d->reel < 0 || (reading ? text_done : d->reel_t >= REEL[d->reel].dur)) reel_step(d);
-    } else if (reading && !d->text_hold && d->text_done_t >= d->cfg.text_return_s) {
-        go(d, FD_ST_CREATURE, 0);          /* show / say: back to the creature */
+    if (reading && !d->text_hold && d->text_done_t >= d->cfg.text_return_s) {
+        go(d, FD_ST_CREATURE);          /* show / say: back to the creature */
     } else if (d->cur == FD_ST_SCENE && !d->pending && !d->scene_on) {
-        go(d, FD_ST_CREATURE, 0);          /* the scene ended (ttl, dur, clear) */
+        go(d, FD_ST_CREATURE);          /* the scene ended (ttl, dur, clear) */
     }
 
     if (d->held_left > 0.f && (d->held_left -= dt) <= 0.f) {
@@ -319,7 +362,7 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     d->since_convo += dt;
 
     /* an agent's action: once the creature is on screen and nothing covers it */
-    const bool shown = !d->autoplay && !d->pending && d->cur == FD_ST_CREATURE;
+    const bool shown = !d->pending && d->cur == FD_ST_CREATURE;
     if (d->act_req >= 0) {
         if (shown && !d->covered) { start_act(d, d->act_req, d->act_req_dur); d->act_req = -1; }
         else if ((d->act_req_ttl -= dt) <= 0.f) d->act_req = -1;
@@ -343,8 +386,10 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
     if (shown && d->held == CM_IDLE) {
         if (!d->asleep && d->quiet >= d->cfg.sleep_after_s) { d->asleep = true; d->flash = -1; d->convo_left = 0.f; }
     }
-    const bool free = shown && !d->boot && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
-                      d->idle_life != FD_IDLE_OFF && d->acting_left <= 0.f && d->act_start < 0;
+    /* ground: idle life may play at all; free: and nothing plays now (a moment playing included) */
+    const bool ground = shown && !d->boot && d->held == CM_IDLE && !d->asleep && !d->busy && d->flash < 0 && d->work_left <= 0.f &&
+                        d->idle_life != FD_IDLE_OFF;
+    const bool free = ground && d->acting_left <= 0.f && d->act_start < 0 && !d->mom_on;
     if (free && !d->yawned && d->quiet >= d->cfg.sleep_after_s - d->cfg.yawn_lead_s) {
         d->yawned = true;                  /* dozing off: a yawn first */
         start_act(d, CA_YAWN, cute_act_dur(CA_YAWN));
@@ -354,10 +399,14 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
             d->convo_left = 0.f; d->since_convo = 0.f;
             d->next_idle = idle_gap(d);
         }
-    } else if (free && (d->next_idle -= dt) <= 0.f) {
+    } else if (free && !d->nmom && (d->next_idle -= dt) <= 0.f) {   /* (a creature with moments lives its own) */
         int a = idle_pick(d);
         if (a >= 0) { start_act(d, a, cute_act_dur(a)); d->last_idle = a; }
         d->next_idle = idle_gap(d);
+    }
+    if (d->nmom) {   /* (after the yawn and the flash: neither starts over a moment, and a moment never over them) */
+        const bool g = ground && d->act_req < 0 && d->act_start < 0;
+        moments_tick(d, dt, g, g && d->acting_left <= 0.f && d->cr_free);
     }
     if (d->convo_left > 0.f && (d->convo_left -= dt) <= 0.f) d->convo_left = 0.f;
 
@@ -367,14 +416,14 @@ void fd_tick(fluid_director_t *d, float dt, bool text_done) {
 }
 
 void fd_replay(fluid_director_t *d) { d->state_t = 0.f; d->text_done_t = 0.f; }
+void fd_settled(fluid_director_t *d) { d->state_t = 10.f; }
 
-bool fd_take(fluid_director_t *d, int *st, int *fx) {
+bool fd_take(fluid_director_t *d, int *st) {
     if (!d->pending) return false;
     d->pending = false;
-    d->cur = d->next; d->cur_fx = d->next_fx;
+    d->cur = d->next;
     d->state_t = 0.f; d->text_done_t = 0.f;
     if (st) *st = d->cur;
-    if (fx) *fx = d->cur_fx;
     return true;
 }
 

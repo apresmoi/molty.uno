@@ -7,6 +7,8 @@
 #include "mole_fluid.h"
 #include "vad.h"
 #include "chirp.h"
+#include "rhythm.h"
+#include "rhythm_dev.h"
 #include "self_update.h"
 #include "link_uplink.h"
 #include "listen_react.h"
@@ -757,12 +759,20 @@ static void run_job(const audio_job_t *job)
     if (chirp) chirp_play();
 }
 
+/* A job waits for the speaker (the rhythm gives way). */
+static bool job_waiting(void) { return uxQueueMessagesWaiting(s_jobs) > 0; }
+
+/* Jobs, one at a time; between them the rhythm (rhythm.h), when one plays: a job that comes takes the speaker from
+ * it (it fades out first), and it comes back after. With no rhythm the wait for a job wakes every RHYTHM_IDLE_MS to
+ * see whether one started. */
+#define RHYTHM_IDLE_MS 50
 static void audio_task(void *arg)
 {
     (void)arg;
     audio_job_t job;
     for (;;) {
-        xQueueReceive(s_jobs, &job, portMAX_DELAY);
+        if (rhythm_wants_speaker() && xQueueReceive(s_jobs, &job, 0) != pdTRUE) { rhythm_dev_play(job_waiting); continue; }
+        if (!rhythm_wants_speaker() && xQueueReceive(s_jobs, &job, pdMS_TO_TICKS(RHYTHM_IDLE_MS)) != pdTRUE) continue;
         run_job(&job);
     }
 }

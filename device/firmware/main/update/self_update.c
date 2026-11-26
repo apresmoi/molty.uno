@@ -335,7 +335,8 @@ static void download_task(void *arg)
     mole_diag_event(false, "update.ready v=%s in %ums", t.version, (unsigned)((esp_timer_get_time() - t0) / 1000));
     screen_word("restart");
     report(UPD_REBOOTING, 0, 0, NULL);   /* sent (written to the socket) before the restart */
-    vTaskDelay(pdMS_TO_TICKS(600));      /* let TCP flush it and the console poll see it */
+    vTaskDelay(pdMS_TO_TICKS(1400));     /* let TCP flush it and the console poll see it; the word comes (a change of picture) */
+    mole_fluid_dark(1200);               /* the word dissolves to the empty glass (~0.85 s; never waited past 1.2 s) */
     esp_restart();
 }
 

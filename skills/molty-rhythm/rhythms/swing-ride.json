@@ -1,0 +1,46 @@
+{
+  "id": "swing-ride",
+  "name": "Jazz swing ride pattern",
+  "label": "SWING RIDE",
+  "status": "verified",
+  "region": "usa",
+  "country": "United States",
+  "steps": 8,
+  "swing": 0.33,
+  "tempo": {
+    "bpm": 120,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "ride": {
+      "name": "Ride cymbal",
+      "sound": "hat",
+      "hits": [1, 3, 4, 5, 7, 8],
+      "accent": [3, 7]
+    },
+    "foot": {
+      "name": "Hi-hat foot on two and four",
+      "sound": "click",
+      "hits": [3, 7]
+    }
+  },
+  "source": "BYU percussion jazz style (even quarters plus swung eighth on the and of 2 and 4, hi-hat chick on 2 and 4); Paul Wertico ride cymbal article (three-note phrase starting on 2 and 4, accents on 2 and 4, triplet feel); Drumeo (hi-hat on 2 and 4); tempo a practice default",
+  "sources": [
+    {
+      "title": "BYU Percussion: jazz style",
+      "url": "https://percussion.byu.edu/jazz-style",
+      "shows": "Swing ride: even quarter notes with swung eighth notes on the and of beats two and four; hi hat chick on two and four"
+    },
+    {
+      "title": "Paul Wertico: jazz ride cymbal",
+      "url": "https://paulwertico.com/articles/jazzridecymbal1.php",
+      "shows": "Ride as a repeating three-note phrase starting on beats 2 and 4, triplet feel, accents on 2 and 4"
+    },
+    {
+      "title": "Drumeo: a drummer's guide to jazz",
+      "url": "https://www.drumeo.com/beat/a-drummers-guide-to-jazz/",
+      "shows": "Hi-hat played on beats two and four, triplet-based swing feel"
+    }
+  ]
+}

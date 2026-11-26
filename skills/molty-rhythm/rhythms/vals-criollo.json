@@ -1,0 +1,39 @@
+{
+  "id": "vals-criollo",
+  "name": "Vals criollo",
+  "label": "VALS CRIOLLO",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 3,
+  "tempo": {
+    "bpm": 120,
+    "per": 1
+  },
+  "beats": [1, 2, 3],
+  "layers": {
+    "bajo": {
+      "name": "Bajo, the thumb on the bass",
+      "sound": "low",
+      "hits": [1]
+    },
+    "rasguido": {
+      "name": "Rasguido, the chord strokes",
+      "sound": "rim",
+      "hits": [2, 3]
+    }
+  },
+  "source": "Arguello (Rev. Argentina de Musicologia 15-16) guitar 2 in Desde el alma; A Contratiempo 22 (ASAB) tundete; tempo a practice default (A Contratiempo gives 120-130 a quarter for the Peruvian vals)",
+  "sources": [
+    {
+      "title": "Silvina Arguello, El vals en la musica criolla y en el tango, Revista Argentina de Musicologia 15-16",
+      "url": "https://ojs.aamusicologia.ar/index.php/ram/en/article/download/55/61/178",
+      "shows": "Table for Desde el alma (Melo / Piuma Velez), Guitarra 2: 'marcar 1o tiempo con el pulgar y rasguido de los otros dos tiempos' in 3/4; Tu olvido: 'Guitarra 3: acompanamiento ritmico (rasguido de vals)'"
+    },
+    {
+      "title": "El vals peruano: devenir historico y formas de toque en la guitarra acustica, A Contratiempo 22 (Facultad de Artes ASAB, Bogota)",
+      "url": "https://dialnet.unirioja.es/descarga/articulo/4756639.pdf",
+      "shows": "'en un compas de 3/4, se toca el primer pulso con el bajo (dedo pulgar) y los siguientes dos arpegiando las cuerdas 1, 2 y 3 o 2, 3 y 4' (the tundete of the Peruvian vals criollo: same cell, other country)"
+    }
+  ]
+}

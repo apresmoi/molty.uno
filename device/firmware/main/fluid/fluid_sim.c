@@ -649,7 +649,7 @@ void fluid_sim_step(fluid_sim_t *s, float dt) {
     /* ---- 6. relax toward the target (what the flow did not deliver) ---- */
     {
         const float hm = 0.4f + 4.6f * p->hold;
-        const float up = 1.f - expf(-p->relax_up * hm * sp * dt), down = 1.f - expf(-p->relax_down * hm * sp * dt);
+        const float up = p->settle ? 1.f : 1.f - expf(-p->relax_up * hm * sp * dt), down = p->settle ? 1.f : 1.f - expf(-p->relax_down * hm * sp * dt);
         const int16_t *i2 = s->ink2, *h = s->h;
         int32_t err = 0, hs = 0;
         for (int k = 0; k < N; k++) {
@@ -671,7 +671,9 @@ void fluid_sim_step(fluid_sim_t *s, float dt) {
 /* Colour + accent ride the same flow; once per frame (dt = the frame's stepped time). */
 void fluid_sim_color(fluid_sim_t *s, float dt) {
     if (dt <= 0.f) return;
-    if (s->p.still) {                                    /* no flow: each cell its target's colour */
+    const bool settle = s->p.settle;
+    s->p.settle = false;                                 /* (the frame's steps put the ink on its target: the colour too) */
+    if (s->p.still || settle) {                          /* no flow: each cell its target's colour */
         for (int k = 0; k < s->N; k++) {
             const uint32_t tc = s->tcol[k];
             s->col[k] = (fluid_rgba16_t){ (uint16_t)((tc & 255) * 257u), (uint16_t)((tc >> 8 & 255) * 257u), (uint16_t)((tc >> 16 & 255) * 257u), (uint16_t)((tc >> 24) * 257u) };

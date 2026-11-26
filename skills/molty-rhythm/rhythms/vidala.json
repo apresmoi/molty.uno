@@ -1,0 +1,39 @@
+{
+  "id": "vidala",
+  "name": "Vidala",
+  "label": "VIDALA",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 6,
+  "tempo": {
+    "bpm": 66,
+    "per": 2
+  },
+  "beats": [1, 3, 5],
+  "layers": {
+    "aro": {
+      "name": "Aro, the rim",
+      "sound": "rim",
+      "hits": [4]
+    },
+    "parche": {
+      "name": "Parche, the head",
+      "sound": "head",
+      "hits": [1, 5]
+    }
+  },
+  "source": "Mola (FBA-UNLP) 2019, vidala base; Paredes (UNCuyo) 2025 fig. 13 after Rivero; tempo a practice default (Pablo Cruz's method gives 56 to 80 bpm, unit not stated)",
+  "sources": [
+    {
+      "title": "Mola, Bombo leguero: una propuesta metodologica para la ensenanza de su ejecucion (FBA-UNLP, JIDAP 2019)",
+      "url": "https://sedici.unlp.edu.ar/bitstream/handle/10915/80536/Documento_completo.pdf-PDFA.pdf?sequence=1&isAllowed=y",
+      "shows": "Vidala base, felt in 3/4: parche on beat 1, eighth rest then aro on the second eighth of beat 2, parche on beat 3"
+    },
+    {
+      "title": "Paredes, tesina de Licenciatura en Musica Popular (UNCuyo 2025), fig. 13 after Carlos Rivero",
+      "url": "https://25.bdigital.uncu.edu.ar/objetos_digitales/21695/paredes-juan-pablo-tesina.pdf",
+      "shows": "Vidala 6/8: parche dotted quarter, aro eighth, parche quarter (eighths 1, 4, 5)"
+    }
+  ]
+}

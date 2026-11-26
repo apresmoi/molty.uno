@@ -35,6 +35,7 @@
 #include "link_client.h"
 #include "sense.h"
 #include "power.h"
+#include "rhythm_dev.h"
 #include "haptic.h"
 #include "network.h"
 #include "console_store.h"
@@ -105,6 +106,7 @@ void app_main(void)
     // fails to start is reported absent (molty_board_has) and the core degrades.
     molty_board_init();
     haptic_init();   // the vibration motor's PWM, off (boards that wire one; haptic.h)
+    ESP_ERROR_CHECK(rhythm_dev_init());   // the beat player's lock, before the screen or the link can ask it (rhythm.h)
 
     // Creature
     {

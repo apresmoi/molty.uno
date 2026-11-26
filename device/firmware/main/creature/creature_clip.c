@@ -21,6 +21,7 @@
 #define CC_FREE(p)   free(p)
 #endif
 
+#define CC_CUT_BLEND 0.7f   /* s: the crossfade home from a gesture cut short (clip-player.js CUT_BLEND) */
 #define EPS 1e-5   /* a clip's end, against float clocks (clip-player.js EPS) */
 static const char *const MOODS[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
 static const char *const GROUPS[CG_COUNT] = { "torso", "hindL", "hindR", "head", "legF.L", "legF.R", "tail", "bowl", "yarn",
@@ -44,6 +45,8 @@ typedef struct {
     float *ref;                         /* each channel at zero, 4 floats                                    */
     float by, w;                        /* this frame's place and weight                                     */
 } layer_t;
+/* a moment (life.moments): its wait, lo..hi s, and the gestures it picks among, by weight */
+typedef struct { float lo, hi; int n; int16_t gest[CC_PICKS_MAX]; float w[CC_PICKS_MAX]; } moment_t;
 
 struct cc {
     int nn; struct { int16_t parent; char id[CC_NAME_MAX + 1]; } node[CC_NODES_MAX];
@@ -61,10 +64,14 @@ struct cc {
     int nchain; chain_t chain[CC_CHAIN_MAX];
     int16_t center[2];
     int nlay; layer_t lay[CC_LAYERS_MAX];
+    int nmom; moment_t mom[CC_MOMENTS_MAX];
     /* play state (the JS player's s) */
     int cur_clip; double t; float blendT, blendD; float ox, oz, lockX, lockZ;
     int queue[16], nq;
     float oyaw;                         /* the heading carried between clips (rad, about up), as ox, oz carry the place */
+    float cut_blend;                    /* a gesture cut short (cc_stop): the next crossfade this long, so it eases home */
+    bool cutting; int8_t csign[CC_NODES_MAX];                       /* ...that crossfade plays: the paw lock holds the paws that were down, whatever
+                                         * the new clip does with them (a paw landing mid-way never jolts the body)   */
     int chain_on, chain_left, chain_prev, chain_stage; uint32_t rng;   /* the chain playing (-1: none), its draws */
     int mood; int gesture; float gestureT; bool gstarted, pending;
     float camx, camz, camyaw; bool snap;
@@ -118,16 +125,73 @@ static void quat_mat(const float *q, float *m) {
     m[6] = 2 * (x * z - y * w); m[7] = 2 * (y * z + x * w); m[8] = 1 - 2 * (x * x + y * y);
 }
 
+/* a packed clip (clip-pack.js, docs/CREATURES.md section 12 "Packed clips"): the same keys and integers as the plain
+ * form, each series as its first number and its steps in the fewest bits that hold the largest */
+typedef struct { const uint8_t *b; size_t n, pos; bool bad; } bits_t;
+static uint32_t get_bits(bits_t *r, int n) {
+    uint32_t v = 0;
+    for (int i = 0; i < n; i++, r->pos++) {
+        if (r->pos >> 3 >= r->n) { r->bad = true; return 0; }
+        v |= (uint32_t)(r->b[r->pos >> 3] >> (r->pos & 7) & 1) << i;
+    }
+    return v;
+}
+static const char *unpack_clip(clip_t *k, const char *pk, const float scale[3]) {
+    size_t nb;
+    uint8_t *b = b64(pk, &nb);
+    if (!b) return "oom";
+    bits_t r = { b, nb, 0, false };
+    const char *e = NULL;
+    k->nch = (int)get_bits(&r, 16);
+    k->ch = CC_MALLOC(sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
+    if (!k->ch) { CC_FREE(b); return "oom"; }
+    memset(k->ch, 0, sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
+    for (int i = 0; i < k->nch && !e; i++) {
+        chan_t *x = &k->ch[i];
+        x->node = (uint8_t)get_bits(&r, 8);
+        x->path = (uint8_t)get_bits(&r, 2);
+        const uint32_t ip = get_bits(&r, 2), b8 = get_bits(&r, 1);
+        x->nk = (uint16_t)get_bits(&r, 16);
+        if (r.bad || x->path > 2 || ip > 2 || !x->nk || (b8 && x->path != 1)) { e = "rig: packed channel"; break; }
+        x->cubic = ip == 2; x->linear = ip == 1; x->w = x->path == 1 ? 4 : 3;
+        const int per = x->w * (x->cubic ? 3 : 1);
+        x->keys = (uint16_t *)CC_MALLOC(sizeof(uint16_t) * x->nk);
+        x->out = (float *)CC_MALLOC(sizeof(float) * (size_t)per * x->nk);
+        if (!x->keys || !x->out) { e = "oom"; break; }
+        x->keys[0] = (uint16_t)get_bits(&r, 16);
+        if (x->nk > 1) { const int w = (int)get_bits(&r, 5); for (int q = 1; q < x->nk; q++) x->keys[q] = (uint16_t)(x->keys[q - 1] + get_bits(&r, w) + 1); }
+        for (int cpt = 0; cpt < per; cpt++) {
+            int32_t v = (int32_t)get_bits(&r, b8 ? 8 : 16);
+            v = b8 ? (int32_t)(int8_t)(uint8_t)v : (int32_t)(int16_t)(uint16_t)v;
+            const int w = x->nk > 1 ? (int)get_bits(&r, 5) : 0;
+            for (int q = 0; q < x->nk; q++) {
+                if (q) { const uint32_t z = get_bits(&r, w); v += z & 1 ? -(int32_t)((z + 1) >> 1) : (int32_t)(z >> 1); }
+                x->out[(size_t)q * (size_t)per + (size_t)cpt] = b8 ? (float)v / 127.f : (float)v / scale[x->path];
+            }
+        }
+        if (r.bad) e = "rig: packed channel";
+        for (int q = 1; q < x->nk && !e; q++) if (x->keys[q] <= x->keys[q - 1]) e = "rig: keys out of order";
+    }
+    CC_FREE(b);
+    return e;
+}
+
 static const char *parse_clip(cc_t *c, clip_t *k, const cJSON *j, const float scale[3]) {
     const cJSON *d = cJSON_GetObjectItemCaseSensitive(j, "dur"), *lp = cJSON_GetObjectItemCaseSensitive(j, "loop"),
                 *fr = cJSON_GetObjectItemCaseSensitive(j, "from"), *to = cJSON_GetObjectItemCaseSensitive(j, "to"),
                 *vw = cJSON_GetObjectItemCaseSensitive(j, "view"), *nf = cJSON_GetObjectItemCaseSensitive(j, "frames"),
-                *ch = cJSON_GetObjectItemCaseSensitive(j, "ch");
+                *ch = cJSON_GetObjectItemCaseSensitive(j, "ch"), *pk = cJSON_GetObjectItemCaseSensitive(j, "pk");
     if (!cJSON_IsNumber(d) || !cJSON_IsBool(lp) || !cJSON_IsString(fr) || !cJSON_IsString(to) || !cJSON_IsNumber(vw) ||
-        !cJSON_IsNumber(nf) || !cJSON_IsArray(ch)) return "rig: clip fields";
+        !cJSON_IsNumber(nf) || !(cJSON_IsArray(ch) ^ cJSON_IsString(pk)) || (ch && pk)) return "rig: clip fields";
     k->dur = (float)d->valuedouble; k->loop = cJSON_IsTrue(lp); k->view = (float)vw->valuedouble; k->frames = nf->valueint;
     k->from = (int8_t)fam_of(c, fr->valuestring); k->to = (int8_t)fam_of(c, to->valuestring);
     if (k->from < 0 || k->to < 0 || k->dur <= 0.f || k->frames < 1) return "rig: clip family or length";
+    if (pk) {
+        const char *e = unpack_clip(k, pk->valuestring, scale);
+        if (e) return e;
+        for (int i = 0; i < k->nch; i++) if (k->ch[i].node >= c->nn) return "rig: channel node";
+        return NULL;
+    }
     k->nch = cJSON_GetArraySize(ch);
     k->ch = CC_MALLOC(sizeof(chan_t) * (size_t)(k->nch ? k->nch : 1));
     if (!k->ch) return "oom";
@@ -388,11 +452,15 @@ static void sample_pose(const cc_t *c, int ci, double t, float *pose) {
     }
 }
 
-static void blend_pose(const float *a, const float *b, float w, float *out, int nn) {
+/* sg (NULL: the shorter way each frame): each node's way kept from the first frame (0: not chosen yet), so a target
+ * that turns far while the crossfade lasts never flips it to the other side mid-way */
+static void blend_pose(const float *a, const float *b, float w, float *out, int nn, int8_t *keep) {
     for (int i = 0; i < nn; i++) {
         const int o = i * CC_POSE;
         for (int k = 0; k < 3; k++) { out[o + k] = a[o + k] + (b[o + k] - a[o + k]) * w; out[o + 7 + k] = a[o + 7 + k] + (b[o + 7 + k] - a[o + 7 + k]) * w; }
-        const float d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6], sg = d < 0 ? -1.f : 1.f;
+        const float d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6];
+        if (keep && !keep[i]) keep[i] = d < 0 ? -1 : 1;
+        const float sg = keep ? (float)keep[i] : d < 0 ? -1.f : 1.f;
         float l = 0.f;
         for (int k = 3; k < 7; k++) { out[o + k] = a[o + k] + (sg * b[o + k] - a[o + k]) * w; l += out[o + k] * out[o + k]; }
         l = sqrtf(l); if (l <= 0.f) l = 1.f;
@@ -527,6 +595,40 @@ static bool layers(cc_t *c) {
         }
     }
     return on > 0;
+}
+
+/* creature.life.moments: [{ every: [lo, hi], pick: [[gesture, weight], ...] }] (the Molty tools compile them); the clock
+ * is the device's (fluid_director.c), the gestures are the rig's own (graph.gestures, habits included) */
+static const char *parse_moments(cc_t *c, const cJSON *a) {
+    if (!a) return NULL;
+    if (!cJSON_IsArray(a) || cJSON_GetArraySize(a) > CC_MOMENTS_MAX) return "life: moments";
+    for (const cJSON *j = a->child; j; j = j->next) {
+        const cJSON *ev = cJSON_GetObjectItemCaseSensitive(j, "every"), *pk = cJSON_GetObjectItemCaseSensitive(j, "pick");
+        if (!cJSON_IsObject(j) || cJSON_GetArraySize(j) != 2 || !cJSON_IsArray(pk) || !cJSON_GetArraySize(pk) || cJSON_GetArraySize(pk) > CC_PICKS_MAX) return "life: a moment";
+        float e[2];
+        if (!num3(ev, e, 2) || e[0] < 5.f || e[1] < e[0] || e[1] > 3600.f) return "life: a moment's every";
+        moment_t *m = &c->mom[c->nmom++];
+        m->lo = e[0]; m->hi = e[1]; m->n = 0;
+        for (const cJSON *p = pk->child; p; p = p->next) {
+            const cJSON *g = cJSON_GetArrayItem(p, 0), *w = cJSON_GetArrayItem(p, 1);
+            int gi = -1;
+            if (cJSON_IsArray(p) && cJSON_GetArraySize(p) == 2 && cJSON_IsString(g))
+                for (int i = 0; i < c->ngest; i++) if (!strcmp(c->gest[i].name, g->valuestring)) gi = i;
+            if (gi < 0 || !cJSON_IsNumber(w) || !(w->valuedouble > 0)) return "life: a moment's pick";
+            m->gest[m->n] = (int16_t)gi; m->w[m->n++] = (float)w->valuedouble;
+        }
+    }
+    return NULL;
+}
+int cc_moments(const cc_t *c) { return c->nmom; }
+int cc_moment(const cc_t *c, int i, float *lo, float *hi, float *w) {
+    if (i < 0 || i >= c->nmom) return 0;
+    *lo = c->mom[i].lo; *hi = c->mom[i].hi;
+    for (int j = 0; j < c->mom[i].n; j++) w[j] = c->mom[i].w[j];
+    return c->mom[i].n;
+}
+const char *cc_moment_name(const cc_t *c, int i, int j) {
+    return i >= 0 && i < c->nmom && j >= 0 && j < c->mom[i].n ? c->gest[c->mom[i].gest[j]].name : NULL;
 }
 
 int  cc_layers(const cc_t *c) { return c->nlay; }
@@ -687,11 +789,15 @@ static void start(cc_t *c, int ci, float blend) {
         }
         c->ox = ox; c->oz = oz; c->oyaw = y1;
     }
-    c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend;
+    c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend; c->cutting = false;
 }
 
-/* a draw from the creature's seed, 0..n-1, never `avoid` (when it is one of the n and there is another) */
-static int draw(cc_t *c, const int16_t *k, int n, int avoid) {
+/* a draw from the creature's seed among the clips that start in family fam (all of them: fam < 0), never `avoid` (when
+ * it is one of them and there is another); -1 when none starts there */
+static int draw(cc_t *c, const int16_t *all, int na, int avoid, int fam) {
+    int16_t k[CC_CHAIN_PICK]; int n = 0;
+    for (int i = 0; i < na; i++) if (fam < 0 || c->clip[all[i]].from == fam) k[n++] = all[i];
+    if (!n) return -1;
     int m = n, skip = -1;
     for (int i = 0; i < n && n > 1; i++) if (k[i] == avoid) { skip = i; m = n - 1; }
     c->rng = c->rng * 1664525u + 1013904223u;
@@ -699,12 +805,18 @@ static int draw(cc_t *c, const int16_t *k, int n, int avoid) {
     if (skip >= 0 && r >= skip) r++;
     return k[r];
 }
-/* a chain's next clip (-1: it is done) */
+/* a chain's next clip (-1: it is done): each a pick among those that start in the pose the clip playing ends in */
 static int chain_next(cc_t *c) {
     if (c->chain_on < 0) return -1;
     const chain_t *h = &c->chain[c->chain_on];
-    if (c->chain_left > 0) { c->chain_left--; return c->chain_prev = draw(c, h->pick[1], h->n[1], c->chain_prev); }
-    if (!c->chain_stage && h->n[2]) { c->chain_stage = 1; return draw(c, h->pick[2], h->n[2], -1); }
+    const int fam = c->clip[c->cur_clip].to;
+    if (c->chain_left > 0) {
+        c->chain_left--;
+        const int k = draw(c, h->pick[1], h->n[1], c->chain_prev, fam);
+        if (k >= 0) return c->chain_prev = k;
+        c->chain_left = 0;
+    }
+    if (!c->chain_stage && h->n[2]) { c->chain_stage = 1; const int k = draw(c, h->pick[2], h->n[2], -1, fam); if (k >= 0) return k; }
     c->chain_on = -1;
     return -1;
 }
@@ -733,7 +845,10 @@ static void advance(cc_t *c) {
     const int next = c->queue[0];
     memmove(c->queue, c->queue + 1, sizeof(int) * (size_t)(--c->nq));
     if (c->gesture >= 0 && next == c->gest[c->gesture].clip) c->gstarted = true;
-    start(c, next, c->blend);
+    const bool cut = c->cut_blend > 0.f;
+    start(c, next, cut ? c->cut_blend : c->blend);
+    c->cut_blend = 0.f; c->cutting = cut;
+    memset(c->csign, 0, sizeof(c->csign));
 }
 
 /* ── the API ───────────────────────────────────────────────────────────── */
@@ -745,6 +860,7 @@ cc_t *cc_create(const void *crv, const char **err) {
     memset(c, 0, sizeof(*c));
     const char *e = parse(c, rig);
     if (!e) e = parse_layers(c, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "layers"));
+    if (!e) e = parse_moments(c, cJSON_GetObjectItemCaseSensitive(cJSON_GetObjectItemCaseSensitive(cr, "life"), "moments"));
     if (e) { cc_destroy(c); *err = e; return NULL; }
     const int sit = fam_of(c, "sit");
     c->cur_clip = c->rest_clip[sit >= 0 ? sit : 0];
@@ -846,13 +962,21 @@ static bool act(cc_t *c, const char *name) {
         c->chain_on = i; c->chain_stage = 0; c->chain_prev = -1;
         c->rng = c->rng * 1664525u + 1013904223u;
         c->chain_left = h->rmin + (int)((c->rng >> 8) % (uint32_t)(h->rmax - h->rmin + 1));
-        if (h->n[0]) c->gest[g].clip = (int16_t)draw(c, h->pick[0], h->n[0], -1);
-        else { c->gest[g].clip = (int16_t)(c->chain_prev = draw(c, h->pick[1], h->n[1], -1)); c->chain_left--; }
+        if (h->n[0]) c->gest[g].clip = (int16_t)draw(c, h->pick[0], h->n[0], -1, -1);
+        else { c->gest[g].clip = (int16_t)(c->chain_prev = draw(c, h->pick[1], h->n[1], -1, -1)); c->chain_left--; }
     }
     return true;
 }
 
 bool cc_act(cc_t *c, const char *name) { c->come = 0; return act(c, name); }   /* the agent's: it ends a call */
+
+bool cc_stop(cc_t *c) {   /* clip-player.js stop() */
+    if (c->gesture < 0 || c->come) return false;
+    c->gesture = -1; c->chain_on = -1; c->pending = true;
+    c->cut_blend = CC_CUT_BLEND;            /* from mid-move, a longer crossfade than a clip's end needs: no snap */
+    interrupt(c);
+    return true;
+}
 
 void cc_play(cc_t *c, const char *clip) {
     const int k = cc_clip_find(c, clip);
@@ -901,7 +1025,7 @@ void cc_update(cc_t *c, float dt) {
     sample_pose(c, c->cur_clip, c->t, c->pose);
     const float w = ease(c->blendD > 0.f ? c->blendT / c->blendD : 1.f);
     if (w < 1.f) {
-        blend_pose(c->from, c->pose, w, c->cur, c->nn);
+        blend_pose(c->from, c->pose, w, c->cur, c->nn, c->cutting ? c->csign : NULL);
         for (int i = 1; i < c->nn; i++)          /* a prop (a root-level node but the first) is never cross-faded: it is where
                                                   * the clip puts it, so a bowl leaving never sweeps across to where it rests */
             if (c->node[i].parent < 0) memcpy(c->cur + i * CC_POSE, c->pose + i * CC_POSE, sizeof(float) * CC_POSE);
@@ -914,7 +1038,7 @@ void cc_update(cc_t *c, float dt) {
         for (int i = 0; i < c->ncon; i++) {
             float a[3], b[3];
             point_on(c->fromWorld, c->con[i].node, c->con[i].p, a); point_on(c->world, c->con[i].node, c->con[i].p, b);
-            if (a[1] < 0.03f && b[1] < 0.03f) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
+            if (a[1] < 0.03f && (c->cutting || b[1] < 0.03f)) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
         }
         if (n) { const float q = (1.f - w) / n; c->lockX = dx * q; c->lockZ = dz * q; forward(c, P, c->ox + c->lockX, c->oz + c->lockZ, c->world); }
     } else { c->lockX = c->lockZ = 0.f; }

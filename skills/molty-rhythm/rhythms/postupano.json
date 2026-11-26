@@ -1,0 +1,40 @@
+{
+  "id": "postupano",
+  "name": "Postupano, thirteen eight",
+  "label": "POSTUPANO",
+  "status": "verified",
+  "region": "balkans",
+  "country": "Bulgaria",
+  "steps": 6,
+  "lengths": [2, 2, 2, 3, 2, 2],
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 2, 3, 4, 5, 6],
+  "layers": {
+    "drum": {
+      "name": "The drum, one stroke per beat",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6]
+    }
+  },
+  "source": "Postupano 2+2+2+3+2+2; Wikipedia Bulgarian dances; Chromatone Balkan rhythms; Fiddling Around; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia: Bulgarian dances",
+      "url": "https://en.wikipedia.org/wiki/Bulgarian_dances",
+      "shows": "13/16 dances such as Krivo plovdivsko: 2+2+2+3+2+2 (Wikipedia names that dance, not Postupano)"
+    },
+    {
+      "title": "Chromatone: Balkan rhythms",
+      "url": "https://chromatone.center/theory/rhythm/system/balkan/",
+      "shows": "Postupano 13/16: Q,Q,Q,S,Q,Q (also Krivo Sadovsko)"
+    },
+    {
+      "title": "Fiddling Around: Balkan rhythms in Celtic music",
+      "url": "https://www.fiddlingaround.co.uk/balkan%20rhythms.html",
+      "shows": "Postupano 13/8: 12,12,12,123,12,12"
+    }
+  ]
+}
