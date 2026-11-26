@@ -56,9 +56,17 @@ export const MAX_SCENE_TTL_S = 600;
 /** Firmware cap: rhythm.* (boards with a speaker). */
 export const RHYTHM_CAP = "rhythm";
 /** rhythm.play's library as JSON: up to 16 patterns of a few hundred bytes (the device checks each strictly). */
-export const MAX_RHYTHM_BYTES = 8192;
+export const MAX_RHYTHM_BYTES = 32768;
 export const RHYTHM_BPM = [40, 220] as const;
-export const MAX_RHYTHMS = 16;
+export const MAX_RHYTHMS = 96;
+/** rhythm.play's `regions` (the wheel's level above the rhythms): up to 16 {label, color}. */
+export const MAX_RHYTHM_REGIONS = 16;
+/** `sync`: the picture against the sound, ms, kept on the device. */
+export const RHYTHM_SYNC_MS = 250;
+function syncArg(v: unknown): number {
+  if (typeof v !== "number" || !Number.isInteger(v) || Math.abs(v) > RHYTHM_SYNC_MS) throw invalid(`sync must be a whole number of ms, -${RHYTHM_SYNC_MS}..${RHYTHM_SYNC_MS}`);
+  return v;
+}
 const RHYTHM_LAYER_RE = /^[a-z][a-z0-9-]{0,15}$/;
 function bpmArg(v: unknown): number {
   if (typeof v !== "number" || !Number.isFinite(v) || v < RHYTHM_BPM[0] || v > RHYTHM_BPM[1]) throw invalid(`bpm must be a number ${RHYTHM_BPM[0]}..${RHYTHM_BPM[1]}`);
@@ -432,19 +440,25 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
     }
     case "rhythm.play": {
       // the shape only: the device checks every pattern strictly (rhythm_wire.c) and answers invalid_args
-      only(args, ["rhythms", "pick", "bpm", "mute", "buzz", "paused"]);
+      only(args, ["rhythms", "regions", "pick", "bpm", "mute", "buzz", "paused", "sync"]);
       const r = args.rhythms;
       if (!Array.isArray(r) || r.length < 1 || r.length > MAX_RHYTHMS || !r.every(isRecord)) throw invalid(`rhythms must be a list of 1..${MAX_RHYTHMS} patterns (the molty-rhythm skill's library)`);
       if (new TextEncoder().encode(JSON.stringify(r)).byteLength > MAX_RHYTHM_BYTES) throw invalid(`rhythms exceed ${MAX_RHYTHM_BYTES} bytes`);
       const out: JsonObject = { rhythms: r as JsonObject[], pick: int(args.pick, "pick", 0, r.length - 1), bpm: bpmArg(args.bpm) };
+      if (args.regions !== undefined) {
+        const g = args.regions;
+        if (!Array.isArray(g) || g.length < 1 || g.length > MAX_RHYTHM_REGIONS || !g.every(isRecord)) throw invalid(`regions must be a list of 1..${MAX_RHYTHM_REGIONS} {label, color}`);
+        out.regions = g as JsonObject[];
+      }
+      if (args.sync !== undefined) out.sync = syncArg(args.sync);
       if (args.mute !== undefined) out.mute = muteArg(args.mute);
       if (args.buzz !== undefined) out.buzz = boolArg(args.buzz, "buzz");
       if (args.paused !== undefined) out.paused = boolArg(args.paused, "paused");
       return { name: n, args: out, job: false };
     }
     case "rhythm.set": {
-      only(args, ["bpm", "pick", "mute", "next", "buzz", "paused"]);
-      if (!Object.keys(args).length) throw invalid("rhythm.set needs bpm, pick, mute, next, buzz or paused");
+      only(args, ["bpm", "pick", "mute", "next", "buzz", "paused", "sync"]);
+      if (!Object.keys(args).length) throw invalid("rhythm.set needs bpm, pick, mute, next, buzz, paused or sync");
       const out: JsonObject = {};
       if (args.bpm !== undefined) out.bpm = bpmArg(args.bpm);
       if (args.pick !== undefined) out.pick = int(args.pick, "pick", 0, MAX_RHYTHMS - 1);
@@ -452,6 +466,7 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       if (args.next !== undefined) { if (args.next !== true) throw invalid("next must be true"); out.next = true; }
       if (args.buzz !== undefined) out.buzz = boolArg(args.buzz, "buzz");
       if (args.paused !== undefined) out.paused = boolArg(args.paused, "paused");
+      if (args.sync !== undefined) out.sync = syncArg(args.sync);
       return { name: n, args: out, job: false };
     }
     case "rhythm.stop":

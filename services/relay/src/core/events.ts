@@ -119,7 +119,7 @@ export const SCENE_EVENT = "scene";
 
 /** Device `scene`: what is up now is a package and a layout, or neither; anything else is dropped. A bad spot goes, the event stays. */
 function sceneShape(d: Record<string, unknown>): JsonObject | undefined {
-  if (d.why !== "open" && d.why !== "back" && d.why !== "end") return undefined;
+  if (d.why !== "open" && d.why !== "back" && d.why !== "end" && d.why !== "close") return undefined;
   if (d.pkg === undefined && d.layout === undefined) return { why: d.why };
   if (typeof d.pkg !== "string" || !PKG_ID_RE.test(d.pkg) || typeof d.layout !== "string" || !LAYOUT_RE.test(d.layout)) return undefined;
   return { why: d.why, pkg: d.pkg, layout: d.layout, ...(spot(d.spot) ? { spot: d.spot } : {}) };
@@ -325,10 +325,12 @@ export function eventSentence(ev: AgentEvent): string {
     case "tap":
       return typeof d.muted === "boolean" ? `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} on Molty's rhythm` : "Molty's screen was tapped";
     case "ring":
+      if (d.spot === "region") return `The human is browsing ${String(d.label)} on Molty's wheel`;
       return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it waits, stopped, for a tap in the middle` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
     case "rhythm":
       return d.state === "stopped" ? "The human stopped the rhythm on Molty and left it" : d.state === "paused" ? "The human stopped the rhythm on Molty: it waits on the clock, choosing" : `The human started ${String(d.rhythm ?? "the rhythm")} on Molty`;
     case SCENE_EVENT:
+      if (d.why === "close") return d.layout ? `The human closed a screen on Molty: ${d.layout} of ${d.pkg} is up now` : "The human closed Molty's screen: the creature is back, your screen is gone";
       if (!d.layout) return "Molty's scene ended: the creature is back";
       if (d.why === "open") return `Molty opened ${d.layout} of ${d.pkg}${d.spot ? ` (the human tapped ${d.spot})` : ""}`;
       return d.why === "back" ? `Molty went back to ${d.layout} of ${d.pkg}` : `Molty's scene ended: ${d.layout} of ${d.pkg} is up now`;

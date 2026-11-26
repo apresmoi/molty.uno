@@ -3,7 +3,7 @@
 // ride-along, and a webhook only when it names them.
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
-import { CommandError, MAX_RHYTHM_BYTES, validateCommand } from "../src/core/commands.js";
+import { CommandError, MAX_RHYTHM_BYTES, MAX_RHYTHMS, validateCommand } from "../src/core/commands.js";
 import { DEFAULT_WEBHOOK_EVENTS, SAMPLE_EVENTS, agentEventData, eventSentence, webhookWants } from "../src/core/events.js";
 import type { DeviceRoom } from "../src/core/room.js";
 import { handleRest } from "../src/surfaces/rest.js";
@@ -21,15 +21,19 @@ const code = (name: string, args: unknown) => {
 };
 
 describe("rhythm commands: validation", () => {
-  it("rhythm.play: 1..16 patterns (8 KB at most), pick within them, bpm 40..220, mute, buzz, paused; forwarded as given", () => {
-    expect(validateCommand("rhythm.play", { ...PLAY, mute: ["aro"], buzz: true, paused: false }).args).toEqual({ ...PLAY, mute: ["aro"], buzz: true, paused: false });
+  it("rhythm.play: 1..96 patterns (32 KB at most) in up to 16 regions, pick within them, bpm 40..220, mute, buzz, paused, sync; forwarded as given", () => {
+    const REG = [{ label: "ARGENTINA", color: "#8cc4ff" }];
+    expect(validateCommand("rhythm.play", { ...PLAY, mute: ["aro"], buzz: true, paused: false, regions: REG, sync: -20 }).args).toEqual({ ...PLAY, mute: ["aro"], buzz: true, paused: false, regions: REG, sync: -20 });
+    expect(validateCommand("rhythm.play", { ...PLAY, rhythms: Array.from({ length: 70 }, () => CHACARERA) }).args.rhythms).toHaveLength(70);   // (the skill's whole library)
     for (const bad of [{}, { ...PLAY, rhythms: [] }, { ...PLAY, rhythms: [1] }, { ...PLAY, pick: 1 }, { ...PLAY, bpm: 39 }, { ...PLAY, bpm: 221 }, { ...PLAY, mute: "aro" }, { ...PLAY, buzz: 1 }, { ...PLAY, tempo: 3 },
-      { ...PLAY, rhythms: Array.from({ length: 17 }, () => CHACARERA) }, { ...PLAY, rhythms: [{ ...CHACARERA, source: "x".repeat(MAX_RHYTHM_BYTES) }] }])
+      { ...PLAY, rhythms: Array.from({ length: MAX_RHYTHMS + 1 }, () => CHACARERA) }, { ...PLAY, rhythms: [{ ...CHACARERA, source: "x".repeat(MAX_RHYTHM_BYTES) }] },
+      { ...PLAY, regions: [] }, { ...PLAY, regions: Array.from({ length: 17 }, () => REG[0]) }, { ...PLAY, sync: 251 }, { ...PLAY, sync: 2.5 }])
       expect(code("rhythm.play", bad), JSON.stringify(bad).slice(0, 80)).toBe("invalid_args");
   });
   it("rhythm.set: at least one of bpm, pick, mute, next (true), buzz, paused; rhythm.stop takes nothing", () => {
     expect(validateCommand("rhythm.set", { bpm: 90, next: true, mute: [] }).args).toEqual({ bpm: 90, next: true, mute: [] });
-    for (const bad of [{}, { next: false }, { bpm: "fast" }, { pick: -1 }, { volume: 3 }]) expect(code("rhythm.set", bad)).toBe("invalid_args");
+    expect(validateCommand("rhythm.set", { sync: 35 }).args).toEqual({ sync: 35 });
+    for (const bad of [{}, { next: false }, { bpm: "fast" }, { pick: -1 }, { volume: 3 }, { sync: -300 }]) expect(code("rhythm.set", bad)).toBe("invalid_args");
     expect(validateCommand("rhythm.stop", {}).args).toEqual({});
     expect(code("rhythm.stop", { now: true })).toBe("invalid_args");
   });
@@ -98,6 +102,11 @@ describe("rhythm events", () => {
     expect(eventSentence(SAMPLE_EVENTS.rhythm)).toBe("The human stopped the rhythm on Molty: it waits on the clock, choosing");
     expect(eventSentence({ id: "e1", type: "rhythm", ts: 0, data: { state: "playing", rhythm: "milonga", bpm: 90 } })).toBe("The human started milonga on Molty");
     expect(eventSentence({ id: "e1", type: "rhythm", ts: 0, data: { state: "stopped", rhythm: "milonga", bpm: 90 } })).toBe("The human stopped the rhythm on Molty and left it");
+    expect(eventSentence({ id: "e1", type: "ring", ts: 0, data: { spot: "region", index: 2, label: "CARIBBEAN" } })).toBe("The human is browsing CARIBBEAN on Molty's wheel");
+    // the human closed a screen by hand (the reject button, a finger held on the glass): any skill's
+    expect(agentEventData("scene", { why: "close" })).toEqual({ why: "close" });
+    expect(agentEventData("scene", { why: "close", pkg: "astrology", layout: "chart" })).toEqual({ why: "close", pkg: "astrology", layout: "chart" });
+    expect(eventSentence({ id: "e1", type: "scene", ts: 0, data: { why: "close" } })).toBe("The human closed Molty's screen: the creature is back, your screen is gone");
     expect(eventSentence({ id: "e1", type: "tap", ts: 0, data: { x: 0.5, y: 0.5, spot: "aro", muted: true } })).toBe("The human muted aro on Molty's rhythm");
   });
   it("a webhook gets them only when it names them: the human acts on Molty itself", () => {
