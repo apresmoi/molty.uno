@@ -173,7 +173,7 @@ static void test_clock(void) {
     rhy_view_t v; rhythm_now(&v, NULL);
     CHECK(v.bpm == 160.f && !v.count_in, "the new tempo, no restart");
     /* a new rhythm: the kept drawing changes, the scene stays (no forming from dust) */
-    char set[64]; snprintf(set, sizeof set, "{%s}", pick("bell-12", ""));
+    char set[160]; snprintf(set, sizeof set, "{%s}", pick("bell-12", ""));
     CHECK(wm_rhythm("rhythm.set", set) == 0, "rhythm.set pick");
     frames(10);
     CHECK(s_sp.gen == gen && sc->serial != serial && sc->look == look && count_items(sc, false, PK_RING) == 2, "a new rhythm: redrawn in place, the same scene, the same look");
@@ -380,7 +380,7 @@ static void test_regions(void) {
     rhythm_now(&v, NULL);
     CHECK(second != first && v.cur == second && s_wh.region == 2, "up and back in: the region's last rhythm again");
     /* the agent's pick of another region's rhythm: the wheel follows to its region */
-    char c[64]; snprintf(c, sizeof c, "{%s}", pick("teental", ""));
+    char c[160]; snprintf(c, sizeof c, "{%s}", pick("teental", ""));
     wm_rhythm("rhythm.set", c); frames(4);
     CHECK(s_wh.w.level == 0 && s_wh.region == rhythm_region_of(P("teental")) && !strcmp(s_wh.w.above, "INDIA"), "the agent picks teental: the wheel on India");
     tap(0.02f, -0.02f); frames(10);
@@ -486,7 +486,7 @@ static void test_still_picture(void) {
             watch(2); touch_at(0, 0.f, 0.f);
         } else if (k == 4) { wm_button(0, 1); watch(2); wm_button(0, 0); }
         else if (STEPS[q].cmd) wm_rhythm("rhythm.set", STEPS[q].cmd);
-        else { char c[64]; snprintf(c, sizeof c, "{%s}", pick("son-clave", "")); wm_rhythm("rhythm.set", c); }
+        else { char c[160]; snprintf(c, sizeof c, "{%s}", pick("son-clave", "")); wm_rhythm("rhythm.set", c); }
         watch(150);                                     /* (2.5 s: the words fade, a bar or two goes by) */
         if (s_tr.changes || s_tr.looks) { bad_steps++; printf("    %s: %d changes of picture, %d new looks\n", STEPS[q].what, s_tr.changes, s_tr.looks); }
         s_tr.changes = s_tr.looks = 0;
