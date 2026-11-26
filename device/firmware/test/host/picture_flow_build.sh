@@ -11,6 +11,6 @@ OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-picture-flow.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
 
 "$HERE/../../web/build.sh" test "$OUT" "$HERE/picture_flow_test.c"
-for c in early late never broken welcome-word welcome-late welcome-change say hold ask-scene screen nap bye restart creatures refused; do
+for c in early late never broken welcome-word welcome-late welcome-change say hold ask-scene screen nap bye restart creatures refused busy; do
   "$OUT/picture_flow_test" "$ROOT" "$c"
 done

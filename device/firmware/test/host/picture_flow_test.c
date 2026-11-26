@@ -346,6 +346,41 @@ static void case_refused(void) {
     CHECK(s_starts == starts && !s_cuts && s_cur == ST_CREATURE, "nothing changed on the glass");
 }
 
+/* the heaviest word change: a held word over the busy star chart and back. Both pictures are read within the change's
+ * caps (FLUID_MORPH_GRAINS / _LINES: its memory, all PSRAM, is bounded by them), each way one change, at most 2 of its
+ * frames over the frame in the panel model */
+static void case_busy(const char *root) {
+    char path[1024]; size_t len;
+    snprintf(path, sizeof(path), "%s/packages/astrology/astrology.json", root);
+    char *astro = slurp(path, &len);
+    snprintf(path, sizeof(path), "%s/device/firmware/web/fidelity.script", root);
+    size_t sl; char *script = slurp(path, &sl), *chart = strstr(script, "scene chart 40 ");
+    char *eol = chart ? strchr(chart, '\n') : NULL;
+    if (eol) *eol = 0;
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0 && wm_package(astro, len) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    CHECK(chart && wm_scene("chart", chart + strlen("scene chart 40 "), 40.f) == 0, "the chart"); frames(120);
+    const char *step[] = { "{\"state\":\"text\",\"text\":\"update\",\"hold\":true}", "{\"state\":\"creature\"}" };
+    for (int q = 0; q < 2; q++) {
+        const int starts = s_starts, slow = s_slow;
+        int na = 0, nb = 0, nl = 0;
+        CHECK(wm_state(step[q]) == 0, "%s", step[q]);
+        for (int i = 0; i < 70; i++) {
+            frame();
+            if (s_draw->m.na > na) na = s_draw->m.na;
+            if (s_draw->m.nb > nb) nb = s_draw->m.nb;
+            if (s_draw->m.nlines > nl) nl = s_draw->m.nlines;
+        }
+        printf("busy %s: old grains %d, new %d, old line px %d (caps %d, %d), %d frames over\n", q ? "word to cat" : "chart to word", na, nb, nl,
+               FLUID_MORPH_GRAINS, FLUID_MORPH_LINES, s_slow - slow);
+        CHECK(s_starts - starts == 1 && !s_cuts, "one change (%d, %d at once)", s_starts - starts, s_cuts);
+        CHECK(na < FLUID_MORPH_GRAINS && nb < FLUID_MORPH_GRAINS && nl < FLUID_MORPH_LINES, "both pictures within the caps");
+        CHECK(s_slow - slow <= 2, "%d frames of the change over the frame", s_slow - slow);
+    }
+    free(astro); free(script);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -433,6 +468,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "restart")) case_restart();
     else if (!strcmp(c, "creatures")) case_creatures(argv[1]);
     else if (!strcmp(c, "refused")) case_refused();
+    else if (!strcmp(c, "busy")) case_busy(argv[1]);
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;
