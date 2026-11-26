@@ -77,10 +77,10 @@ typedef struct {
                                          * never in the kept dots, the fine dust or a key                         */
     int8_t layer;                       /* a beat's hit: its layer (a tap mutes it), else -1                      */
     /* a dial: a click every step degrees adds by (fast turning fast) to val, vmin..vmax; or steps through its labels
-     * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1.
-     * a centre: back s without a touch on face 1 flips back */
-    float step, by, fast, vmin, vmax, val, back;
-    uint8_t face, sets, nlab;
+     * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1;
+     * each click a tick of the motor, tick_ms at tick percent (0: haptic_plan.h HAPTIC_WHEEL_*) */
+    float step, by, fast, vmin, vmax, val;
+    uint8_t face, sets, nlab, tick_ms, tick;
     uint16_t lab;
 } scene_item_t;
 
@@ -93,7 +93,10 @@ typedef struct scene {
     int nfixed, nchars_fixed;           /* what the layout built; a beat's items follow (scene_beat)          */
     int beat;                           /* the layout's beat item, -1 none                                      */
     uint32_t beat_key;                  /* what its kept part was drawn from                                    */
-    unsigned serial;                    /* which build it is (scene_fill keeps its drawing)   */
+    unsigned serial;                    /* which drawing it is (scene_fill keeps it): a build, or a beat's kept part
+                                         * drawn again in place                                                 */
+    unsigned look;                      /* which picture it is: its build (a new one is a change of picture, the
+                                         * dissolve; a beat's kept part drawn again in place is not)            */
     int focus;                          /* a tapped spot (item) whose drawing is grown, -1 none */
     float grow, glow;                   /* its scale (1 = as built) and how lit, 0..1 (scene_grow) */
     int ngroups;
@@ -109,8 +112,11 @@ typedef struct scene {
  * (rhythm.h): one ring a layer (r, then 0.75, 0.525 and 0.3375 of it), a mark a step outside them (longer on a main
  * beat), a dot a hit of this bar in its layer's colour (a muted layer's at SCENE_BEAT_MUTED), the hand on the step
  * sounding, each hit swelling as it sounds, the count-in's clicks on their marks, the phrase as a row of pips, the
- * rhythm's name. Its hand, swells and clicks are live items (scene_item_t.live): shapes each frame, so the kept dots
- * and the fine dust are drawn again only when the pattern, a mute or the phrase's bar changes, never per step. */
+ * rhythm's name; at rest (stopped, choosing: rest) the hand at 12 o'clock and a play mark in the middle, while it
+ * plays a small stop mark there. Only the rings and the marks are kept (the dots, the fine dust): they change with the
+ * pattern's shape alone, a new rhythm, and then are drawn again in place (scene_t.serial, never scene_t.look). All the
+ * rest is live items (scene_item_t.live): shapes each frame, so a bar of a phrase, a mute, a tempo, the name or the
+ * wheel's words change nothing kept and never the picture whole. */
 #define SCENE_BEAT_STEPS  32
 #define SCENE_BEAT_LAYERS 4
 #define SCENE_BEAT_MUTED  0.3f          /* a muted layer's dots: this much of its colour  */
@@ -122,13 +128,13 @@ typedef struct {
     uint32_t beats;                     /* the main beats (step bits)                       */
     int nlayers;
     uint32_t rgb[SCENE_BEAT_LAYERS], hits[SCENE_BEAT_LAYERS], muted;   /* this bar's hits a layer */
-    int step;                           /* sounding now, -1 none (a count-in, at rest)      */
+    int step;                           /* sounding now, -1 none (a count-in)               */
     int cin_step;                       /* the count-in's click (a step), -1 none           */
     float since;                        /* s since that step or click began                  */
     int slot, norder;                   /* where in the phrase                              */
+    bool rest;                          /* stopped, choosing: the hand at rest, the play mark */
     bool hide_name;                     /* (a wheel shows its own words in the middle)       */
     char label[13];
-    unsigned ver;                       /* changes with what the kept part draws             */
 } scene_beat_t;
 /** The beat's items after the layout's own (a no-op without a beat item). Each frame, before scene_fill. */
 void scene_beat(scene_t *sc, const scene_beat_t *b);
@@ -137,10 +143,11 @@ int scene_beat_hit(const scene_t *sc, float x, float y);
 
 /* Wheels (pkg items `dial` and `centre`, docs/PACKAGES.md): a ring at the edge the finger turns in clicks
  * (sense/ring_input.h), on the device, with no round trip: a number (a tempo) or a choice among labels (a list, the beat
- * player's library). A centre's tap flips between two faces, each its own dial; the agent hears where it settled
- * (mole_fluid.c, a `ring` event). scene_wheel draws them, live, each frame: the rail, its ticks (a number) or one bead
- * a label (a choice) turning with the finger, the notch at 12 o'clock that flashes on each click, and in the middle
- * the value or the label while it turns (and SCENE_WHEEL_SHOW_S after), or while the choice is up. */
+ * player's library). Two faces, each its own dial: face 0 while the beat plays (or with no beat), face 1 while it is
+ * stopped; the centre's tap plays and stops it (mole_fluid.c). The agent hears where a wheel settled (a `ring` event).
+ * scene_wheel draws them, live, each frame: the rail, its ticks (a number) or one bead a label (a choice) turning with
+ * the finger, the notch at 12 o'clock that flashes on each click, and in the middle the value while it turns (and
+ * SCENE_WHEEL_SHOW_S after), or the choice, under the beat's play mark, all the while face 1 is up. */
 #define SCENE_WHEEL_SHOW_S 0.9f
 #define SCENE_WHEEL_SCALE  75.f        /* a number's ticks: this far each side of the notch (a turning tick is a redraw) */
 #define SCENE_WHEEL_LABELS 32
@@ -151,7 +158,7 @@ typedef struct {
     int index;                          /* its label (a choice)                           */
     float turn;                         /* degrees turned since the last click, clockwise (the finger on it) */
     bool turning;                       /* a finger is on it                              */
-    float since;                        /* s since the finger left it, or the face changed */
+    float since;                        /* s since the finger left it                      */
     float flash;                        /* the notch's flash: 1 at a click, down to 0     */
     int nlabels;
     const char (*labels)[PKG_KEY_MAX + 1];

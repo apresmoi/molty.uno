@@ -23,7 +23,7 @@ static bool counted_in;
 static void on_write(const int16_t *pcm, size_t n) {
     memcpy(last, pcm, n * sizeof(int16_t)); last_n = n; writes++;
     if (writes == 3) { rhy_view_t v; rhythm_now(&v, NULL); counted_in |= v.count_in; }
-    if (writes == pause_at) rhythm_local_pause();
+    if (writes == pause_at) rhythm_local_play();
 }
 static bool waiting(void) { return job_at >= 0 && writes >= job_at; }
 static bool never(void) { return false; }
@@ -72,24 +72,25 @@ int main(void) {
     for (size_t q = 0; q < last_n; q++) if (abs(last[q]) > 4000) tail = (int)q;
     assert(tail < RHY_FADE);                               /* loud only inside the fade */
     rhy_view_t v;
-    assert(rhythm_now(&v, NULL) && v.paused && rhythm_wants_speaker() && !rhythm_sounding());
+    assert(rhythm_now(&v, NULL) && v.paused && !v.rest && rhythm_wants_speaker() && !rhythm_sounding());   /* (paused for the job, not at rest) */
     printf("  share   a job came after %d blocks: the rhythm faded and gave way within one block, the stream ended (one owner)\n", job_at);
 
     /* the job owns the speaker meanwhile (the stub asserts a single owner) */
     assert(molty_speaker_stream_begin(16000) == ESP_OK);
     molty_speaker_stream_end();
 
-    /* after it: a count-in, then on; the accept button pauses it (the event says so) */
+    /* after it: a count-in, then on; the accept button stops it at rest (the event says paused) */
     job_at = -1; writes = 0; counted_in = false; pause_at = 30;
     rhythm_dev_play(never);
     assert(counted_in && writes >= 30 && writes <= 32 && sdk_speaker_ends == sdk_speaker_begins);
     assert(!rhythm_wants_speaker() && rhythm_active());
     rhythm_ev_t ev;
     assert(rhythm_take_event(&ev) && ev.kind == RHY_EV_STATE && !strcmp(ev.state, "paused") && !strcmp(ev.id, "chacarera"));
+    assert(rhythm_now(&v, NULL) && v.rest && v.count_in);      /* at rest: back at the phrase's start */
     cJSON *f = rhythm_event_frame(&ev);
     assert(!strcmp(cJSON_GetObjectItem(f, "name")->valuestring, "rhythm") && !strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(f, "data"), "state")->valuestring, "paused"));
     cJSON_Delete(f);
-    printf("  share   back with a count-in after the job; the accept button paused it after %d blocks\n", writes);
+    printf("  share   back with a count-in after the job; the accept button stopped it at rest after %d blocks\n", writes);
 
     /* the buzz: off unless asked; on, one per main beat heard */
     cJSON *on = cJSON_Parse("{\"buzz\":true,\"paused\":false}");

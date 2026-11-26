@@ -283,10 +283,27 @@ int main(int argc, char **argv) {
         bool first = false; int beats = 0, firsts = 0;
         while (rhy_take_beat(&P, P.n, &first)) { beats++; firsts += first; }
         CHECK(beats >= 1 && beats <= RHY_BEATS && firsts >= 1, "beats to buzz on: %d, %d first", beats, firsts);
-        const unsigned ver = P.ver;
-        CHECK(rhy_pick(&P, son) && P.cur == son && P.ver != ver, "pick: another rhythm");
+        CHECK(rhy_pick(&P, son) && P.cur == son, "pick: another rhythm");
         rhy_view_t v; rhy_view(&P, P.n, &v);
         CHECK(v.count_in, "pick: a count-in first");
+        /* at rest: silent, back at the phrase's start; a pick at rest stays silent; played again: a count-in, bar 1 */
+        rhy_init(&P);
+        rhy_load(&P, LIB, NLIB, cha, 200.f, 0, false);
+        run(RHY_RATE * 5);
+        rhy_rest(&P);
+        run(RHY_RATE);
+        rhy_view(&P, P.n, &v);
+        CHECK(P.paused && !rhy_sounding(&P) && v.count_in && v.slot == 0, "rest: silent, at the phrase's start");
+        CHECK(rhy_pick(&P, son) && P.paused && !rhy_sounding(&P), "rest: a pick stays silent");
+        rhy_pause(&P, false);
+        rhy_view(&P, P.n, &v);
+        CHECK(rhy_sounding(&P) && v.count_in, "played again: a count-in first");
+        run(RHY_RATE * 4);
+        rhy_view(&P, P.n, &v);
+        CHECK(!v.count_in && v.slot == 0, "... then its first bars");
+        rhy_init(&P);
+        rhy_load(&P, LIB, NLIB, cha, 104.f, 0, false);
+        run(RHY_RATE * 2);
         rhy_stop(&P);
         size_t made = 256; int blocks = 0;
         while ((made = rhy_fill(&P, BUF, 256)) == 256 && blocks < 10) blocks++;

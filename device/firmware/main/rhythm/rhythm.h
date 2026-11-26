@@ -9,9 +9,11 @@
  *             speaker, the rhythm fades out within RHY_FADE samples and waits; after the job it starts again with a
  *             count-in at the bar it stopped in. One owner of the speaker at a time, as ever.
  *   screen    the rhythm package's clock (a scene's `beat` item) draws the pattern from rhythm_now, at the sample the
- *             speaker plays now; its wheel and its dots act here (rhythm_local_*), with no round trip. The sound lives
- *             as long as its picture: when no scene with a beat shows for RHYTHM_ORPHAN_S, it stops.
- *   buttons   while a rhythm shows: accept pauses and resumes, reject stops it and the scene goes (sense.c).
+ *             speaker plays now; its centre, its wheel and its dots act here (rhythm_local_*), with no round trip. The
+ *             sound lives as long as its picture: when no scene with a beat shows for RHYTHM_ORPHAN_S, it stops.
+ *   play      playing, or stopped at rest (rhy_rest): choosing, silent, the phrase back at its start. The centre's tap
+ *             and the accept button go from one to the other (rhythm_local_play); the agent's `paused` too.
+ *   buttons   while a rhythm shows: accept plays and stops it, reject stops it and the scene goes (sense.c).
  *   events    what the human changed, once it settled (rhythm_take_event): sense.c (web: web_device.c) sends them.
  *
  * rhythm_core.c is plain C (cJSON) and builds on the device, in the web module and in the host tests; the device's lock
@@ -33,19 +35,20 @@ const char *rhythm_play(const cJSON *args, cJSON **out);
 const char *rhythm_set(const cJSON *args, cJSON **out);
 const char *rhythm_stop(void);
 
-/** The pattern playing and where the speaker is in it now. False: no rhythm loaded. */
+/** The pattern playing and where the speaker is in it now (v->rest: stopped at rest, not paused for the speaker).
+ *  False: no rhythm loaded. */
 bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt);
 /** The library's labels (the wheel's names), how many. */
 #define RHYTHM_LABEL_ROOM 25            /* a label as a wheel holds it (PKG_KEY_MAX + 1) */
 int  rhythm_labels(char (*out)[RHYTHM_LABEL_ROOM], int max);
 /** The library's rhythm i's id ("" none). */
 const char *rhythm_id(int i, char out[RHY_ID_MAX + 1]);
-/** The screen's own acts. A mute, a pause and a stop are sent to the agent (rhythm_take_event); a tempo or a pick
- *  set by the wheel is sent by the wheel when the finger leaves (a `ring` event, mole_fluid.c). */
+/** The screen's own acts. A mute, a play, a rest and a stop are sent to the agent (rhythm_take_event); a tempo or a
+ *  pick set by the wheel is sent by the wheel when the finger leaves (a `ring` event, mole_fluid.c). */
 void rhythm_local_mute(int layer, float x, float y);   /* toggles that layer; x, y: the tap (0..1 of the panel) */
 void rhythm_local_bpm(float bpm);
 void rhythm_local_pick(int i);
-void rhythm_local_pause(void);              /* toggles */
+void rhythm_local_play(void);               /* at rest: plays (a count-in first); playing: to rest */
 void rhythm_local_stop(void);
 /** A rhythm is loaded and not stopped (the buttons are its). */
 bool rhythm_active(void);
@@ -59,7 +62,7 @@ typedef struct {
     bool on;                                /* MUTE: muted                                                         */
     float x, y;                             /* MUTE: the tap                                                       */
     char id[RHY_ID_MAX + 1];                /* the rhythm (STATE) or the layer (MUTE)                              */
-    char state[8];                          /* STATE: playing, paused, stopped                                     */
+    char state[8];                          /* STATE: playing, paused (at rest), stopped (gone)                    */
 } rhythm_ev_t;
 bool rhythm_take_event(rhythm_ev_t *e);
 /** That event as the link's frame. */

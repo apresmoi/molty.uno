@@ -6,11 +6,16 @@
  *   ring_input   clicks per angle, across 180 degrees, both ways, what is left over, near the centre, turning fast
  *   package      the rhythm package parses; a second beat, a bad `sets`, a literal `labels` are refused
  *   clock        its rings, marks and dots from the beat player's pattern; the hand on the step the player is at; the
- *                kept drawing (its dots, its dust) unchanged while the hand walks and the tempo changes: the hand and
- *                the swells are live shapes; a new rhythm redraws the kept part but never forms the scene from dust
- *   wheel        a drag round the rim: 2 beats a minute a click, the rhythm keeps playing, the water untouched, no tap,
- *                one `ring` event when the finger leaves; the centre's tap and the 4 s wait choose a rhythm; a dot's
- *                tap mutes its drum; the buttons pause and stop; no clock on screen stops the sound
+ *                kept drawing (rings, marks, their dust) unchanged while the hand walks and the tempo changes; a new
+ *                rhythm redraws it in place, the same look
+ *   wheel        playing, a drag round the rim: 2 beats a minute a click, the rhythm keeps playing, the water untouched,
+ *                no tap, a tick a click (the wheel's own; a fast turn one every 60 ms at most), one `ring` event when the
+ *                finger leaves; the centre stops it at rest (the play mark, the hand at 12, silent), the rim then
+ *                chooses (shown at once, silent, never back on its own), the centre plays it after a count-in; a
+ *                dot's tap mutes its drum; the buttons play, stop and leave; no clock on screen stops the sound
+ *   still        no change of picture (the dissolve: a new look) once the clock formed: every rhythm of the library
+ *                four phrases untouched (every bar line, the count-in), and a whole session of turning, choosing,
+ *                playing, stopping, muting and the agent's changes
  *   cost         the frame with a rhythm playing and the wheel turning, host time against the creature's
  *
  *   beat_test <repo root> <library.json>
@@ -105,7 +110,7 @@ static int count_items(const scene_t *sc, bool live, int k) {
     return n;
 }
 static float hand_angle(const scene_t *sc) {
-    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].live && sc->items[q].k == PK_TICKS && sc->items[q].w > 0.02f && sc->items[q].r < 0.2f) return sc->items[q].a0;
+    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].live && sc->items[q].k == PK_TICKS && sc->items[q].r < 0.2f) return sc->items[q].a0;
     return -999.f;
 }
 static uint32_t dim_of(uint32_t c) { const float k = SCENE_BEAT_MUTED; return (uint32_t)lrintf((c >> 16 & 255) * k) << 16 | (uint32_t)lrintf((c >> 8 & 255) * k) << 8 | (uint32_t)lrintf((c & 255) * k); }
@@ -122,7 +127,7 @@ static int events_named(const char *name, cJSON **last) {
 }
 static char LIB_ARGS[8192];
 static void show(const char *pick_bpm) {
-    CHECK(wm_scene_op("clock", "{}", 600, 0) == 0, "the clock shows");
+    CHECK(wm_scene_op("clock", "{\"tick_ms\":0,\"tick\":0}", 600, 0) == 0, "the clock shows");
     char args[9000];
     snprintf(args, sizeof args, "%s,%s}", LIB_ARGS, pick_bpm);
     CHECK(wm_rhythm("rhythm.play", args) == 0, "rhythm.play");
@@ -142,7 +147,7 @@ static void test_clock(void) {
     frames(90);
     frames(60);
     int bad = 0, steps_seen = 0, last = -1;
-    const unsigned serial = sc->serial, gen = s_sp.gen;
+    const unsigned serial = sc->serial, look = sc->look, gen = s_sp.gen;
     for (int f = 0; f < 200; f++) {
         frames(1);
         rhy_view_t v; rhy_pattern_t pt;
@@ -165,7 +170,7 @@ static void test_clock(void) {
     /* a new rhythm: the kept drawing changes, the scene stays (no forming from dust) */
     CHECK(wm_rhythm("rhythm.set", "{\"pick\":9}") == 0, "rhythm.set pick");
     frames(10);
-    CHECK(s_sp.gen == gen && sc->serial != serial && count_items(sc, false, PK_RING) == 2, "a new rhythm: redrawn in place, the same scene");
+    CHECK(s_sp.gen == gen && sc->serial != serial && sc->look == look && count_items(sc, false, PK_RING) == 2, "a new rhythm: redrawn in place, the same scene, the same look");
     printf("  clock   son clave: 1 ring, 16 marks, 5 dots; the hand on the player's step %d frames running; tempo and rhythm change in place\n", 200);
 }
 
@@ -197,11 +202,25 @@ static void forked(void (*fn)(void *out), void *out, size_t n) {
     if (got != n || !WIFEXITED(st) || WEXITSTATUS(st)) { fprintf(stderr, "beat_test: a case failed to run\n"); exit(2); }
 }
 
+/* a drag round the rim from `from` degrees, `deg` clockwise, `per` frames a degree (the finger lifts after) */
+static void drag(float from, int deg, int per) {
+    touch_at(1, 0.93f * cosf(from * 0.017453293f), 0.93f * sinf(from * 0.017453293f)); frames(1);
+    for (int q = 1; q <= deg; q++) { const float an = (from - q) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(per); }
+}
+static void lift(void) { touch_at(0, 0.f, 0.f); frames(2); }
+static void tap(float x, float y) { touch_at(1, x, y); frames(2); lift(); }
+/* the play mark: a triangle of ten white dots in the middle */
+static int play_dots(const scene_t *sc) {
+    int n = 0;
+    for (int q = sc->nfixed; q < sc->nitems; q++) { const scene_item_t *it = &sc->items[q]; n += it->live && it->k == PK_DISC && it->rgb == 0xffffffu && fabsf(it->x) < 0.1f && fabsf(it->y) < 0.1f; }
+    return n;
+}
+
 static void test_wheel(void) {
     wm_rhythm("rhythm.set", "{\"pick\":0,\"bpm\":100}");
     frames(120);
     events_named("x", NULL);                            /* (what was heard so far) */
-    wm_wheel_ticks();
+    wm_wheel_ticks(NULL, NULL);
     /* the water under a drag round the rim: exactly as with no finger */
     const size_t hn = sizeof(int16_t) * (size_t)s_sim->N;
     int16_t *a = malloc(hn), *b = malloc(hn);
@@ -210,70 +229,101 @@ static void test_wheel(void) {
     for (int k = 0; k < s_sim->N; k++) diff += a[k] != b[k];
     CHECK(!diff, "a drag round the rim leaves the water as it was (%d cells differ)", diff);
     free(a); free(b);
-    /* 40 degrees clockwise, slowly: three clicks of 2 */
-    float start = 90.f;
-    touch_at(1, 0.93f * cosf(start * 0.017453293f), 0.93f * sinf(start * 0.017453293f));
-    frames(1);
-    for (int q = 1; q <= 40; q++) { const float an = (start - q) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(2); }
+    /* playing: the rim is the tempo. 40 degrees clockwise, slowly: three clicks of 2, a tick each, the wheel's own */
+    drag(90.f, 40, 2);
     rhy_view_t v; rhythm_now(&v, NULL);
-    CHECK(v.bpm == 106.f && !v.count_in && v.on, "40 degrees: 100 -> 106 while it plays on (%.0f)", v.bpm);
+    CHECK(v.bpm == 106.f && !v.count_in && v.on && s_wh.w.face == 0, "playing, 40 degrees: 100 -> 106 while it plays on (%.0f)", v.bpm);
     CHECK(scene_wheel_words(s_sp.cur, &s_wh.w), "the tempo in the middle while it turns");
-    CHECK(wm_wheel_ticks() == 3, "a tick a click");
+    int ms = 0, st = 0;
+    CHECK(wm_wheel_ticks(&ms, &st) == 3 && ms == HAPTIC_WHEEL_MS && st == HAPTIC_WHEEL_STRENGTH, "a slow turn of 3 clicks: 3 ticks, %d ms at %d percent", ms, st);
     cJSON *last = NULL;
     CHECK(events_named("tap", NULL) == 0, "no tap from a drag");
-    touch_at(0, 0.f, 0.f); frames(2);
+    lift();
     CHECK(events_named("ring", &last) == 1, "one ring event when it settles");
     const cJSON *d = cJSON_GetObjectItem(last, "data");
     CHECK(d && !strcmp(str(cJSON_GetObjectItem(d, "spot")), "tempo") && cJSON_GetObjectItem(d, "value")->valuedouble == 106., "ring {spot: tempo, value: 106}");
     frames(60);
     CHECK(!scene_wheel_words(s_sp.cur, &s_wh.w), "the number goes 0.9 s after the finger");
+    /* a slow turn of twelve clicks, both ways: twelve ticks; a fast one: fewer ticks than clicks (60 ms apart at most) */
+    drag(90.f, 75, 4); lift();
+    touch_at(1, 0.93f * cosf(15.f * 0.017453293f), 0.93f * sinf(15.f * 0.017453293f)); frames(1);
+    for (int q = 1; q <= 75; q++) { const float an = (15.f + q) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(4); }
+    lift();
+    const int slow = wm_wheel_ticks(NULL, NULL);
+    CHECK(slow == 12, "a slow turn of 6 clicks each way: 12 ticks (%d)", slow);
+    rhythm_now(&v, NULL);
+    const float b0 = v.bpm;
+    touch_at(1, 0.f, 0.93f); frames(1);
+    for (int q = 1; q <= 15; q++) { const float an = (90.f - q * 15.f) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(1); }   /* 900 degrees a second */
+    lift();
+    const int fast = wm_wheel_ticks(NULL, NULL);
+    rhythm_now(&v, NULL);
+    CHECK(v.bpm > b0 + 12 && fast >= 2 && fast < 18, "a fast turn of 18 clicks: %d ticks, 60 ms apart at most (%.0f -> %.0f)", fast, b0, v.bpm);
     /* the clamp: 220 at most */
     wm_rhythm("rhythm.set", "{\"bpm\":218}"); frames(2);
-    touch_at(1, 0.f, 0.93f); frames(1);
-    for (int q = 1; q <= 60; q++) { const float an = (90.f - q) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(2); }
-    touch_at(0, 0.f, 0.f); frames(2);
+    drag(90.f, 60, 2); lift();
     rhythm_now(&v, NULL);
     CHECK(v.bpm == 220.f, "220 at most (%.0f)", v.bpm);
-    /* the centre: the library on the rim; two clicks on, then 4 s untouched plays it */
-    events_named("x", NULL);
-    touch_at(1, 0.05f, 0.05f); frames(2); touch_at(0, 0.f, 0.f); frames(2);
-    CHECK(s_wh.w.face == 1 && s_wh.w.nlabels == 12 && s_wh.w.index == 0, "a centre tap: the rhythms on the rim (face %d, %d labels)", s_wh.w.face, s_wh.w.nlabels);
-    touch_at(1, 0.f, 0.93f); frames(1);
-    for (int q = 1; q <= 60; q++) { const float an = (90.f - q) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(2); }
-    touch_at(0, 0.f, 0.f); frames(2);
-    CHECK(s_wh.w.index == 2 && events_named("ring", NULL) == 0, "60 degrees: the third rhythm, nothing sent yet");
+    /* the centre: it stops, at rest: the rhythms on the rim, the play mark, the hand at 12, silent */
+    wm_rhythm("rhythm.set", "{\"bpm\":100}"); frames(30);
+    events_named("x", NULL); wm_wheel_ticks(NULL, NULL);
+    tap(0.05f, 0.05f); frames(10);
     rhythm_now(&v, NULL);
-    CHECK(v.cur == 0, "it still plays the first while you choose");
-    frames(250);                                       /* 4 s untouched */
+    const scene_t *sc = s_sp.cur;
+    CHECK(v.rest && !rhythm_sounding() && s_wh.w.face == 1 && s_wh.w.nlabels == 12 && s_wh.w.index == 0, "a centre tap: stopped at rest, the rhythms on the rim (face %d, %d labels)", s_wh.w.face, s_wh.w.nlabels);
+    CHECK(play_dots(sc) == 10 && fabsf(hand_angle(sc) - 90.f) < 0.01f, "at rest: the play mark (%d dots), the hand at 12 o'clock (%.1f)", play_dots(sc), hand_angle(sc));
+    CHECK(events_named("rhythm", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "state")), "paused"), "rhythm {state: paused}");
+    /* choosing: 60 degrees, two beads on: the clock shows carnavalito at once, still silent; one ring when it settles */
+    drag(90.f, 60, 2);
     rhythm_now(&v, NULL);
-    CHECK(s_wh.w.face == 0 && v.cur == 2 && v.count_in, "4 s later: back, playing the chosen one after a count-in");
+    CHECK(s_wh.w.index == 2 && v.cur == 2 && v.rest && !rhythm_sounding(), "60 degrees at rest: the third rhythm on the clock, silent");
+    CHECK(wm_wheel_ticks(NULL, NULL) == 2, "a tick a bead");
+    lift();
     CHECK(events_named("ring", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "id")), "carnavalito"),
           "ring {spot: rhythm, index: 2, id: carnavalito}");
+    frames(300);                                        /* 5 s untouched: still choosing, never back on its own */
+    rhythm_now(&v, NULL);
+    CHECK(v.rest && s_wh.w.face == 1 && !rhythm_sounding() && scene_wheel_words(s_sp.cur, &s_wh.w), "5 s untouched: still at rest, its name up");
+    /* the centre again: it plays the chosen one, after a count-in; the rim is the tempo again */
+    tap(0.f, -0.05f); frames(4);
+    rhythm_now(&v, NULL);
+    CHECK(!v.rest && v.cur == 2 && v.count_in && rhythm_sounding() && s_wh.w.face == 0 && !play_dots(s_sp.cur), "a centre tap: carnavalito plays after a count-in, the tempo on the rim");
+    CHECK(events_named("rhythm", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "state")), "playing"), "rhythm {state: playing}");
+    CHECK(wm_wheel_ticks(NULL, NULL) == 0, "the centre buzzes as a tap, never a wheel tick");
     /* a tap on a drum's dot mutes it; again, back */
     wm_rhythm("rhythm.set", "{\"pick\":0}"); frames(120);
-    const scene_t *sc = s_sp.cur;
+    sc = s_sp.cur;
     float dx = 0.f, dy = 0.f;
     for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].layer == 1) { dx = sc->items[q].x; dy = sc->items[q].y; break; }
     events_named("x", NULL);
-    touch_at(1, dx, dy); frames(2); touch_at(0, 0.f, 0.f); frames(2);
+    tap(dx, dy);
     rhythm_now(&v, NULL);
     CHECK(v.mute == 2u && events_named("tap", &last) == 1 && cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "muted")), "a dot's tap: parche muted, a tap {spot: parche, muted: true}");
     int dim = 0;
     for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].layer == 1 && sc->items[q].rgb == dim_of(0xff9a7au)) dim++;
     CHECK(dim == 2, "its dots at 30 percent (%d)", dim);
-    touch_at(1, dx, dy); frames(2); touch_at(0, 0.f, 0.f); frames(2);
+    tap(dx, dy);
     rhythm_now(&v, NULL);
     CHECK(v.mute == 0u, "tapped again: back");
-    /* the buttons: accept pauses and resumes, reject stops and the clock goes */
+    /* the buttons: accept stops and plays as the centre does, reject stops and the clock goes */
     events_named("x", NULL);
     wm_button(0, 1); frames(2); wm_button(0, 0); frames(20);
     rhythm_now(&v, NULL);
-    CHECK(v.paused && events_named("rhythm", &last) == 1, "accept: paused");
+    CHECK(v.rest && s_wh.w.face == 1 && events_named("rhythm", &last) == 1, "accept: at rest, choosing");
     wm_button(0, 1); frames(2); wm_button(0, 0); frames(20);
     rhythm_now(&v, NULL);
-    CHECK(!v.paused && v.count_in, "accept again: on, after a count-in");
+    CHECK(!v.rest && v.count_in, "accept again: on, after a count-in");
     wm_button(1, 1); frames(2); wm_button(1, 0); frames(30);
     CHECK(!rhythm_active() && !s_sp.cur && events_named("button", NULL) == 0, "reject: stopped, the clock gone, no button event");
+    /* the agent's `play --still`: at rest, choosing, the play mark up */
+    show("\"pick\":3,\"bpm\":90,\"paused\":true");
+    frames(30);
+    rhythm_now(&v, NULL);
+    CHECK(v.rest && !rhythm_sounding() && s_wh.w.face == 1 && play_dots(s_sp.cur) == 10, "paused: true: at rest, choosing, the play mark");
+    wm_rhythm("rhythm.set", "{\"paused\":false}"); frames(4);
+    rhythm_now(&v, NULL);
+    CHECK(!v.rest && v.count_in && s_wh.w.face == 0, "the agent's paused: false plays it, after a count-in");
+    wm_rhythm("rhythm.stop", NULL); frames(30);
     /* no clock on screen: the sound stops by itself */
     show("\"pick\":0,\"bpm\":100");
     frames(30);
@@ -282,7 +332,107 @@ static void test_wheel(void) {
     frames(90);
     CHECK(!rhythm_active(), "after 2 s with no clock: stopped");
     cJSON_Delete(last);
-    printf("  wheel   40 degrees = +6 bpm (3 ticks), clamped at 220; centre + 60 degrees + 4 s = carnavalito; a dot mutes; buttons pause and stop\n");
+    printf("  wheel   playing: 40 degrees = +6 bpm (3 ticks of %d ms at %d percent), clamped at 220; centre: at rest, 60 degrees = carnavalito, centre: it plays; a dot mutes; buttons\n", HAPTIC_WHEEL_MS, HAPTIC_WHEEL_STRENGTH);
+}
+
+/* ── no change of picture while the clock is up ─────────────────────────────────────────────────────────────────────
+ * What the device logs as `look ... change`, `change f=` and `anim wave` is the drawer's change of picture (the dissolve,
+ * fluid_morph_t): counted here frame by frame, from the drawer itself, with every new look it is told. */
+typedef struct { int changes, looks; uint32_t look; } trans_t;
+static trans_t s_tr;
+static void watch(int n) {
+    for (int i = 0; i < n; i++) {
+        const bool was = s_draw->m.on;
+        wm_frame(DT);
+        if (s_draw->m.on && !was) s_tr.changes++;
+        const uint32_t lk = s_draw->m.look & ~FLUID_LOOK_DUST;
+        if (lk != s_tr.look) { s_tr.looks++; s_tr.look = lk; }
+    }
+}
+/* the clock shown and formed: its first change of picture over, the counts from zero */
+static void formed(void) {
+    for (int i = 0; i < 900 && (fluid_draw_morphing(s_draw) || i < 30); i++) watch(1);
+    watch(30);
+    s_tr = (trans_t){ 0, 0, s_draw->m.look & ~FLUID_LOOK_DUST };
+}
+static int lib_index(const char *id) {
+    char got[RHY_ID_MAX + 1];
+    for (int i = 0; i < RHY_LIB; i++) if (!strcmp(rhythm_id(i, got), id)) return i;
+    return -1;
+}
+static void test_still_picture(void) {
+    wm_device(1);
+    wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(120);
+    /* every rhythm of the library, untouched for four whole phrases at 220 (the count-in, every bar line, the phrase) */
+    char args[64], ids[RHY_LIB][RHY_ID_MAX + 1];
+    int n = 0;
+    show("\"pick\":0,\"bpm\":220");
+    for (; n < RHY_LIB && rhythm_id(n, ids[n])[0]; n++) {}
+    int bad = 0;
+    for (int i = 0; i < n; i++) {
+        snprintf(args, sizeof args, "\"pick\":%d,\"bpm\":220", i);
+        wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(60);
+        show(args);
+        formed();
+        wm_rhythm("rhythm.set", "{\"paused\":true}"); watch(10);   /* (stopped and played again: its count-in in view too) */
+        wm_rhythm("rhythm.set", "{\"paused\":false}"); watch(1);
+        rhy_view_t v; rhy_pattern_t pt;
+        rhythm_now(&v, &pt);
+        const int bars = 4 * (pt.norder > 1 ? pt.norder : 1) + 1;
+        int lines = 0, prev = -1, f = 0;
+        const bool counted = v.count_in;
+        for (; f < 20000 && lines < bars; f++) {
+            watch(1);
+            rhythm_now(&v, NULL);
+            if (v.step >= 0 && v.step < prev) lines++;   /* a bar line: the hand back at the top */
+            if (v.step >= 0) prev = v.step;
+        }
+        CHECK(counted && lines >= bars, "%s: the count-in and %d bar lines seen (%d)", ids[i], bars, lines);
+        if (s_tr.changes || s_tr.looks) { bad++; printf("    %s: %d changes of picture, %d new looks in %d frames\n", ids[i], s_tr.changes, s_tr.looks, f); }
+    }
+    CHECK(!bad, "every rhythm playing untouched four phrases: no change of picture (%d of %d had one)", bad, n);
+    /* the chacarera: the tempo turned on the rim, the number and its fade */
+    wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(60);
+    snprintf(args, sizeof args, "\"pick\":%d,\"bpm\":100", lib_index("chacarera"));
+    show(args);
+    formed();
+    const struct { const char *what; int k; float a, b; const char *cmd; } STEPS[] = {
+        { "the tempo turned and settled", 1, 90.f, 60.f, NULL },
+        { "the centre: stopped, choosing", 2, 0.05f, 0.05f, NULL },
+        { "a rhythm chosen on the rim, both ways", 1, 90.f, 90.f, NULL },
+        { "... and back", 1, 0.f, -60.f, NULL },
+        { "the centre: it plays", 2, 0.f, -0.05f, NULL },
+        { "a drum muted", 3, 1.f, 0.f, NULL },
+        { "... and back", 3, 1.f, 0.f, NULL },
+        { "the agent's tempo", 0, 0.f, 0.f, "{\"bpm\":150}" },
+        { "the agent's rhythm", 0, 0.f, 0.f, "{\"pick\":6}" },
+        { "the agent's rhythm, a phrase", 0, 0.f, 0.f, "{\"pick\":0}" },
+        { "the accept button: stopped", 4, 0.f, 0.f, NULL },
+        { "the accept button: it plays", 4, 0.f, 0.f, NULL },
+    };
+    int bad_steps = 0;
+    for (size_t q = 0; q < sizeof(STEPS) / sizeof(STEPS[0]); q++) {
+        const int k = STEPS[q].k;
+        if (k == 1) {                                   /* a drag: from a, b degrees (negative: the other way) */
+            touch_at(1, 0.93f * cosf(STEPS[q].a * 0.017453293f), 0.93f * sinf(STEPS[q].a * 0.017453293f)); watch(1);
+            const int n = (int)fabsf(STEPS[q].b), sg = STEPS[q].b < 0 ? -1 : 1;
+            for (int d = 1; d <= n; d++) { const float an = (STEPS[q].a - sg * d) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); watch(2); }
+            touch_at(0, 0.f, 0.f);
+        } else if (k == 2) { touch_at(1, STEPS[q].a, STEPS[q].b); watch(2); touch_at(0, 0.f, 0.f); }
+        else if (k == 3) {                              /* the first drum's first dot */
+            const scene_t *sc = s_sp.cur;
+            for (int i = sc->nfixed; i < sc->nitems; i++) if (sc->items[i].layer == 0) { touch_at(1, sc->items[i].x, sc->items[i].y); break; }
+            watch(2); touch_at(0, 0.f, 0.f);
+        } else if (k == 4) { wm_button(0, 1); watch(2); wm_button(0, 0); }
+        else wm_rhythm("rhythm.set", STEPS[q].cmd);
+        watch(150);                                     /* (2.5 s: the words fade, a bar or two goes by) */
+        if (s_tr.changes || s_tr.looks) { bad_steps++; printf("    %s: %d changes of picture, %d new looks\n", STEPS[q].what, s_tr.changes, s_tr.looks); }
+        s_tr.changes = s_tr.looks = 0;
+    }
+    rhy_view_t v; rhythm_now(&v, NULL);
+    CHECK(!bad_steps && !v.rest && v.cur == 0 && s_sp.cur, "turning, choosing, playing, stopping, muting, the agent's changes: no change of picture (%d steps had one)", bad_steps);
+    wm_device(0);
+    printf("  still   %d rhythms, four phrases each untouched; a whole session on the chacarera: the picture never changed whole\n", n);
 }
 
 static double now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e6 + ts.tv_nsec * 1e-3; }
@@ -347,6 +497,7 @@ int main(int argc, char **argv) {
     frames(60);
     test_clock();
     test_wheel();
+    test_still_picture();
     test_cost();
     free(pkg);
     printf("beat_test: %d passed, %d failed\n", s_pass, s_fail);

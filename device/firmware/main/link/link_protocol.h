@@ -178,7 +178,7 @@ cJSON *link_evt_creature_frame(const char *info);
  * (what is up now; neither: nothing), spot? (the tapped spot that opened it)} */
 cJSON *link_evt_scene_frame(const char *pkg, const char *layout, const char *why, const char *spot);
 cJSON *link_evt_button_frame(bool accept);
-/* evt `ring`: a scene's wheel settled (the finger left it, or a centre tap or the wait confirmed a choice). data
+/* evt `ring`: a scene's wheel settled (the finger left it where it moved it). data
  * {spot: the wheel's id, value (a number wheel) | index + label (a list wheel), id? (the rhythm chosen)}. index < 0:
  * a number. */
 cJSON *link_evt_ring_frame(const char *spot, double value, int index, const char *label, const char *id);

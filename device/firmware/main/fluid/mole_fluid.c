@@ -730,27 +730,28 @@ static volatile int64_t s_dtouch;     /* drawer: tap time riding with the curren
 
 /* ── wheels (scene_player.h): a scene's dial turned by the finger, its centre, a beat's dots, all on this task ───────
  * A touch that comes down on the wheel (from its r0 out), the centre or a beat's dot is theirs until it lifts: no
- * ripple under it, no stir as it moves, no spot or tap (sense.c asks mole_fluid_zone first). Each click moves the
- * value at once (a tempo dial: the beat player's tempo, while it plays) and asks the motor for a tick (sense.c takes
- * them, mole_fluid_take_ticks). The agent hears where it settled (mole_fluid_ring_event): the finger leaving a number
- * or a face-0 choice; the centre's second tap, or `back` s untouched, for the face-1 choice (a beat's pick plays it). */
+ * ripple under it, no stir as it moves, no spot or tap (sense.c asks mole_fluid_zone first). The face up follows the
+ * beat player: face 0 (the tempo) while it plays, face 1 (the choice) while it is stopped at rest, never changed under
+ * a finger. Each click moves the value at once (the beat player's tempo; at rest, the rhythm the clock shows) and asks
+ * the motor for a tick, the dial's own (sense.c takes them, mole_fluid_take_ticks). The centre's tap plays and stops
+ * (rhythm_local_play), a dot's mutes its drum. The agent hears where a wheel settled when the finger leaves it
+ * (mole_fluid_ring_event): a number that moved, a choice that moved. None of it changes the picture whole. */
 enum { ZONE_NONE, ZONE_RING, ZONE_CENTRE, ZONE_DOT };
 static struct {
     unsigned gen;                                      /* the scene it is for                              */
     scene_wheel_t w;
-    float value[2]; int index[2];                      /* each face's                                       */
-    float v0;                                          /* the value when the finger came down               */
+    float v0; int i0;                                  /* the value, the choice when the finger came down    */
     ring_drag_t drag;
     int zone;                                          /* the touch down now is the wheel's, the centre's, a dot's */
-    float idle;                                        /* s untouched on face 1                             */
     char labels[SCENE_WHEEL_LABELS][PKG_KEY_MAX + 1];
 } s_wh;
 static atomic_int s_ticks;                             /* clicks the motor has not ticked yet               */
+static atomic_int s_tick_plan;                         /* their dial's tick: ms << 8 | percent (0: the motor's own) */
 static mole_ring_evt_t s_ring_evt;                     /* s_mutex */
 static bool s_ring_evt_on;
 /* the zones for sense.c (any task), s_mutex: the dial up (its r0), the centre (its r), the beat's dots */
 #define ZONE_DOTS 64
-static struct { unsigned serial; int face; float r0, rc, dx[ZONE_DOTS], dy[ZONE_DOTS], dr[ZONE_DOTS]; int nd; } s_zones;
+static struct { int face; float r0, rc, dx[ZONE_DOTS], dy[ZONE_DOTS], dr[ZONE_DOTS]; int nd; } s_zones;
 
 static void ring_evt(const scene_item_t *d, const char *id_of_pick) {
     mole_ring_evt_t e = { 0 };
@@ -765,44 +766,36 @@ static void ring_evt(const scene_item_t *d, const char *id_of_pick) {
     xSemaphoreGive(s_mutex);
     mole_diag_event(false, "scene.ring %s %s", e.spot, e.label[0] ? e.label : "");
 }
-/* the face up now: its labels (a pick's are the beat player's library), its value, its index */
-static void wheel_face(int face) {
-    scene_t *sc = s_sp.cur;
+/* the face up now: its labels (a pick's are the beat player's library) and its value (the dial's own to start) */
+static void wheel_face(const scene_t *sc, int face) {
     const int n = scene_dial(sc, face);
-    s_wh.w.face = face; s_wh.w.since = 0.f; s_wh.w.turn = 0.f; s_wh.idle = 0.f;
+    s_wh.w.face = face; s_wh.w.turn = 0.f; s_wh.w.since = SCENE_WHEEL_SHOW_S; s_wh.w.index = 0;
     s_wh.w.nlabels = n < 0 ? 0 : sc->items[n].sets == 2 ? rhythm_labels(s_wh.labels, SCENE_WHEEL_LABELS) : scene_dial_labels(sc, n, s_wh.labels, SCENE_WHEEL_LABELS);
     s_wh.w.labels = (const char (*)[PKG_KEY_MAX + 1])s_wh.labels;
-    if (n >= 0 && sc->items[n].sets == 2) { rhy_view_t v; if (rhythm_now(&v, NULL)) s_wh.index[face] = v.cur; }
-    s_wh.w.value = s_wh.value[face]; s_wh.w.index = s_wh.w.nlabels ? s_wh.index[face] % s_wh.w.nlabels : 0;
+    if (n >= 0) s_wh.w.value = sc->items[n].val;
 }
-/* each frame: a new scene starts its wheel afresh; a tempo dial follows the player while no finger turns it */
+/* each frame: a new scene starts its wheel afresh; the face and a beat player's dial follow the player while no
+ * finger is on it */
 static void wheel_frame(float rdt) {
     scene_t *sc = s_cur == ST_SCENE ? s_sp.cur : NULL;
     if (!sc || (scene_dial(sc, 0) < 0 && scene_dial(sc, 1) < 0 && scene_centre(sc) < 0)) { s_wh.gen = 0; return; }
     if (s_wh.gen != s_sp.gen) {
         memset(&s_wh, 0, sizeof(s_wh));
-        s_wh.gen = s_sp.gen; s_wh.w.since = SCENE_WHEEL_SHOW_S;
-        for (int f = 0; f < 2; f++) { const int n = scene_dial(sc, f); if (n >= 0) s_wh.value[f] = sc->items[n].val; }
-        wheel_face(0);
-        s_wh.w.since = SCENE_WHEEL_SHOW_S;
+        s_wh.gen = s_sp.gen;
+        wheel_face(sc, 0);
     }
-    const int n = scene_dial(sc, s_wh.w.face);
     rhy_view_t v;
-    if (n >= 0 && sc->items[n].sets == 1 && !s_wh.drag.down && rhythm_now(&v, NULL) && v.on) s_wh.w.value = s_wh.value[s_wh.w.face] = v.bpm;
+    const bool beat = rhythm_now(&v, NULL) && v.on;
+    if (!s_wh.drag.down) {
+        const int face = beat && v.rest && scene_dial(sc, 1) >= 0 ? 1 : 0;
+        if (face != s_wh.w.face) wheel_face(sc, face);
+        const int n = scene_dial(sc, s_wh.w.face);
+        if (n >= 0 && beat && sc->items[n].sets == 1) s_wh.w.value = v.bpm;
+        if (n >= 0 && beat && sc->items[n].sets == 2 && s_wh.w.nlabels) s_wh.w.index = v.cur % s_wh.w.nlabels;
+    }
     s_wh.w.since += rdt;
     s_wh.w.flash = fmaxf(0.f, s_wh.w.flash - rdt / 0.15f);
     s_wh.w.turning = s_wh.drag.down;
-    const int c = scene_centre(sc);
-    if (s_wh.w.face == 1 && !s_wh.drag.down && c >= 0 && (s_wh.idle += rdt) >= sc->items[c].back) {   /* untouched: back, with the choice */
-        const int d = scene_dial(sc, 1);
-        if (d >= 0) {
-            char id[RHY_ID_MAX + 1] = "";
-            if (sc->items[d].sets == 2) { rhythm_local_pick(s_wh.w.index); rhythm_id(s_wh.w.index, id); }
-            s_wh.index[1] = s_wh.w.index;
-            ring_evt(&sc->items[d], id);
-        }
-        wheel_face(0);
-    }
 }
 /* the finger turned the wheel `clicks` (clockwise positive) */
 static void wheel_turn(int clicks, bool fast) {
@@ -812,17 +805,17 @@ static void wheel_turn(int clicks, bool fast) {
     const scene_item_t *d = &sc->items[n];
     s_wh.w.turn = s_wh.drag.acc;
     if (!clicks) return;
-    s_wh.idle = 0.f;
     if (s_wh.w.nlabels) {
         s_wh.w.index = ((s_wh.w.index + clicks) % s_wh.w.nlabels + s_wh.w.nlabels) % s_wh.w.nlabels;
-        s_wh.index[s_wh.w.face] = s_wh.w.index;
+        if (d->sets == 2) rhythm_local_pick(s_wh.w.index);   /* the clock shows it at once (at rest: silent) */
     } else {
         const float v = fminf(d->vmax, fmaxf(d->vmin, s_wh.w.value + clicks * (fast ? d->fast : d->by)));
         if (v == s_wh.w.value) return;                    /* at its end: no click to feel */
-        s_wh.w.value = s_wh.value[s_wh.w.face] = v;
+        s_wh.w.value = v;
         if (d->sets == 1) rhythm_local_bpm(v);            /* the rhythm keeps playing, at the new tempo at once */
     }
     s_wh.w.flash = 1.f;
+    atomic_store(&s_tick_plan, d->tick_ms << 8 | d->tick);
     atomic_fetch_add(&s_ticks, abs(clicks));
 }
 /* where (x, y) (glass units, y up) is: the dial up (from its r0 out), the centre, a beat's dot */
@@ -844,8 +837,11 @@ static bool wheel_touch(int n, float x, float y, float t) {
             const int d = scene_dial(sc, s_wh.w.face);
             ring_up(&s_wh.drag);
             s_wh.w.turn = 0.f; s_wh.w.since = 0.f; s_wh.w.turning = false;
-            /* settled: a number that moved, a face-0 choice (a face-1 choice waits for the centre or the time) */
-            if (d >= 0 && s_wh.w.face == 0 && (s_wh.w.nlabels || s_wh.w.value != s_wh.v0)) ring_evt(&sc->items[d], NULL);
+            if (d >= 0 && (s_wh.w.nlabels ? s_wh.w.index != s_wh.i0 : s_wh.w.value != s_wh.v0)) {   /* settled where it moved to */
+                char id[RHY_ID_MAX + 1] = "";
+                if (sc->items[d].sets == 2) rhythm_id(s_wh.w.index, id);
+                ring_evt(&sc->items[d], id);
+            }
         }
         const bool was = s_wh.zone != ZONE_NONE;
         s_wh.zone = ZONE_NONE;
@@ -861,23 +857,10 @@ static bool wheel_touch(int n, float x, float y, float t) {
     if (s_touch_down) return false;                       /* (a touch that began elsewhere) */
     int layer;
     s_wh.zone = zone_at(sc, x, y, &layer);
-    s_wh.idle = 0.f;
     switch (s_wh.zone) {
-    case ZONE_RING: ring_down(&s_wh.drag, x, y, t); s_wh.v0 = s_wh.w.value; s_wh.w.turning = true; break;
-    case ZONE_CENTRE: {                                   /* the other face; back from face 1: the choice */
-        const int d1 = scene_dial(sc, 1);
-        if (s_wh.w.face == 1 && d1 >= 0) {
-            char id[RHY_ID_MAX + 1] = "";
-            if (sc->items[d1].sets == 2) { rhythm_local_pick(s_wh.w.index); rhythm_id(s_wh.w.index, id); }
-            ring_evt(&sc->items[d1], id);
-        }
-        if (d1 >= 0 || s_wh.w.face == 1) wheel_face(s_wh.w.face ^ 1);
-        break;
-    }
-    case ZONE_DOT: {
-        rhythm_local_mute(layer, (x + 1.f) * 0.5f, (1.f - y) * 0.5f);   /* (the tap's place, 0..1 of the panel) */
-        break;
-    }
+    case ZONE_RING: ring_down(&s_wh.drag, x, y, t); s_wh.v0 = s_wh.w.value; s_wh.i0 = s_wh.w.index; s_wh.w.turning = true; break;
+    case ZONE_CENTRE: rhythm_local_play(); break;         /* at rest: plays; playing: stops (the face follows) */
+    case ZONE_DOT: rhythm_local_mute(layer, (x + 1.f) * 0.5f, (1.f - y) * 0.5f); break;   /* (the tap's place, 0..1 of the panel) */
     default: break;
     }
     return s_wh.zone != ZONE_NONE;
@@ -1011,12 +994,12 @@ static void beat_frame(float rdt) {
     scene_beat_t b = { 0 };
     if (rhythm_now(&v, &pt) && v.on) {
         const double L = pt.start[pt.steps];
-        b.on = true; b.steps = pt.steps; b.beats = pt.beats; b.nlayers = pt.nlayers; b.muted = v.mute;
+        b.on = true; b.steps = pt.steps; b.beats = pt.beats; b.nlayers = pt.nlayers; b.muted = v.mute; b.rest = v.rest;
         for (int s = 0; s < pt.steps && s < SCENE_BEAT_STEPS; s++) b.angle[s] = (float)(90.0 - 360.0 * rhy_onset(&pt, s) / L);
         for (int l = 0; l < pt.nlayers && l < SCENE_BEAT_LAYERS; l++) { b.rgb[l] = pt.layer[l].rgb; b.hits[l] = v.hits[l]; }
-        b.step = v.paused && v.count_in ? -1 : v.step;
+        b.step = v.rest ? 0 : v.paused && v.count_in ? -1 : v.step;     /* (at rest: the hand at 12 o'clock) */
         b.cin_step = v.paused ? -1 : v.cin_step;
-        b.since = v.since; b.slot = v.slot; b.norder = v.norder; b.ver = v.ver ^ (unsigned)v.cur << 24;
+        b.since = v.rest ? SCENE_BEAT_SWELL_S : v.since; b.slot = v.slot; b.norder = v.norder;
         snprintf(b.label, sizeof(b.label), "%s", pt.label);
     }
     b.hide_name = s_wh.gen == s_sp.gen && scene_wheel_words(sc, &s_wh.w);
@@ -1251,7 +1234,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
                 uint32_t key;
                 const int nf = scene_full_shapes(s, s_sp.cur, s_sp.t, s_fshp, &key);
                 /* (not now: the scene's calm set is still being made; asked again next frame) */
-                if (nf >= 0 && fluid_fine_want(s_fine, s_sp.cur->serial, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette)) wanted = k0;
+                if (nf >= 0 && fluid_fine_want(s_fine, s_sp.cur->look, key, !(s_sp.cur->focus >= 0 && s_sp.cur->glow > 0.f), s_fshp, nf, cfg->palette)) wanted = k0;
             }
             /* ... in what the frame's fill left of its budget (a frame that repainted its items builds nothing) */
             const int mph = fluid_draw_morphing(s_draw);   /* (the scene is not on the glass yet: the drawer has room) */
@@ -2446,9 +2429,9 @@ static void fluid_task(void *arg) {
         if (s_fine && s_hd.gen && s_nshp >= 0 && s_cur == ST_SCENE && !s_hd.out && (!fluid_draw_morphing(s_draw) || fluid_draw_morph_open(s_draw)))
             fluid_fine_swap(s_fine);
         const bool asking = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (ask_compose draws it over the frame) */
-        const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->serial);
+        const bool ready = !fine_look || asking || !fluid_fine_specks_kind(fluid_fine_dust_kind_get()) || fluid_fine_shown(s_fine, s_sp.cur->look);
         const uint32_t look = asking ? fluid_look_of(FLUID_LOOK_ASK, s_ask.vseq, true)
-                            : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->serial, ready)
+                            : fine_look ? fluid_look_of(FLUID_LOOK_SCENE, s_sp.cur->look, ready)
                             : s_crisp ? fluid_look_of(FLUID_LOOK_CREATURE, 1u, true) : FLUID_LOOK_GLASS;
         {   /* each new look (/api/log): as a change of picture, or at once (and why); a change cut at the cloud's limit */
             static uint32_t look_was;
@@ -2613,12 +2596,9 @@ static void fluid_task(void *arg) {
             const int d = sc ? scene_dial(sc, s_wh.gen == s_sp.gen ? s_wh.w.face : 0) : -1, c = sc ? scene_centre(sc) : -1;
             s_zones.r0 = d >= 0 ? sc->items[d].r0 : 0.f;
             s_zones.rc = c >= 0 ? sc->items[c].r : 0.f;
-            if (!sc) s_zones.nd = 0;
-            else if (s_zones.serial != sc->serial) {
-                s_zones.serial = sc->serial; s_zones.nd = 0;
-                for (int q = sc->nfixed; q < sc->nitems && s_zones.nd < ZONE_DOTS; q++)
-                    if (sc->items[q].layer >= 0) { s_zones.dx[s_zones.nd] = sc->items[q].x; s_zones.dy[s_zones.nd] = sc->items[q].y; s_zones.dr[s_zones.nd++] = sc->items[q].r; }
-            }
+            s_zones.nd = 0;                                /* (the dots are live: this frame's) */
+            for (int q = sc ? sc->nfixed : 0; sc && q < sc->nitems && s_zones.nd < ZONE_DOTS; q++)
+                if (sc->items[q].layer >= 0) { s_zones.dx[s_zones.nd] = sc->items[q].x; s_zones.dy[s_zones.nd] = sc->items[q].y; s_zones.dr[s_zones.nd++] = sc->items[q].r; }
             s_zones.face = s_listen || s_ask.scr.phase != FLUID_ASK_NONE ? -1 : 0;   /* (-1: none takes a press now) */
         }
         snprintf(s_stats.scene_pkg, sizeof(s_stats.scene_pkg), "%s", s_sp.cur ? s_sp.cur->pkg_id : "");
@@ -3498,7 +3478,11 @@ int mole_fluid_zone(int px, int py) {
     return z;
 }
 
-int mole_fluid_take_ticks(void) { return atomic_exchange(&s_ticks, 0); }
+int mole_fluid_take_ticks(int *ms, int *strength) {
+    const int plan = atomic_load(&s_tick_plan);
+    *ms = plan >> 8; *strength = plan & 255;
+    return atomic_exchange(&s_ticks, 0);
+}
 
 bool mole_fluid_ring_event(mole_ring_evt_t *out) {
     if (!s_mutex) return false;

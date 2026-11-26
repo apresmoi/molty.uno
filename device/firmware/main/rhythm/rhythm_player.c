@@ -177,7 +177,6 @@ bool rhy_load(rhy_player_t *p, const rhy_pattern_t *lib, int n, int pick, float 
     p->on = true; p->paused = paused; p->stopping = false; p->quit = false; p->nbeat = 0;
     fade_voices(p, ~0u, true);
     restart(p, 0);
-    p->ver++;
     return true;
 }
 
@@ -193,14 +192,12 @@ bool rhy_pick(rhy_player_t *p, int i) {
     p->cur = i; p->shift = 0; p->next_req = false; p->nbeat = 0;
     p->mute &= (1u << cur(p)->nlayers) - 1u;
     restart(p, 0);
-    p->ver++;
     return true;
 }
 
 void rhy_set_mute(rhy_player_t *p, uint32_t mute) {
     fade_voices(p, mute & ~p->mute, false);
     p->mute = mute;
-    p->ver++;
 }
 
 void rhy_next(rhy_player_t *p) { if (p->on && cur(p)->norder > 1) p->next_req = true; }
@@ -217,9 +214,15 @@ void rhy_pause(rhy_player_t *p, bool pause) {
     restart(p, u < p->cin_end ? (int64_t)llround(p->cin_end / L) : (int64_t)floor(u / L));
 }
 
+void rhy_rest(rhy_player_t *p) {
+    if (!p->on) return;
+    rhy_pause(p, true);
+    p->shift = 0; p->next_req = false;
+    restart(p, 0);
+}
+
 void rhy_stop(rhy_player_t *p) {
     if (!p->on) return;
-    p->ver++;
     if (p->paused && !p->stopping) { p->on = false; return; }
     p->quit = true; p->paused = true; p->stopping = true; p->nbeat = 0;
     fade_voices(p, ~0u, true);
@@ -241,7 +244,7 @@ size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n) {
         p->n++;
         if (p->stopping && !any) {                     /* the fade is out: silence from here */
             p->stopping = false;
-            if (p->quit) { p->on = false; p->quit = false; p->ver++; }
+            if (p->quit) { p->on = false; p->quit = false; }
             memset(out + i + 1, 0, (n - i - 1) * sizeof(int16_t));
             return i + 1;
         }
@@ -263,7 +266,7 @@ void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *o) {
     o->step = o->cin_step = -1;
     if (!p->nlib) return;
     const rhy_pattern_t *pt = cur(p);
-    o->on = p->on && !p->quit; o->paused = p->paused; o->cur = p->cur; o->mute = p->mute; o->bpm = p->bpm; o->ver = p->ver;
+    o->on = p->on && !p->quit; o->paused = p->paused; o->cur = p->cur; o->mute = p->mute; o->bpm = p->bpm;
     o->norder = pt->nbars ? pt->norder : 0;
     const double u = rhy_u_at(p, n < p->n ? n : p->n), L = bar_len(p), b = floor(u / L), um = u - b * L;
     int s = 0;
@@ -279,7 +282,7 @@ void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *o) {
         o->step = s;
         o->since = (float)((um - rhy_onset(pt, s)) / ups);
     }
-    const int slot = (int)b + p->shift;
+    const int slot = (o->count_in ? (int)llround(p->cin_end / L) : (int)b) + p->shift;   /* (a count-in: the bar it counts into) */
     o->slot = o->norder ? ((slot % o->norder) + o->norder) % o->norder : 0;
     for (int l = 0; l < pt->nlayers; l++) o->hits[l] = rhy_bar_hits(pt, slot, l);
 }

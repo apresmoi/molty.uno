@@ -23,6 +23,8 @@
  *             sample.
  *   mute      a muted layer's ringing voices fade out over RHY_FADE samples (no click); its next hits are silent.
  *   pause     every voice fades the same way; resume starts with a count-in, then the bar it paused in from its start.
+ *   rest      stopped by the human or the agent: paused and back at the phrase's start (rhy_rest), so playing again is
+ *             a count-in, then its first bar.
  *   view      rhy_view: where a sample (the one the speaker plays now) is in the pattern, for the picture.
  */
 #pragma once
@@ -106,7 +108,6 @@ typedef struct {
     rhy_voice_t v[RHY_VOICES];
     uint32_t noise;
     uint64_t beat_n[RHY_BEATS]; uint8_t beat_first[RHY_BEATS]; int nbeat;
-    unsigned ver;                       /* bumped when what the picture draws changes: pick, mute, load        */
     rhy_hit_fn hit_fn; void *hit_ctx;   /* (tests: every hit, as it is placed)                                */
 } rhy_player_t;
 
@@ -123,6 +124,8 @@ void rhy_set_mute(rhy_player_t *p, uint32_t mute);
 void rhy_next(rhy_player_t *p);
 /** Pause: the voices fade (rhy_fill returns the fade, then 0). Resume: a count-in, then the bar it paused in. */
 void rhy_pause(rhy_player_t *p, bool pause);
+/** Stopped at rest: paused (the voices fade), the phrase back at its start; rhy_pause(p, false) plays it again. */
+void rhy_rest(rhy_player_t *p);
 void rhy_stop(rhy_player_t *p);
 /** Playing and not paused (or still fading out): the caller should keep the speaker and fill. */
 static inline bool rhy_sounding(const rhy_player_t *p) { return p->on && (!p->paused || p->stopping); }
@@ -137,6 +140,7 @@ bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first);
 /** What the picture shows at output sample n. */
 typedef struct {
     bool on, paused, count_in;
+    bool rest;                          /* paused at rest, not for the speaker (rhythm.h rhythm_now)          */
     int cur;                            /* the pattern                                                         */
     int step;                           /* the step sounding, 0..; -1 during a count-in                       */
     int cin_step;                       /* the count-in's click on that step, -1 none                          */
@@ -145,7 +149,6 @@ typedef struct {
     uint32_t hits[RHY_LAYERS];          /* this bar's hits a layer                                             */
     uint32_t mute;
     float bpm;
-    unsigned ver;
 } rhy_view_t;
 void rhy_view(const rhy_player_t *p, uint64_t n, rhy_view_t *out);
 

@@ -20,6 +20,7 @@
  *   lab          the firmware's experiment switches, a line each (LAB below).
  */
 #include "gesture.h"
+#include "haptic_plan.h"
 
 /* ── device mode: the panel's measured costs ─────────────────────────────────────────────────────────────────────
  * One table. A frame on the device is the drawer's cells pass and its windows to the panel (core 0) against the sim's
@@ -248,7 +249,9 @@ static void imu_feed(uint32_t now) {
     }
 }
 
-static int s_wheel_ticks;              /* a wheel's clicks, not yet taken (wm_wheel_ticks) */
+static int s_wheel_ticks;              /* the motor's ticks a wheel asked for, not yet taken (wm_wheel_ticks) */
+static int s_tick_ms, s_tick_strength; /* ... the last one's plan (haptic_plan_wheel) */
+static uint32_t s_tick_at;
 
 /* sense.c sense_task, one pass (the device: every 10 ms; here once a frame) */
 static void sense_tick(uint32_t now) {
@@ -259,8 +262,8 @@ static void sense_tick(uint32_t now) {
     const bool beat = !pair && !s_q.open && rhythm_active();
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
-        if (beat) {                    /* sense.c: a rhythm plays: accept pauses and resumes it, reject stops it */
-            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_pause(); else rhythm_local_stop(); }
+        if (beat) {                    /* sense.c: a rhythm shows: accept plays and stops it, reject stops it and leaves */
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else rhythm_local_stop(); }
             s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
             s_btn_prev[b] = on;
             continue;
@@ -304,7 +307,13 @@ static void sense_tick(uint32_t now) {
     if (spot && !pair) spot_do(spot, now);
     mole_scene_evt_t sv;               /* the screen changed on the device itself: the relay hears what is up */
     if (mole_fluid_scene_event(&sv)) ws_emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
-    s_wheel_ticks += mole_fluid_take_ticks();   /* a wheel's clicks: the motor's ticks on the device (wm_wheel_ticks) */
+    {   /* sense.c: a wheel's clicks, its own tick, one at most every HAPTIC_WHEEL_GAP_MS */
+        int ms, strength;
+        haptic_plan_t pl;
+        if (mole_fluid_take_ticks(&ms, &strength) && haptic_wheel_due(&s_tick_at, now) && haptic_plan_wheel(&pl, ms, strength)) {
+            s_wheel_ticks++; s_tick_ms = pl.seg[0]; s_tick_strength = pl.strength;
+        }
+    }
     mole_ring_evt_t re;                /* a wheel settled */
     if (mole_fluid_ring_event(&re)) ws_emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
     rhythm_ev_t rv;                    /* the beat player's own: a mute, a pause, a stop */
@@ -316,8 +325,15 @@ static void sense_tick(uint32_t now) {
     }
 }
 
-/** The motor's ticks a wheel asked for since the last call (the device ticks once a click, sense.c). */
-WM_API int wm_wheel_ticks(void) { const int n = s_wheel_ticks; s_wheel_ticks = 0; return n; }
+/** The motor's ticks a wheel asked for since the last call (sense.c: one a click, one at most every 60 ms); ms and
+ *  strength (non-NULL): the last one's. */
+WM_API int wm_wheel_ticks(int *ms, int *strength) {
+    const int n = s_wheel_ticks;
+    s_wheel_ticks = 0;
+    if (ms) *ms = s_tick_ms;
+    if (strength) *strength = s_tick_strength;
+    return n;
+}
 
 /** The device's own handling of its inputs on (the simulator): a tap, a double tap, the buttons and a shake do what
  *  sense.c does with them, and what an agent would hear piles up for wm_events. Off (the website's screens): a tap is

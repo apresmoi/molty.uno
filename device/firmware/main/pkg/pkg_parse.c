@@ -125,7 +125,8 @@ bool pkg_num_ok(int pf, float v) {
     case PF_BY: case PF_FAST: return v >= -1000.f && v <= 1000.f;
     case PF_MIN: case PF_MAX: case PF_VAL: return v >= -10000.f && v <= 10000.f;
     case PF_FACE:             return v == 0.f || v == 1.f;
-    case PF_BACK:             return v >= 0.f && v <= 60.f;
+    case PF_TICK_MS:          return v == 0.f || (v >= 5.f && v <= 60.f);    /* 0: the motor's own (haptic_plan.h) */
+    case PF_TICK:             return v == 0.f || (v >= 25.f && v <= 100.f);  /* percent; under 25 it does not turn */
     default:                  return v >= -720.f && v <= 720.f;   /* angles: a0 a1 rot polar */
     }
 }
@@ -229,12 +230,13 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
     { "open", PF_OPEN, T_STR, KB(PK_SPOT) }, { "ttl", PF_TTL, T_NUM, KB(PK_SPOT) },
     /* a dial: grabbed from r0 out, drawn at r; a click every `step` degrees adds `by` (`fast` turning fast) to its value
      * (min..max, from `value`), or, with `labels` (a list param, each element's `label`), steps through them; `sets` the
-     * beat player's `tempo` or its `pick`; `face` 0 or 1 (a centre's tap shows the other) */
+     * beat player's `tempo` or its `pick`; `face` 0 (while the beat plays) or 1 (while it is stopped); each click ticks
+     * the motor `tick_ms` at `tick` percent (0: the motor's own wheel tick) */
     { "step", PF_STEP, T_NUM, KB(PK_DIAL) }, { "by", PF_BY, T_NUM, KB(PK_DIAL) }, { "fast", PF_FAST, T_NUM, KB(PK_DIAL) },
     { "min", PF_MIN, T_NUM, KB(PK_DIAL) }, { "max", PF_MAX, T_NUM, KB(PK_DIAL) }, { "value", PF_VAL, T_NUM, KB(PK_DIAL) },
     { "face", PF_FACE, T_NUM, KB(PK_DIAL) }, { "sets", PF_SETS, T_STR, KB(PK_DIAL) }, { "labels", PF_LABELS, T_LIST, KB(PK_DIAL) },
-    /* a centre: a tap within r flips the dials' face; `back` seconds without a touch on the other face flips it back */
-    { "back", PF_BACK, T_NUM, KB(PK_CENTRE) },
+    { "tick_ms", PF_TICK_MS, T_NUM, KB(PK_DIAL) }, { "tick", PF_TICK, T_NUM, KB(PK_DIAL) },
+    /* a centre: a tap within r plays and stops the beat (the layout has one) */
 };
 #define NFIELDS ((int)(sizeof(FIELDS) / sizeof(FIELDS[0])))
 /* what each kind cannot do without */
@@ -401,6 +403,7 @@ static const char *parse_layout(arena_t *a, const pkg_t *p, const cJSON *j, pkg_
         if (it->k == PK_DIAL) dials[it->f[PF_FACE].src == PV_NUM && it->f[PF_FACE].num == 1.f]++;
     }
     if (beats > 1 || centres > 1 || dials[0] > 1 || dials[1] > 1) return "layout: one beat, one centre and one dial a face";
+    if (centres > beats) return "layout: a centre plays and stops a beat: the layout has none";
     return NULL;
 }
 

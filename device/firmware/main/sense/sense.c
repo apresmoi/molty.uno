@@ -20,10 +20,10 @@
  * 1.5 s it says goodbye and powers off (power_off); or hold: held to talk; pairing
  * and a pending question always come first). A talk names its input on the shake event. A shake's phantom taps are dropped (gesture_tap_guarded).
  * A press on a scene's wheel, its centre or a beat's dot (mole_fluid_zone) is the fluid task's alone: no spot, no tap
- * event; the centre and a dot buzz as a tap that does something, the wheel ticks once a click (mole_fluid_take_ticks:
- * at most one every GESTURE_TAP_BOUNCE_MS, so a fast turn feels fewer ticks than it makes). It sends a `ring` event
- * once it settles. While a rhythm plays (rhythm.h) the accept button pauses and resumes it and the reject button stops
- * it, whatever they are bound to.
+ * event; the centre and a dot buzz as a tap that does something, the wheel ticks once a click with its own firmer
+ * tick (mole_fluid_take_ticks, haptic_wheel: at most one every HAPTIC_WHEEL_GAP_MS, so a fast turn feels fewer ticks
+ * than it makes). It sends a `ring` event once it settles. While a rhythm shows (rhythm.h) the accept button plays and
+ * stops it (as the centre does) and the reject button stops it and leaves, whatever they are bound to.
  * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
  * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
  * tap, a drag), never a physical button (it clicks by itself).
@@ -86,7 +86,7 @@ void sense_touch(int n, const uint16_t *xs, const uint16_t *ys)
         int w = molty_display_width(), h = molty_display_height();
         /* a pending question takes the tap as its answer: no `tap` event for it */
         if (link_ask_tap((float)xs[0] + 0.5f - w * 0.5f, (float)ys[0] + 0.5f - h * 0.5f)) { down = true; return; }
-        /* a scene's wheel, its centre, a beat's dot: the fluid task's (it turns, flips, mutes), never a spot or a tap */
+        /* a scene's wheel, its centre, a beat's dot: the fluid task's (it turns, plays and stops, mutes), never a spot or a tap */
         const int zone = link_audio_listening(NULL) ? 0 : mole_fluid_zone(xs[0], ys[0]);
         if (zone) { if (zone != 1) acted(); down = true; return; }
         uint32_t x = w > 1 ? (uint32_t)xs[0] * 65535u / (uint32_t)(w - 1) : 0;
@@ -219,8 +219,8 @@ static void sense_task(void *arg)
         const bool beat = !pairing && !link_ask_pending() && rhythm_active();
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
-            if (beat) {   /* a rhythm plays: accept pauses and resumes it, reject stops it (its clock goes with it) */
-                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_pause(); else rhythm_local_stop(); }
+            if (beat) {   /* a rhythm shows: accept plays and stops it (as the centre), reject stops it (its clock goes with it) */
+                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else rhythm_local_stop(); }
                 presser[b].pending = false; gesture_switch_reset(&sw[b]); sw[b].down = on;
                 prev[b] = on;
                 continue;
@@ -260,7 +260,11 @@ static void sense_task(void *arg)
         if (spot && !pairing) spot_do(spot, now, &tap_l);
         mole_scene_evt_t sv;                            /* the screen changed on the device itself: the relay hears what is up */
         if (mole_fluid_scene_event(&sv)) emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
-        if (mole_fluid_take_ticks()) acted();           /* a wheel's click: one tick (the bounce merges a fast turn's) */
+        {   /* a wheel's clicks: its own tick (haptic_plan.h HAPTIC_WHEEL_*, or the dial's), one at most every 60 ms */
+            static uint32_t tick_at;
+            int ms, strength;
+            if (mole_fluid_take_ticks(&ms, &strength) && haptic_wheel_due(&tick_at, (uint32_t)(esp_timer_get_time() / 1000))) haptic_wheel(ms, strength);
+        }
         mole_ring_evt_t re;                             /* a wheel settled */
         if (mole_fluid_ring_event(&re)) emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
         rhythm_ev_t rv;                                 /* the beat player's own: a mute, a pause, a stop */

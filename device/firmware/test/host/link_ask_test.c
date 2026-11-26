@@ -39,6 +39,8 @@ esp_err_t haptic_cue(const char *name) {
     strcat(strcat(cues, cues[0] ? " " : ""), name); return ESP_OK;
 }
 esp_err_t haptic_touch(void) { return haptic_cue("touch"); }   /* the touch feedback, among them */
+esp_err_t haptic_wheel(int ms, int strength) { (void)ms; (void)strength; return haptic_cue("wheel"); }
+bool haptic_wheel_due(uint32_t *last_ms, uint32_t now_ms) { *last_ms = now_ms; return true; }
 bool link_audio_gesture_talk(const char *input) { (void)input; talks++; return true; }
 static int holds, releases;
 void link_audio_hold(bool down, const char *input) { (void)input; if (down) holds++; else releases++; }
@@ -56,10 +58,10 @@ void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t
 bool mole_fluid_scene_event(mole_scene_evt_t *out) { (void)out; return false; }
 static int zone_hit;            /* the press lands on a scene's wheel (1), its centre (2), a beat's dot (3); 0 none */
 int mole_fluid_zone(int px, int py) { (void)px; (void)py; return zone_hit; }
-int mole_fluid_take_ticks(void) { return 0; }
+int mole_fluid_take_ticks(int *ms, int *strength) { *ms = *strength = 0; return 0; }
 bool mole_fluid_ring_event(mole_ring_evt_t *out) { (void)out; return false; }
 bool rhythm_active(void) { return false; }
-void rhythm_local_pause(void) { }
+void rhythm_local_play(void) { }
 void rhythm_local_stop(void) { }
 bool rhythm_take_event(rhythm_ev_t *e) { (void)e; return false; }
 cJSON *rhythm_event_frame(const rhythm_ev_t *e) { (void)e; return NULL; }

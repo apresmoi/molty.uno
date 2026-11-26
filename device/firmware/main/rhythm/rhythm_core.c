@@ -36,6 +36,12 @@ static void push_state(const char *state) {       /* (locked) */
     push(&e);
 }
 static bool on(void) { return s_p && s_p->on && !s_p->quit; }
+/* playing, or at rest (locked): a yield for the speaker is neither (s_yielded) */
+static void rest(bool r) {
+    s_yielded = false;
+    if (r) rhy_rest(s_p);
+    else rhy_pause(s_p, false);
+}
 
 static const char *only(const cJSON *args, const char *const *keys, int n) {
     if (args && !cJSON_IsObject(args)) return "invalid_args";
@@ -121,7 +127,7 @@ const char *rhythm_set(const cJSON *args, cJSON **out) {
         if (mj) rhy_set_mute(s_p, mute);
         if (next) rhy_next(s_p);
         if (buzz >= 0) s_p->buzz = buzz;
-        if (paused >= 0) rhy_pause(s_p, paused);
+        if (paused >= 0 && paused != (s_p->paused && !s_yielded)) rest(paused);
         if (out) *out = state_json();
     }
     rhythm_unlock();
@@ -140,6 +146,7 @@ bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt) {
     const bool have = s_p && s_p->nlib && s_p->on;
     if (have) {
         rhy_view(s_p, rhythm_heard(), v);
+        v->rest = s_p->paused && !s_yielded;
         if (pt) *pt = s_p->lib[s_p->cur];
     } else memset(v, 0, sizeof(*v));
     rhythm_unlock();
@@ -173,10 +180,9 @@ void rhythm_local_mute(int layer, float x, float y) {
 }
 void rhythm_local_bpm(float bpm) { rhythm_lock(); if (on()) rhy_set_bpm(s_p, bpm); rhythm_unlock(); }
 void rhythm_local_pick(int i) { rhythm_lock(); if (on() && i != s_p->cur) rhy_pick(s_p, i); rhythm_unlock(); }
-void rhythm_local_pause(void) {
+void rhythm_local_play(void) {
     rhythm_lock();
-    s_yielded = false;
-    if (on()) { rhy_pause(s_p, !s_p->paused); push_state(s_p->paused ? "paused" : "playing"); }
+    if (on()) { const bool play = s_p->paused && !s_yielded; rest(!play); push_state(play ? "playing" : "paused"); }
     rhythm_unlock();
 }
 void rhythm_local_stop(void) {
