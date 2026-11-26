@@ -233,6 +233,6 @@ const char *link_mood_name(int id);
  * plays it is the creature's (mole_fluid_gesture): the shared ones (cute_act.h) and its package's own. */
 #define LINK_GESTURE_MAX 24
 bool link_act_args(const cJSON *args, const char **name);
-/* After the pairing code / the Improv "hi": the state body to go back to (malloc'd),
- * the saved one unless it was text or the demo reel, which become the creature. */
+/* After the pairing code / the Improv "hi": the state body to go back to (malloc'd): a scene
+ * stays a scene, anything else (text, a state from older firmware) is the creature. */
 char *link_restore_body(const char *saved_state_json);

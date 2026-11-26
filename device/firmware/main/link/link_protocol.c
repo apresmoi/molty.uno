@@ -97,7 +97,7 @@ cJSON *link_forget_frame(void) { return frame("forget"); }
 bool link_mood_map(const char *mood, const char **state)
 {
     /* Every mood is a mood of the .molty creature (fluid "creature" state, which
-     * falls back to the blob when no creature is loaded); names match CUTE_MOOD_NAMES. */
+     * shows the boot word while no creature is loaded); names match CUTE_MOOD_NAMES. */
     static const struct { const char *mood, *state; } map[] = {
         {"idle", "creature"}, {"listening", "creature"}, {"thinking", "creature"},
         {"speaking", "creature"}, {"happy", "creature"}, {"sleepy", "creature"},
@@ -376,8 +376,7 @@ char *link_restore_body(const char *saved_state_json)
     cJSON *saved = saved_state_json ? cJSON_Parse(saved_state_json) : NULL;
     const cJSON *st = cJSON_GetObjectItemCaseSensitive(saved, "state");
     const char *name = cJSON_IsString(st) ? st->valuestring : "creature";
-    if (!strcmp(name, "text") || !strcmp(name, "autoplay") ||
-        cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(saved, "autoplay"))) name = "creature";
+    if (strcmp(name, "scene")) name = "creature";   /* (text, and the states before the demo ones went, are the creature) */
     cJSON *j = cJSON_CreateObject();
     char *body = NULL;
     if (j && cJSON_AddStringToObject(j, "state", name)) body = cJSON_PrintUnformatted(j);

@@ -250,16 +250,6 @@ static inline float fluid_smooth(float a, float b, float x) {
 
 /* ── targets (targets.js) ─────────────────────────────────────────────────── */
 
-enum { FLUID_FX_RIPPLE, FLUID_FX_VORTEX, FLUID_FX_WAVE, FLUID_FX_COUNT };
-extern const char *const FLUID_FX_NAMES[FLUID_FX_COUNT];
-
-/** Breathing metaball. (ox,oy) leans it (IMU tilt). */
-void fluid_target_blob(fluid_sim_t *s, float t, float swell, float ox, float oy);
-void fluid_target_effect(fluid_sim_t *s, int fx, float t, float swell, float ox, float oy);
-void fluid_effect_enter(fluid_sim_t *s, int fx);
-void fluid_effect_tick(fluid_sim_t *s, int fx, float dt, float *st);   /* st: 1 float of fx state */
-void fluid_effect_exit(fluid_sim_t *s, int fx);
-
 typedef struct {
     char  ch;
     bool  acc;                         /* ORP letter                                      */

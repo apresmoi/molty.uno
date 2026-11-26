@@ -2,7 +2,7 @@
  * mole_fluid.c — "fluid" creature: Molty as a fluid of characters.
  *
  * Port of device/creatures/js/fluid/main.js (wiring) on top of fluid_sim/target/draw.c; what
- * is shown when (states, moods, idle life, the demo reel) is fluid_director.c. Over it:
+ * is shown when (states, moods, idle life) is fluid_director.c. Over it:
  * a question (the link's ask, fluid_ask.h: drawn over whatever shows, which dims and keeps moving under it,
  * fluid_askview.h; the director's transitions wait while it stands) and rings of the fluid itself (the listening
  * ring while a listen records, fluid_target_ring / fluid_ring.h). Threading:
@@ -86,7 +86,6 @@ static const char *TAG = "mole_fluid";
 #define FLUID_TE_SLACK_US  500        /* (the wake's own lag: not late)                                                   */
 #define FLUID_TOUCH_US     16000      /* touch poll ≤ 60 Hz (shared I2C bus)    */
 #define FLUID_TILT_ACCEL   25.f       /* cells/s² of flow bias per g of tilt    */
-#define FLUID_TILT_LEAN    0.12f      /* stage units a target leans per g       */
 #define FLUID_IMU_SX       (1.f)      /* device-frame → screen: dashboard maps  */
 #define FLUID_IMU_SY       (-1.f)     /* dot_dx = +ax, dot_dy = -ay             */
 #define FLUID_RIPPLE_Q     4
@@ -100,12 +99,11 @@ static const char *DEFAULT_TEXT =
 
 /* ── States (the director decides which, fluid_director.h) ─────────────────── */
 
-enum { ST_BLOB = FD_ST_BLOB, ST_THINKING = FD_ST_THINKING, ST_TEXT = FD_ST_TEXT,
-       ST_FX = FD_ST_FX, ST_CREATURE = FD_ST_CREATURE, ST_SCENE = FD_ST_SCENE };
+enum { ST_TEXT = FD_ST_TEXT, ST_CREATURE = FD_ST_CREATURE, ST_SCENE = FD_ST_SCENE };
 
 /* relax rates per kind of target (text must condense within one word's time) */
-static const float RATE_UP[FD_ST_COUNT]   = { 1.6f, 1.6f, 7.f, 1.8f, 2.6f, 2.6f };
-static const float RATE_DOWN[FD_ST_COUNT] = { 2.0f, 2.0f, 2.4f, 2.2f, 3.4f, 3.4f };
+static const float RATE_UP[FD_ST_COUNT]   = { [ST_TEXT] = 7.f, [ST_CREATURE] = 2.6f, [ST_SCENE] = 2.6f };
+static const float RATE_DOWN[FD_ST_COUNT] = { [ST_TEXT] = 2.4f, [ST_CREATURE] = 3.4f, [ST_SCENE] = 3.4f };
 
 /* ── Shared config / requests (httpd ↔ task, under s_mutex) ─────────────────── */
 
@@ -122,9 +120,9 @@ typedef struct {
     char  scene_pkg[PKG_ID_MAX + 1], scene_layout[PKG_KEY_MAX + 1];   /* "" = none */
     float scene_left;                          /* s until it ends                  */
     bool  working;
-    bool  internal, autoplay, asleep;
+    bool  internal, asleep;
     int   n_internal, n_blk;
-    int   state, fx, reel, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
+    int   state, word_idx, nwords, inside, grid_w, grid_h, cells_drawn;
     int   crisp_dots;                          /* a rigged creature: its dots handed to the drawer */
     int   share;                               /* ... and the share of its rows' work on core 1, percent */
     float send_n, send_kpx, blit_ms;           /* the panel's windows a frame, their kpx, ms in the blits (EMA) */
@@ -150,10 +148,9 @@ static char   *s_text     = NULL;               /* PSRAM, FLUID_TEXT_MAX+1      
 static int     s_text_len = 0;
 static int     s_text_ver = 0;
 static bool    s_text_appended = false;         /* last change(s) only appended     */
-static int     s_req_state = -1, s_req_fx = 0;  /* pending explicit state           */
+static int     s_req_state = -1;                /* pending explicit state           */
 static bool    s_req_implied = false;          /* ...or the creature a mood alone implies */
 static bool    s_req_text_hold = false;         /* …"text" holding its last word    */
-static bool    s_req_reel  = false;             /* pending autoplay restart         */
 static bool    s_req_activity = false;          /* a state / mood / text change came */
 static bool    s_req_shake = false, s_req_user = false;   /* sense.c: shake, button  */
 static int     s_status_in = FD_STATUS_OK;      /* link status (mole_fluid_set_status) */
@@ -350,8 +347,7 @@ static unsigned s_dask;                         /* ...the question a tap on it m
 static atomic_uint s_glass_ask;
 
 static fluid_director_t s_dir;                 /* states, moods, idle life, status  */
-static int   s_cur = ST_BLOB, s_cur_fx = 0;     /* the state the sim is drawing      */
-static float s_fx_state = 0.f;
+static int   s_cur = ST_CREATURE;               /* the state the sim is drawing (none loaded: nothing) */
 static float s_tnow = 0.f, s_acc = 0.f, s_breath_ph = 0.f;
 static float s_melt_t = 1e9f, s_word_until = 0.f;
 static int   s_word = 0;
@@ -581,11 +577,9 @@ static void ripple(float x, float y, float strength, float radius) {
 /* Enter a state on the sim: the ripple + swirl that melt the old shape, the new relax
  * rates. Only for transitions the director hands out (fd_take) and a grid rebuild:
  * re-entering the shown state is exactly what melts the creature. */
-static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
+static void enter_state(int st, const fluid_cfg_t *cfg) {
     motion();                                               /* (a word reading, a scene, the creature: from here) */
     int from = s_cur;
-    if (s_cur == ST_FX) fluid_effect_exit(s_sim, s_cur_fx);
-    if (st == ST_CREATURE && !cr_loaded()) st = ST_BLOB;   /* no creature loaded */
     s_sim->edge_w = st == ST_CREATURE ? 1.f : 0.f;      /* solid eyes once settled */
     s_word_dots = st == ST_TEXT ? fd_boot_word(&s_dir) : s_word_dots && s_cur == ST_TEXT;   /* kept through its melt */
     if (st == ST_TEXT && fd_boot_word(&s_dir)) {   /* the boot screen's word, in the fluid's own dots */
@@ -622,23 +616,22 @@ static void enter_state(int st, int fx, const fluid_cfg_t *cfg) {
         if (st != ST_TEXT) ripple(cx, cy, 0.7f, 0.2f);
         else ripple(0.f, 0.f, 0.5f, 0.25f);
     }
-    s_cur = st; s_cur_fx = fx; s_fx_state = 0.f;
+    s_cur = st;
     if (st != ST_TEXT) memset(s_sim->bgm, 255, (size_t)s_sim->N);
     s_sim->p.relax_up = RATE_UP[st]; s_sim->p.relax_down = RATE_DOWN[st];
     if (from == ST_TEXT && st != ST_TEXT) s_melt_t = 0.f;
-    if (st == ST_FX) fluid_effect_enter(s_sim, fx);
 }
 
 /* the director's pending transition, if any, then its mood on the creature (moods blend
  * inside the creature: its mood engine fades between them and ignores the same mood) */
 static void direct(const fluid_cfg_t *cfg) {
-    int st, fx;
+    int st;
     /* a standing question owns the screen: the director's transitions wait under it */
-    if (s_ask.scr.phase != FLUID_ASK_SHOW && fd_take(&s_dir, &st, &fx)) {
+    if (s_ask.scr.phase != FLUID_ASK_SHOW && fd_take(&s_dir, &st)) {
         if (!(st == ST_TEXT && s_cur == ST_TEXT)) s_glass_pic++;
         s_carried = fluid_draw_morph_carries(s_draw) && !(st == ST_TEXT && s_cur == ST_TEXT);   /* a change of picture brings it */
         if (s_carried) { fd_settled(&s_dir); s_sim->p.settle = true; }
-        enter_state(st, fx, cfg);
+        enter_state(st, cfg);
         s_carried = false;
     }
     cr_set_mood(fd_mood(&s_dir));
@@ -1281,7 +1274,6 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
 
     /* input before the targets so the lean follows the hand of the moment */
     read_tilt(cfg->tilt);
-    float ox = s_gx * FLUID_TILT_LEAN, oy = s_gy * FLUID_TILT_LEAN;
 
     /* a listen on the water, never over a question: a fixed circle at the rim, and each rise of
      * the voice sends a round wave from it across the screen (fluid_ring.h). The circle is a
@@ -1314,8 +1306,6 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     if (s_cur == ST_SCENE && s_sp.cur && s_wh.gen == s_sp.gen) scene_wheel(s_sp.cur, &s_wh.w);
     switch (s_cur) {   /* under a question too: it keeps moving */
     case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
-    case ST_FX:       fluid_target_effect(s, s_cur_fx, s_tnow, swell, ox, oy); break;
-    case ST_THINKING: fluid_target_blob(s, s_tnow * 1.4f, swell * 0.85f, ox, oy); break;
     case ST_SCENE: {
         const scene_caption_t cap = scene_caption();
         scene_shapes_t hd = { s_shp, 0, s_kdots, s_still };
@@ -1419,11 +1409,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
             }
             if (s_cute) { cute_rt_raster(s_cute, s->W, s->H); cute_rt_fill(s_cute, s, swell); }
             s_cute_tris = s_cpk ? cpk_tris(s_cpk) : cute_rt_tris(s_cute);
-        } else {
-            fluid_target_blob(s, s_tnow, swell, ox, oy);   /* creature unloaded while showing */
-        }
+        }   /* (none loaded: the director never shows the creature so, the boot word stands in) */
         break;
-    default:          fluid_target_blob(s, s_tnow, swell, ox, oy); break;
     }
     fluid_sim_floor_track(s, rdt, s_cur == ST_CREATURE && cr_loaded());   /* its feet, before the rings join T */
     /* under the listening ring (it wins); over a rigged creature the same thin line, in green */
@@ -1452,12 +1439,11 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp;
     s->p.still = still;
     if (!still) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
-    if (s_cur == ST_FX && !asking) fluid_effect_tick(s, s_cur_fx, rdt, &s_fx_state);
 
     /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
      * speech envelope rings the surface from its mouth; mic adds shimmer + random drops */
     int cmood = (s_cur == ST_CREATURE && cr_loaded() && !asking) ? cr_mood() : -1;
-    bool thinking = s_cur == ST_THINKING || cmood == CM_THINKING;
+    bool thinking = cmood == CM_THINKING;
     float level = cmood == CM_SPEAKING ? cr_env() : 0.f;
     s->osc.x = 0.f; s->osc.y = cmood == CM_SPEAKING ? 0.12f : 0.f;
     s->osc.amp = (cmood == CM_SPEAKING ? 1.2f : thinking ? 0.25f : 0.5f) * level;
@@ -2185,7 +2171,7 @@ static bool screen_switch(bool on) {
 static int screen_wanted(void) {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     const bool show = s_text_ver != s_seen_ver || (s_ask_want.active && s_ask_want.seq != s_ask.scr.seq) || (s_listen_in && !s_listen);
-    const bool agent = s_req_activity || s_req_state >= 0 || s_req_mood >= 0 || s_req_work || s_req_act >= 0 || s_req_reel ||
+    const bool agent = s_req_activity || s_req_state >= 0 || s_req_mood >= 0 || s_req_work || s_req_act >= 0 ||
                        s_scene_nops || s_follow_in || s_cute_blob;
     xSemaphoreGive(s_mutex);
     return show ? NAP_WAKE_SHOW : agent || atomic_load(&s_prog_seq) != s_nap_prog ? NAP_WAKE_AGENT : -1;
@@ -2195,7 +2181,7 @@ static int screen_wanted(void) {
  * up for the human's time (screen_nap.h), the screen naps. "Up": a state but the creature's, a change on its way, a
  * question, a listen, a say, a reading, a scene, the progress ring, the boot word, the goodbye, the bench. */
 static void nap_check(void) {
-    const bool busy = (s_cur != ST_CREATURE && s_cur != ST_BLOB) || s_dir.pending || s_dir.busy || s_ask.scr.phase != FLUID_ASK_NONE ||
+    const bool busy = s_cur != ST_CREATURE || s_dir.pending || s_dir.busy || s_ask.scr.phase != FLUID_ASK_NONE ||
                       scene_playing(&s_sp) || s_pg.on > 0.f || s_sub || s_rd_on || fd_boot_word(&s_dir) || s_dir.bye || s_bench;
     if (!nap_tick(&s_nap, (uint32_t)(esp_timer_get_time() / 1000), fd_asleep(&s_dir), busy, atomic_load(&s_nap_power), s_nap_s[0], s_nap_s[1]))
         return;
@@ -2323,14 +2309,13 @@ static void fluid_task(void *arg) {
 
         /* pull config + requests */
         fluid_cfg_t cfg;
-        int req = -1, req_fx = 0; bool req_reel = false, req_hold = false;
+        int req = -1; bool req_hold = false;
         float rip[FLUID_RIPPLE_Q][3]; int nrip = 0;
         bool text_changed = false, text_append = false;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         cfg = s_cfg;
-        req = s_req_state; req_fx = s_req_fx; req_hold = s_req_text_hold; s_req_state = -1;
+        req = s_req_state; req_hold = s_req_text_hold; s_req_state = -1;
         const bool req_implied = s_req_implied; s_req_implied = false;
-        req_reel = s_req_reel; s_req_reel = false;
         nrip = s_ripn; memcpy(rip, s_ripq, sizeof(rip)); s_ripn = 0;
         /* (a creature being made: the next one waits its turn) */
         uint8_t *cblob = s_cr_task ? NULL : s_cute_blob; size_t clen = s_cute_len; const bool cpkg = s_cute_pkg;
@@ -2390,7 +2375,7 @@ static void fluid_task(void *arg) {
             if (regrid)
                 mole_diag_event(was_n > 0, "fluid.%s hot fields internal %d -> %d, int_free=%u", was_n > 0 ? "shed" : "internal",
                                 was_n, s_sim ? s_sim->n_internal : -1, (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
-            enter_state(s_cur, s_cur_fx, &cfg);         /* re-enter on the new grid */
+            enter_state(s_cur, &cfg);                   /* re-enter on the new grid */
             if (s_ask.v) {                              /* ...and the question over it, on the new grid (the drawer is idle) */
                 fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); fluid_askview_destroy(s_ask.making); s_ask.v = s_ask.old = s_ask.making = NULL;
                 if (s_ask.scr.phase == FLUID_ASK_SHOW && want.seq == s_ask.scr.seq) s_ask.v = fluid_askview_create(s_sim, &want.q);
@@ -2402,7 +2387,7 @@ static void fluid_task(void *arg) {
         if (text_changed) {
             tokenize();
             if (s_cur == ST_TEXT && req < 0) {
-                if (!text_append) { req = ST_TEXT; req_fx = 0; req_hold = s_dir.text_hold; }   /* new text: start over */
+                if (!text_append) { req = ST_TEXT; req_hold = s_dir.text_hold; }   /* new text: start over */
                 else if (s_word_until > 1e8f && s_word + 1 < s_ntok)    /* streamed words arrived */
                     s_word_until = s_tnow;                              /* while holding the last */
             }
@@ -2423,20 +2408,19 @@ static void fluid_task(void *arg) {
             }
         }
         /* the director: state first (it may end the reel), then the mood over it */
-        if (req_reel) fd_autoplay(&s_dir);
         /* a drawing up stays to its end: a say's words become its subtitle, and a mood alone
          * (speaking, listening) moods the voice, never takes the screen back to the creature */
         if (s_cur == ST_SCENE && scene_playing(&s_sp)) {
             if (req == ST_TEXT && s_follow) { s_sub = true; s_sub_word = -1; req = -1; }
             else if (req == ST_CREATURE && req_implied) req = -1;
         }
-        if (req >= 0) fd_request_state(&s_dir, req, req_fx, req_hold);
+        if (req >= 0) fd_request_state(&s_dir, req, req_hold);
         for (int q = 0; q < nsops; q++) {                   /* scenes, in the order they came */
             if (sops[q].op == MOLE_SCENE_PLAY) scene_play(&s_sp, sops[q].sc);
             else if (sops[q].op == MOLE_SCENE_CLEAR) scene_clear(&s_sp);
             else if (!scene_queue(&s_sp, sops[q].sc)) scene_free(sops[q].sc);
         }
-        if (nsops && scene_playing(&s_sp)) { fd_request_state(&s_dir, ST_SCENE, 0, false); fd_activity(&s_dir); }
+        if (nsops && scene_playing(&s_sp)) { fd_request_state(&s_dir, ST_SCENE, false); fd_activity(&s_dir); }
         if (req_work) fd_agent_work(&s_dir, req_hold_s);
         else if (req_mood >= 0) fd_agent_mood(&s_dir, req_mood, req_hold_s);
         else if (activity) fd_activity(&s_dir);
@@ -2745,8 +2729,8 @@ static void fluid_task(void *arg) {
         memcpy(s_stats.prof_ms, prof_ema, sizeof(float) * FP_DSAMPLE);
         s_stats.fps = fps; s_stats.frame_ms = fms; s_stats.pre_ms = pms; s_stats.sim_ms = sms; s_stats.wait_ms = wms;
         s_stats.energy = s_sim->energy; s_stats.err = s_sim->err;
-        s_stats.state = s_cur; s_stats.fx = s_cur_fx; s_stats.reel = s_dir.autoplay ? s_dir.reel : -1;
-        s_stats.autoplay = s_dir.autoplay; s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
+        s_stats.state = s_cur;
+        s_stats.asleep = fd_asleep(&s_dir); s_stats.status = fd_status(&s_dir);
         s_stats.mood = cr_mood(); s_stats.ctris = s_cute_tris;
         s_stats.act = cr_acting();
         s_stats.working = fd_working(&s_dir);
@@ -2915,7 +2899,7 @@ esp_err_t mole_fluid_creature_init(void) {
         if (cb) queue_creature(cb, clen, pkg, id);
     }
     /* boot: the director wants the creature (the one queued above loads on the task's first
-     * frame; the blob stands in only if none loads); at power on, the boot screen's word first */
+     * frame; the boot word stands in while none is); at power on, the boot screen's word first */
     fd_init(&s_dir, NULL, esp_random());
     sky_init(s_sky, s_dir.rng);                  /* (seeded from the director's, none of its numbers drawn) */
     weather_init(s_wx, s_dir.rng);               /* (the same seed, its own stream: weather.c) */
@@ -2926,7 +2910,7 @@ esp_err_t mole_fluid_creature_init(void) {
         if (molty_display_framebuffer()) { molty_display_flush(); s_glass_black = true; }   /* (the panel black with it) */
     }
     s_booted = true;
-    s_cur = ST_BLOB; s_cur_fx = 0; s_word = 0; s_ntok = 0;
+    s_cur = ST_CREATURE; s_word = 0; s_ntok = 0;      /* (none drawn till the director's first state: never the reader) */
     s_tnow = s_acc = 0.f; s_melt_t = 1e9f;
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
@@ -2934,7 +2918,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_dask = 0; atomic_store(&s_glass_ask, 0);
     s_follow = false; s_follow_word = 0; s_text_hidden = false;
     s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
-    s_sim->p.relax_up = RATE_UP[ST_BLOB]; s_sim->p.relax_down = RATE_DOWN[ST_BLOB];
+    s_sim->p.relax_up = RATE_UP[ST_CREATURE]; s_sim->p.relax_down = RATE_DOWN[ST_CREATURE];
 
     xSemaphoreTake(s_go, 0);                     /* fresh handshake: drawer idle, nothing queued */
     xSemaphoreTake(s_idle, 0);
@@ -3000,15 +2984,8 @@ esp_err_t mole_fluid_creature_render(void) {
     return ESP_OK;
 }
 
-static const char *state_name(int st, int fx, char *buf, size_t n) {
-    switch (st) {
-    case ST_THINKING: return "thinking";
-    case ST_TEXT:     return "text";
-    case ST_CREATURE: return "creature";
-    case ST_SCENE:    return "scene";
-    case ST_FX:       snprintf(buf, n, "effect:%s", FLUID_FX_NAMES[fx]); return buf;
-    default:          return "blob";
-    }
+static const char *state_name(int st) {
+    return st == ST_CREATURE ? "creature" : st == ST_SCENE ? "scene" : "text";
 }
 
 esp_err_t mole_fluid_creature_state_get_json(char **out) {
@@ -3048,13 +3025,11 @@ esp_err_t mole_fluid_creature_state_get_json(char **out) {
     xSemaphoreGive(s_mutex);
     if (!root) { cJSON_Delete(info); return ESP_ERR_NO_MEM; }
 
-    char sb[24], grid[12];
+    char grid[12];
     snprintf(grid, sizeof(grid), "%dx%d", c.grid_w, c.grid_h);
     cJSON_AddBoolToObject  (root, "ok",          true);
     cJSON_AddStringToObject(root, "creature",    "fluid");
-    cJSON_AddStringToObject(root, "state",       state_name(st.state, st.fx, sb, sizeof(sb)));
-    cJSON_AddBoolToObject  (root, "autoplay",    st.autoplay);
-    cJSON_AddNumberToObject(root, "reel_step",   st.reel);
+    cJSON_AddStringToObject(root, "state",       state_name(st.state));
     cJSON_AddNumberToObject(root, "wpm",         c.wpm);
     cJSON_AddStringToObject(root, "mood",        st.mood >= 0 ? CUTE_MOOD_NAMES[st.mood] : "");
     cJSON_AddBoolToObject  (root, "asleep",      st.asleep);
@@ -3161,13 +3136,9 @@ static int lookup(const char *v, const char *const *names, int n) {
     return -1;
 }
 
-static bool parse_state(const char *v, int *st, int *fx) {
-    *fx = 0;
-    if (!strcmp(v, "blob"))     { *st = ST_BLOB; return true; }
-    if (!strcmp(v, "thinking")) { *st = ST_THINKING; return true; }
+static bool parse_state(const char *v, int *st) {
     if (!strcmp(v, "text"))     { *st = ST_TEXT; return true; }
-    if (!strcmp(v, "creature")) { *st = ST_CREATURE; return true; }   /* falls back to blob if none loaded */
-    if (!strncmp(v, "effect:", 7)) { int f = lookup(v + 7, FLUID_FX_NAMES, FLUID_FX_COUNT); if (f >= 0) { *st = ST_FX; *fx = f; return true; } }
+    if (!strcmp(v, "creature")) { *st = ST_CREATURE; return true; }   /* the boot word stands in while none is loaded */
     return false;
 }
 
@@ -3386,14 +3357,13 @@ esp_err_t mole_fluid_creature_state_set_json(const char *body) {
         else {
             s_req_mood = work ? CM_IDLE : m; s_req_work = work; s_req_hold_s = hold_s;
             /* a mood alone means "show me the creature in that mood" */
-            if (!state_given) { s_req_state = ST_CREATURE; s_req_fx = 0; s_req_implied = true; }
+            if (!state_given) { s_req_state = ST_CREATURE; s_req_implied = true; }
         }
     }
     if ((j = cJSON_GetObjectItem(root, "state")) && cJSON_IsString(j)) {
-        int st, fx;
-        if (!strcmp(j->valuestring, "autoplay")) s_req_reel = true;     /* the demo reel, on request only */
-        else if (parse_state(j->valuestring, &st, &fx)) {
-            s_req_state = st; s_req_fx = fx; s_req_implied = false;
+        int st;
+        if (parse_state(j->valuestring, &st)) {
+            s_req_state = st; s_req_implied = false;
             s_req_text_hold = st == ST_TEXT && cJSON_IsTrue(cJSON_GetObjectItem(root, "hold"));
         }
         else ret = ESP_ERR_INVALID_ARG;

@@ -3,17 +3,15 @@
  *
  * Device port of device/creatures/fluid.html. One per-cell fluid (fluid_sim.h)
  * fills the round panel as braille dots; states are targets it flows toward:
- * creature (the .molty, home: boot lands here), blob (stands in while no creature is
- * loaded), thinking, text (speed reader), effect:ripple|vortex|wave, and the demo reel
- * ("autoplay", on request only). At power on the boot screen comes first: "molty.uno"
- * condenses out of the fluid, then the firmware default's creature paddles until the link is
- * up and dissolves into the chosen one (fluid_director.h "boot screen"). What is shown
+ * creature (the .molty, home: boot lands here), text (speed reader), a scene. Every change
+ * of picture is the one dissolve (fluid_draw.c, fluid_morph_t). At power on the boot screen
+ * comes first: "molty.uno" gathers on the empty glass, then dissolves into the creature once
+ * it is made; the word stands in while none is (fluid_director.h "boot screen"). What is shown
  * when (the same-state guard, idle mood flashes, sleep, the reader's return) is
  * fluid_director.h. Touch → ripple, IMU tilt → slosh.
  *
  * State via GET/POST /api/creature/state when "fluid" is active:
- *   POST {state: "creature"|"blob"|"thinking"|"text"|"effect:ripple"|"effect:vortex"
- *               |"effect:wave"|"autoplay",
+ *   POST {state: "creature"|"text" (any other is refused: ESP_ERR_INVALID_ARG),
  *         ring_color: "#rrggbb"|"accent" (the listening ring's default colour, kept in NVS;
  *               GET reports it the same way),
  *         listen_ms: 0 (unlimited) | 5000..30000 (the listen window an agent gets when it
@@ -42,7 +40,7 @@
  *         mood: idle|listening|thinking|speaking|happy|sleepy|surprised (alone: shows the creature),
  *         hold_s: 0..3600 (with mood: seconds before idle; 0 = until the next mood;
  *                 absent: happy / surprised revert after a few s, the rest persist)}
- *   Re-requesting the shown state changes nothing; autoplay is never persisted.
+ *   Re-requesting the shown state changes nothing. GET's state: "creature"|"text"|"scene".
  *   GET adds read-only fps, frame_ms, sim_ms, draw_ms, flush_ms, word, energy, asleep,
  *   indicator ("ok"|"wifi"|"relay"|"auth"), ...
  * POST /api/reader/text and /api/reader/append feed the speed reader.
