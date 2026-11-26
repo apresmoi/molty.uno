@@ -64,7 +64,19 @@ static char *slurp(const char *path, size_t *len) {
 }
 
 static int s_fno;
-static void frame(void) { bg_tick(); wm_frame(DT); s_fno++; char *e = wm_events(); free(e); }
+/* every frame: a new look with no change of picture running (it came at once: a cut), changes started */
+static uint32_t s_look_was;
+static bool s_on_was;
+static int s_cuts, s_starts, s_slow, s_slow_n;   /* (s_slow: frames of a change over 33.4 ms in the panel model) */
+static void frame(void) {
+    bg_tick(); wm_frame(DT); s_fno++; char *e = wm_events(); free(e);
+    const uint32_t look = s_draw ? s_draw->m.look & ~FLUID_LOOK_DUST : 0;
+    const bool on = s_draw && fluid_draw_morphing(s_draw);
+    s_cuts += look != s_look_was && !on && !s_on_was && s_look_was;
+    s_starts += on && !s_on_was;
+    if (on) { s_slow += wm_frame_info()[FI_FRAME_MS] > 33.4f; s_slow_n++; }
+    s_look_was = look; s_on_was = on;
+}
 static void frames(int n) { while (n-- > 0) frame(); }
 
 static uint8_t s_ref[PX * PX];
@@ -113,23 +125,22 @@ static const uint32_t CAT = 0x94000001u;            /* fluid_look_of(FLUID_LOOK_
 
 /* a start-up: until the cat stands (or `until` frames). Only the word, its change and the cat; the word whole from
  * frame 70 (formed) until its change starts. The frame the change started and the one the cat stood, or -1. */
-typedef struct { int start, stood, changes, odd; float least_kept; } boot_t;
+typedef struct { int start, stood, changes, odd, gather, gather_end; float least_kept; } boot_t;
 static boot_t boot_run(int until, int welcome_at) {
-    boot_t b = { -1, -1, 0, 0, 1.f };
-    bool was = false;
-    const int ends0 = s_draw ? s_draw->m.ends : 0;
+    boot_t b = { -1, -1, 0, 0, 0, -1, 1.f };
+    bool was = s_draw && fluid_draw_morphing(s_draw);
     while (s_fno < until && b.stood < 0) {
         if (s_fno == welcome_at) mole_fluid_allow_internal();
         frame();
         const bool on = fluid_draw_morphing(s_draw);
-        if (on && !was) { b.changes++; if (b.start < 0) b.start = s_fno; }
+        if (on && !was) { if (s_fno <= 3) b.gather++; else { b.changes++; if (b.start < 0) b.start = s_fno; } }
+        if (!on && was && b.gather_end < 0) b.gather_end = s_fno;
         if (!on && was && (s_draw->m.look & ~FLUID_LOOK_DUST) == (CAT & ~FLUID_LOOK_DUST)) b.stood = s_fno;
         was = on;
         b.odd += !(word() || s_cur == ST_CREATURE) || s_cur == ST_BLOB || s_dir.cur == FD_ST_BLOB || (s_dir.pending && s_dir.next == FD_ST_BLOB);
         if (s_fno == 70) bright_of(s_ref);
         if (s_fno > 70 && b.start < 0) { const float k = kept(); if (k < b.least_kept) b.least_kept = k; }
     }
-    b.changes = s_draw->m.ends - ends0 > b.changes ? s_draw->m.ends - ends0 : b.changes;
     return b;
 }
 
@@ -147,6 +158,8 @@ static void case_say(const char *state, bool held) {
     CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
     wm_device(1);
     frames(150);
+    CHECK(!s_cuts, "power on to the cat: %d looks came at once", s_cuts);
+    const int starts = s_starts;
     CHECK(wm_state(state) == 0, "the words");
     int most = 0, n = 0, start = -1, words = 0;
     bool was = false;
@@ -163,6 +176,9 @@ static void case_say(const char *state, bool held) {
     printf("%s: the words %d lit px in the reader's box; going: most %d, the cat settled %d\n", state, words, most, settled);
     CHECK(start > 0 && words > 2 * settled, "the words were up, then one change back to the cat (at frame %d)", start);
     CHECK(most <= settled * 115 / 100, "the word came back over the cat: %d lit px in its box, the cat alone %d", most, settled);
+    CHECK(!s_cuts && s_starts - starts == 2, "the words came and went by a change each (%d at once, %d changes)", s_cuts, s_starts - starts);
+    printf("  frames of a change over 33.4 ms in the panel model: %d of %d\n", s_slow, s_slow_n);
+    CHECK(s_slow <= 2, "%d frames of its changes over the frame (30 a second the floor)", s_slow);
 }
 
 /* a question over a scene: the scene stays as it is until the question's change starts, which takes it from there; no
@@ -209,7 +225,8 @@ static void case_ask_scene(const char *root) {
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
     boot_t b = boot_run(300, -1);
-    printf("early cat: change at %.2f s, the cat stands at %.2f s\n", b.start / 30.f, b.stood / 30.f);
+    printf("early cat: the word gathered by %.2f s, its change at %.2f s, the cat stands at %.2f s\n", b.gather_end / 30.f, b.start / 30.f, b.stood / 30.f);
+    CHECK(b.gather == 1 && b.gather_end >= 15 && b.gather_end <= 30, "power on: the word gathers on the empty glass in ~0.65 s (%d, done at frame %d)", b.gather, b.gather_end);
     CHECK(b.odd == 0, "early: %d frames showed something but the word, its change or the cat", b.odd);
     CHECK(b.start >= 83 && b.start <= 86 && b.changes == 1, "early: one change, at the word's 2.8 s (frame %d, %d changes)", b.start, b.changes);
     CHECK(b.least_kept >= 0.97f, "early: the word whole till its change (%.2f kept)", b.least_kept);
