@@ -21,6 +21,7 @@
 #define CC_FREE(p)   free(p)
 #endif
 
+#define CC_CUT_BLEND 0.7f   /* s: the crossfade home from a gesture cut short (clip-player.js CUT_BLEND) */
 #define EPS 1e-5   /* a clip's end, against float clocks (clip-player.js EPS) */
 static const char *const MOODS[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
 static const char *const GROUPS[CG_COUNT] = { "torso", "hindL", "hindR", "head", "legF.L", "legF.R", "tail", "bowl", "yarn",
@@ -68,6 +69,9 @@ struct cc {
     int cur_clip; double t; float blendT, blendD; float ox, oz, lockX, lockZ;
     int queue[16], nq;
     float oyaw;                         /* the heading carried between clips (rad, about up), as ox, oz carry the place */
+    float cut_blend;                    /* a gesture cut short (cc_stop): the next crossfade this long, so it eases home */
+    bool cutting; int8_t csign[CC_NODES_MAX];                       /* ...that crossfade plays: the paw lock holds the paws that were down, whatever
+                                         * the new clip does with them (a paw landing mid-way never jolts the body)   */
     int chain_on, chain_left, chain_prev, chain_stage; uint32_t rng;   /* the chain playing (-1: none), its draws */
     int mood; int gesture; float gestureT; bool gstarted, pending;
     float camx, camz, camyaw; bool snap;
@@ -448,11 +452,15 @@ static void sample_pose(const cc_t *c, int ci, double t, float *pose) {
     }
 }
 
-static void blend_pose(const float *a, const float *b, float w, float *out, int nn) {
+/* sg (NULL: the shorter way each frame): each node's way kept from the first frame (0: not chosen yet), so a target
+ * that turns far while the crossfade lasts never flips it to the other side mid-way */
+static void blend_pose(const float *a, const float *b, float w, float *out, int nn, int8_t *keep) {
     for (int i = 0; i < nn; i++) {
         const int o = i * CC_POSE;
         for (int k = 0; k < 3; k++) { out[o + k] = a[o + k] + (b[o + k] - a[o + k]) * w; out[o + 7 + k] = a[o + 7 + k] + (b[o + 7 + k] - a[o + 7 + k]) * w; }
-        const float d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6], sg = d < 0 ? -1.f : 1.f;
+        const float d = a[o + 3] * b[o + 3] + a[o + 4] * b[o + 4] + a[o + 5] * b[o + 5] + a[o + 6] * b[o + 6];
+        if (keep && !keep[i]) keep[i] = d < 0 ? -1 : 1;
+        const float sg = keep ? (float)keep[i] : d < 0 ? -1.f : 1.f;
         float l = 0.f;
         for (int k = 3; k < 7; k++) { out[o + k] = a[o + k] + (sg * b[o + k] - a[o + k]) * w; l += out[o + k] * out[o + k]; }
         l = sqrtf(l); if (l <= 0.f) l = 1.f;
@@ -781,7 +789,7 @@ static void start(cc_t *c, int ci, float blend) {
         }
         c->ox = ox; c->oz = oz; c->oyaw = y1;
     }
-    c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend;
+    c->cur_clip = ci; c->t = t0; c->blendT = 0.f; c->blendD = blend; c->cutting = false;
 }
 
 /* a draw from the creature's seed among the clips that start in family fam (all of them: fam < 0), never `avoid` (when
@@ -837,7 +845,10 @@ static void advance(cc_t *c) {
     const int next = c->queue[0];
     memmove(c->queue, c->queue + 1, sizeof(int) * (size_t)(--c->nq));
     if (c->gesture >= 0 && next == c->gest[c->gesture].clip) c->gstarted = true;
-    start(c, next, c->blend);
+    const bool cut = c->cut_blend > 0.f;
+    start(c, next, cut ? c->cut_blend : c->blend);
+    c->cut_blend = 0.f; c->cutting = cut;
+    memset(c->csign, 0, sizeof(c->csign));
 }
 
 /* ── the API ───────────────────────────────────────────────────────────── */
@@ -962,6 +973,7 @@ bool cc_act(cc_t *c, const char *name) { c->come = 0; return act(c, name); }   /
 bool cc_stop(cc_t *c) {   /* clip-player.js stop() */
     if (c->gesture < 0 || c->come) return false;
     c->gesture = -1; c->chain_on = -1; c->pending = true;
+    c->cut_blend = CC_CUT_BLEND;            /* from mid-move, a longer crossfade than a clip's end needs: no snap */
     interrupt(c);
     return true;
 }
@@ -1013,7 +1025,7 @@ void cc_update(cc_t *c, float dt) {
     sample_pose(c, c->cur_clip, c->t, c->pose);
     const float w = ease(c->blendD > 0.f ? c->blendT / c->blendD : 1.f);
     if (w < 1.f) {
-        blend_pose(c->from, c->pose, w, c->cur, c->nn);
+        blend_pose(c->from, c->pose, w, c->cur, c->nn, c->cutting ? c->csign : NULL);
         for (int i = 1; i < c->nn; i++)          /* a prop (a root-level node but the first) is never cross-faded: it is where
                                                   * the clip puts it, so a bowl leaving never sweeps across to where it rests */
             if (c->node[i].parent < 0) memcpy(c->cur + i * CC_POSE, c->pose + i * CC_POSE, sizeof(float) * CC_POSE);
@@ -1026,7 +1038,7 @@ void cc_update(cc_t *c, float dt) {
         for (int i = 0; i < c->ncon; i++) {
             float a[3], b[3];
             point_on(c->fromWorld, c->con[i].node, c->con[i].p, a); point_on(c->world, c->con[i].node, c->con[i].p, b);
-            if (a[1] < 0.03f && b[1] < 0.03f) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
+            if (a[1] < 0.03f && (c->cutting || b[1] < 0.03f)) { dx += a[0] - b[0]; dz += a[2] - b[2]; n++; }
         }
         if (n) { const float q = (1.f - w) / n; c->lockX = dx * q; c->lockZ = dz * q; forward(c, P, c->ox + c->lockX, c->oz + c->lockZ, c->world); }
     } else { c->lockX = c->lockZ = 0.f; }

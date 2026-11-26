@@ -314,13 +314,13 @@ static void test_packed(const char *pkgdir, const char *plain) {
 /* a gesture cut short (cc_stop) at many places: from that frame on no node but the root moves more in a frame than the
  * gesture itself ever does (no pop), and it is soon back in its mood's loop, sitting */
 static void test_stop(const char *pkgdir) {
-    static const char *const G[] = { "groom", "wash", "leg_up" };   /* the cat's habits: what a touch or an agent cuts short */
+    static const char *const G[] = { "groom", "wash_l", "wash_r", "leg_up" };   /* the cat's habits: what a touch or an agent cuts short */
     cc_t *probe = load(pkgdir, "cat", NULL);
     if (!probe) return;
     const int N = cc_nodes(probe), sit = cc_clip_find(probe, "idle");
     cc_destroy(probe);
     float *prev = malloc(sizeof(float) * 12 * (size_t)N);
-    for (int gi = 0; gi < 3; gi++) {
+    for (int gi = 0; gi < 4; gi++) {
         float own = 0.f, cut = 0.f, home = 0.f; int tries = 0, stuck = 0;
         for (int at = 0; at < 12; at++) {
             cc_t *c = load(pkgdir, "cat", NULL);
