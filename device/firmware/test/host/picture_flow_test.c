@@ -10,7 +10,8 @@
  *     creature the word stays for good, lit, and a say over it comes back to it;
  *   the relay's first welcome (the grid rebuilt in internal RAM): never while the word is up or a change runs, so the
  *     word never melts and the change is never cut short; the rebuild still happens once the picture is still;
- *   a say's words going back to the cat: the last word never comes back over the cat as its dust gathers.
+ *   a say's words going back to the cat: the last word never comes back over the cat as its dust gathers;
+ *   a question over a scene: the scene stays whole until the question's one change takes it (no coarse dots between).
  *
  *   picture_flow_test <repo root> <case>   (picture_flow_build.sh runs every case)
  */
@@ -164,6 +165,46 @@ static void case_say(const char *state, bool held) {
     CHECK(most <= settled * 115 / 100, "the word came back over the cat: %d lit px in its box, the cat alone %d", most, settled);
 }
 
+/* a question over a scene: the scene stays as it is until the question's change starts, which takes it from there; no
+ * frame between shows a coarse stand-in (the glass's look, at once) */
+static void case_ask_scene(const char *root) {
+    char path[1024]; size_t len;
+    snprintf(path, sizeof(path), "%s/packages/astrology/astrology.json", root);
+    char *astro = slurp(path, &len);
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0 && wm_package(astro, len) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    CHECK(wm_scene("globe", "{\"img\":\"moon\",\"lit\":0.5,\"side\":1,\"r\":0.3,\"spin\":0}", 40.f) == 0, "a scene");
+    frames(90);
+    const uint32_t scene = s_draw->m.look & ~FLUID_LOOK_DUST;
+    CHECK((scene & 0x08000000u) && !fluid_draw_morphing(s_draw), "the scene stands (look %08x)", (unsigned)scene);
+    CHECK(wm_ask("{\"title\":\"keep it?\",\"options\":[\"yes\",\"no\"]}") == 0, "a question");
+    static uint8_t prev[PX * PX * 4];
+    memcpy(prev, wm_pixels(), sizeof(prev));
+    int odd = 0, cut = 0, worst = 0, starts = 0;
+    bool was = false;
+    for (int i = 0; i < 70; i++) {
+        frame();
+        const uint32_t look = s_draw->m.look & ~FLUID_LOOK_DUST;
+        const bool on = fluid_draw_morphing(s_draw);
+        odd += look != scene && !(look & 0x20000000u);   /* only the scene, then the question */
+        cut += look != scene && !on && !was && starts == 0;
+        starts += on && !was;
+        if (!on && !was) {                               /* (outside a change, nothing may jump) */
+            const uint8_t *p = wm_pixels();
+            int ch = 0;
+            for (int k = 0; k < PX * PX * 4; k++) if ((k & 3) != 3 && p[k] != prev[k]) { ch++; k |= 3; }
+            if (ch > worst) worst = ch;
+        }
+        memcpy(prev, wm_pixels(), sizeof(prev));
+        was = on;
+    }
+    printf("question over a scene: %d frames of another look, worst jump outside the change %d px\n", odd, worst);
+    CHECK(odd == 0 && cut == 0 && starts == 1, "only the scene, then the question by one change (%d other, %d cut, %d changes)", odd, cut, starts);
+    CHECK(worst <= 6000, "a frame outside the change changed %d px (a pop)", worst);
+    free(astro);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -243,6 +284,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "hold")) {   /* a held word, then home */
         case_say("{\"state\":\"text\",\"text\":\"update\",\"hold\":true}", true);
     }
+    else if (!strcmp(c, "ask-scene")) case_ask_scene(argv[1]);
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;

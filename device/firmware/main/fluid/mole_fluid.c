@@ -1429,7 +1429,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
      * with no step of the whole fluid) */
     {   /* on fine dust a scene comes and goes by the drawer's change of picture (fluid_draw_morph_look): it is whole here
          * at once; on the dots it breaks into dust and forms from it (scene_hd_tick) */
-        const bool scene = s_cur == ST_SCENE && s_sp.cur, plain = s_ask.scr.phase != FLUID_ASK_NONE;
+        const bool scene = s_cur == ST_SCENE && s_sp.cur, plain = s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE;   /* (the
+                                                 * question's picture made: the frame its change starts, never before) */
         static bool fine_was;
         const bool fine = scene && s_fine && s_nshp >= 0;
         if (fine || (fine_was && !scene)) s_hd = fine && !plain ? (scene_hd_t){ s_sp.gen, false, 0.f } : (scene_hd_t){ 0, false, 1.f };
