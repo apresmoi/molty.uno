@@ -241,6 +241,8 @@ typedef struct { mole_scene_op_t op; scene_t *sc; } scene_op_t;
 static scene_op_t s_scene_ops[SCENE_QUEUE_MAX + 2];
 static int        s_scene_nops, s_scene_nq;      /* pending ops; the player's queue (task's copy) */
 static bool     s_req_regrid = false;           /* rebuild the grid: hot fields moved (shed / allow internal) */
+static bool     s_req_internal = false;         /* ...into internal RAM: once the picture is not changing (a rebuild re-enters
+                                                 * the state: the boot word would melt, a change of picture be cut short) */
 static bool     s_shed = false;                 /* the heap guard shed them: internal RAM stays off this boot */
 /* a say's mood marks tint its words from the cued word on (mole_fluid_cue_mood):
  * 0 = the palette's colours, else FLUID_RGB | 0xRRGGBB */
@@ -2311,7 +2313,10 @@ static void fluid_task(void *arg) {
         scene_op_t sops[SCENE_QUEUE_MAX + 2];
         const int nsops = s_scene_nops;
         memcpy(sops, s_scene_ops, sizeof(scene_op_t) * (size_t)nsops); s_scene_nops = 0;
-        bool regrid = s_req_regrid; s_req_regrid = false;
+        bool regrid = s_req_regrid || (s_req_internal && !fd_boot_word(&s_dir) && !s_dir.pending && !s_ask.making &&
+                                       !fluid_draw_morphing(s_draw));
+        s_req_regrid = false;
+        if (regrid) s_req_internal = false;
         const touch_read_t tp = s_tp;
         if (!s_idle_life_loaded) { s_idle_life = idle_life_load(); s_idle_life_loaded = true; }
         int idle_life = s_idle_life;
@@ -3551,7 +3556,7 @@ void mole_fluid_shed_internal(void) {
     fluid_sim_allow_internal(false);                   /* any sim built from now on, too */
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    s_shed = s_req_regrid = true;
+    s_shed = s_req_regrid = true; s_req_internal = false;
     xSemaphoreGive(s_mutex);
 }
 
@@ -3643,7 +3648,7 @@ void mole_fluid_allow_internal(void) {
     if (!s_mutex) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     static bool done;                                  /* once a boot; never after a shed */
-    if (!done && !s_shed) { done = s_req_regrid = true; fluid_sim_allow_internal(true); }
+    if (!done && !s_shed) { done = s_req_internal = true; fluid_sim_allow_internal(true); }
     xSemaphoreGive(s_mutex);
 }
 
