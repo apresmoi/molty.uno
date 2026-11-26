@@ -11,7 +11,10 @@
  *   the relay's first welcome (the grid rebuilt in internal RAM): never while the word is up or a change runs, so the
  *     word never melts and the change is never cut short; the rebuild still happens once the picture is still;
  *   a say's words going back to the cat: the last word never comes back over the cat as its dust gathers;
- *   a question over a scene: the scene stays whole until the question's one change takes it (no coarse dots between).
+ *   a question over a scene: the scene stays whole until the question's one change takes it (no coarse dots between);
+ *   screen off (by hand, the nap), power off, a restart: the picture dissolves to an empty glass first, then the panel
+ *     sleeps (and nothing is drawn) or the power goes; on again, it gathers from the empty glass;
+ *   creatures: a creature change and the way home with one drawn in the fluid are each one change of picture.
  *
  *   picture_flow_test <repo root> <case>   (picture_flow_build.sh runs every case)
  */
@@ -221,6 +224,107 @@ static void case_ask_scene(const char *root) {
     free(astro);
 }
 
+/* the screen off by hand: the cat dissolves to an empty glass, then the panel sleeps and nothing is simulated or drawn;
+ * on again: the panel black, the cat gathers on it by one short change starting the next frame */
+static void case_screen(void) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    const int starts = s_starts;
+    mole_fluid_screen(false);
+    int off = -1;
+    float lit_before = 1.f;
+    for (int i = 0; i < 45 && off < 0; i++) { const float l = lit_share(); frame(); if (!mole_fluid_screen_on()) off = i + 1; else lit_before = l; }
+    (void)lit_before;
+    printf("screen off: dark and asleep after %.2f s\n", off / 30.f);
+    CHECK(off > 20 && off <= 33 && s_starts - starts == 1 && !s_cuts, "off: one change to the empty glass, asleep within 1.1 s (%d frames)", off);
+    CHECK(fluid_draw_morph_carries(s_draw) || s_draw->m.look == FLUID_LOOK_EMPTY, "the glass empty when it slept");
+    const uint32_t n0 = s_frame_no;
+    frames(60);
+    CHECK(s_frame_no == n0 && !mole_fluid_screen_on(), "asleep: no frame simulated or drawn in 2 s (%u)", (unsigned)(s_frame_no - n0));
+    mole_fluid_screen(true);
+    frame();
+    CHECK(mole_fluid_screen_on() && lit_share() < 0.002f && fluid_draw_morphing(s_draw), "on: the panel black, the gathering started the next frame");
+    int gather = 0;
+    while (fluid_draw_morphing(s_draw) && gather < 60) { frame(); gather++; }
+    printf("screen on: gathered in %.2f s\n", (gather + 1) / 30.f);
+    CHECK(gather >= 14 && gather <= 26 && !s_cuts && (s_draw->m.look & ~FLUID_LOOK_DUST) == (CAT & ~FLUID_LOOK_DUST), "the cat gathered in ~0.65 s (%d frames)", gather);
+}
+
+/* the nap: the cat asleep on battery for the set time: the same dissolve to dark, then asleep */
+static void case_nap(void) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20261122, 0) == 0, "power on");
+    CHECK(wm_state("{\"screen_off_battery_s\":10}") == 0, "the nap's setting");
+    wm_device(1);
+    frames(30);
+    s_dir.cfg.sleep_after_s = 3.f; s_dir.cfg.yawn_lead_s = 1.f;
+    mole_fluid_power(NAP_POWER_BATTERY);
+    const int starts = s_starts;
+    int i = 0;
+    while (mole_fluid_screen_on() && i < 30 * 30) { frame(); i++; }
+    CHECK(!mole_fluid_screen_on() && s_draw->m.look == FLUID_LOOK_EMPTY && s_starts - starts == 1 && !s_cuts, "the nap: by one change to the empty glass (%d changes)", s_starts - starts);
+}
+
+/* power off: the picture dissolves into "bye!", which holds, then to the empty glass: done in 2.5 s; no blob, no pond */
+static void case_bye(void) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    const int starts = s_starts;
+    mole_fluid_goodbye();
+    int i = 0, odd = 0, words = 0;
+    while (!mole_fluid_goodbye_done() && i < 150) {
+        frame(); i++;
+        odd += s_cur == ST_BLOB || s_cur == ST_FX || !mole_fluid_screen_on();
+        words += s_cur == ST_TEXT && !fluid_draw_morphing(s_draw);
+    }
+    printf("power off: done after %.2f s, the word whole %.2f s\n", i / 30.f, words / 30.f);
+    CHECK(mole_fluid_goodbye_done() && i <= 78, "done within 2.6 s (%.2f s)", i / 30.f);
+    CHECK(!odd && !s_cuts && s_starts - starts == 2 && words >= 8, "the word by a change, then dark by another; nothing else (%d odd, %d changes)", odd, s_starts - starts);
+    CHECK(lit_share() < 0.002f && s_draw->m.look == FLUID_LOOK_EMPTY, "the glass empty when done");
+    mole_fluid_screen(false); mole_fluid_screen(true);
+    frames(30);
+    CHECK(mole_fluid_goodbye_done() && lit_share() < 0.002f, "nothing brings a picture back after it");
+}
+
+/* a restart the firmware chose (mole_fluid_dark): the picture dissolves to the empty glass, the panel stays on */
+static void case_restart(void) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    atomic_store(&s_dark_req, true);   /* (mole_fluid_dark's request; its wait is a task's) */
+    int i = 0;
+    while (!atomic_load(&s_dark_done) && i < 60) { frame(); i++; }
+    CHECK(atomic_load(&s_dark_done) && i <= 33 && mole_fluid_screen_on() && lit_share() < 0.002f && !s_cuts, "dark in %.2f s, the panel on", i / 30.f);
+}
+
+/* creatures: a change between two of them is one change of picture, either drawn as lines or in the fluid; so is the
+ * way home from a question with a creature drawn in the fluid */
+static void case_creatures(const char *root) {
+    char path[1024]; size_t len;
+    snprintf(path, sizeof(path), "%s/packages/octopus/octopus.json", root);
+    char *oct = slurp(path, &len);
+    size_t dlen;
+    snprintf(path, sizeof(path), "%s/packages/duck/duck.json", root);
+    char *duck = slurp(path, &dlen);
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    const char *name[] = { "cat to octopus", "octopus to duck", "duck to cat" };
+    for (int c = 0; c < 3; c++) {
+        const int starts = s_starts;
+        CHECK((c == 0 ? wm_creature("octopus", oct, len) : c == 1 ? wm_creature("duck", duck, dlen) : wm_creature("cat", s_cat, s_cat_len)) == 0, "%s", name[c]);
+        frames(90);
+        CHECK(s_starts - starts == 1 && !s_cuts, "%s: one change of picture (%d, %d at once)", name[c], s_starts - starts, s_cuts);
+    }
+    CHECK(wm_creature("octopus", oct, len) == 0, "the octopus"); frames(90);
+    const int starts = s_starts;
+    CHECK(wm_ask("{\"title\":\"keep it?\",\"options\":[\"yes\",\"no\"]}") == 0, "a question"); frames(90);
+    wm_ask_end(); frames(90);
+    CHECK(s_starts - starts == 2 && !s_cuts, "the octopus to a question and home: a change each (%d, %d at once)", s_starts - starts, s_cuts);
+    free(oct); free(duck);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -302,6 +406,11 @@ int main(int argc, char **argv) {
         case_say("{\"state\":\"text\",\"text\":\"update\",\"hold\":true}", true);
     }
     else if (!strcmp(c, "ask-scene")) case_ask_scene(argv[1]);
+    else if (!strcmp(c, "screen")) case_screen();
+    else if (!strcmp(c, "nap")) case_nap();
+    else if (!strcmp(c, "bye")) case_bye();
+    else if (!strcmp(c, "restart")) case_restart();
+    else if (!strcmp(c, "creatures")) case_creatures(argv[1]);
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;
