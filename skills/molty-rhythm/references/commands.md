@@ -10,8 +10,9 @@ molty skill's pairing), body `{"name": …, "args": {…}}`.
 
 1. **Install** the `rhythm` package once, exactly as the astro skill installs `astrology`
    (`pkg.list`, then `pkg.install` with the entry of `packages/index.json`; Molty asks its human).
-2. **The clock**: `{"name":"scene.play","args":{"pkg":"rhythm","layout":"clock","params":{},"ttl_s":600}}`.
+2. **The clock**: `{"name":"scene.play","args":{"pkg":"rhythm","layout":"clock","params":{"tick_ms":0,"tick":0},"ttl_s":600}}`.
    It draws whatever Molty's beat player holds; the sound stops when the clock leaves the screen.
+   `tick_ms` (5 to 60) and `tick` (25 to 100 percent) set the rim's tick on the motor; 0 is Molty's own.
 3. **The rhythm**: `{"name":"rhythm.play","args":{"rhythms":[…],"pick":0,"bpm":100}}`.
    - `rhythms`: the library, 1 to 16 of them, each as `library.mjs` `wire()` makes it:
      `{"id":"chacarera","label":"CHACARERA","steps":6,"per":3,"beats":[1,4],"count_in":1,
@@ -20,24 +21,27 @@ molty skill's pairing), body `{"name": …, "args": {…}}`.
      "bars":[{"name":"A","hits":[[1,4],[3,5]]},{"name":"B","hits":[[],[3,5]]}],"order":[0,0,1,0]}`.
      `lengths` (one a step) and `swing` (0 to 0.33) are optional. Up to 32 steps, 4 layers, 8 bars, 16 in an order.
    - `pick`: which one plays; `bpm` 40 to 220; optional `mute` (layer ids), `buzz` (true: the motor
-     on each main beat), `paused` (true: the clock at rest until the accept button).
+     on each main beat), `paused` (true: stopped, ready to choose, until a tap in the middle).
    - Answers `{"rhythm":"chacarera","bpm":100}`. Errors: `invalid_args`, `unsupported` (no `rhythm` in `relay.caps`).
 4. **Change it**: `{"name":"rhythm.set","args":{…}}` with any of `bpm`, `pick`, `mute` (the whole
-   list, `[]` for none), `next: true` (the next bar of the phrase, at the bar line), `buzz`, `paused`.
-   A tempo change takes effect at once and never restarts; a new `pick` starts after a count-in.
+   list, `[]` for none), `next: true` (the next bar of the phrase, at the bar line), `buzz`, `paused`
+   (true: stopped, choosing, back at the phrase's start; false: it plays after a count-in).
+   A tempo change takes effect at once and never restarts; a new `pick` starts after a count-in
+   (stopped: it is shown, silent).
    Answers the player's state `{rhythm, bpm, muted, paused, buzz}`; `not_playing` when nothing was played.
 5. **Stop**: `{"name":"rhythm.stop"}`: silence, and the clock leaves the screen.
 
 ## Events you get
 
-Molty handles every click and tap itself and tells you where things settled:
+Molty handles every click and tap itself and tells you where things settled. A tap in the middle
+plays and stops; stopped, the rim chooses the rhythm; playing, it sets the tempo.
 
 | event | data | when |
 |---|---|---|
 | `ring` | `{"spot":"tempo","value":112}` | the finger left the rim after a tempo change |
-| `ring` | `{"spot":"rhythm","index":6,"id":"son-clave"}` | a rhythm was chosen with the rim and now plays |
+| `ring` | `{"spot":"rhythm","index":6,"label":"SON CLAVE","id":"son-clave"}` | stopped, the rim was turned to another rhythm (it shows, silent; a tap in the middle plays it) |
 | `tap` | `{"spot":"aro","muted":true}` | a drum's dot was tapped (muted, or back) |
-| `rhythm` | `{"state":"paused","rhythm":"chacarera","bpm":104}` | `playing`, `paused` (the accept button), `stopped` (the other button, or the clock went) |
+| `rhythm` | `{"state":"paused","rhythm":"chacarera","bpm":104}` | `playing` (a tap in the middle or the accept button), `paused` (stopped on the clock, choosing: the same), `stopped` (the other button, or the clock went: it left) |
 
 ## Conventions
 

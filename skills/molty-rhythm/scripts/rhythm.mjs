@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // rhythm.mjs: a rhythm on Molty, as a clock that plays it (the rhythm package and Molty's beat player).
-//   rhythm.mjs play <id> [--bpm n] [--mute drum,drum] [--buzz] [--still] [--ttl s]
+//   rhythm.mjs play <id> [--bpm n] [--mute drum,drum] [--buzz] [--still] [--ttl s] [--tick percent] [--tick-ms ms]
 //   rhythm.mjs set [--bpm n] [--rhythm id] [--mute drum,drum|none] [--next] [--buzz on|off] [--pause|--resume]
 //   rhythm.mjs stop | list | check | install | uninstall | status
 // Reads the pairing the molty skill stored (~/.config/molty/env + token; MOLTY_CONFIG_DIR, MOLTY_RELAY, MOLTY_DEVICE
@@ -19,7 +19,7 @@ const RAW = 'https://raw.githubusercontent.com/apresmoi/molty.uno/main/';
 const INDEX = process.env.MOLTY_PKG_INDEX ?? `${RAW}packages/index.json`;
 const DEFAULT_RELAY = 'https://molty-relay.alicenet.workers.dev'; // the molty skill's default relay (MOLTY_RELAY overrides)
 
-const VALUED = ['--bpm', '--mute', '--ttl', '--rhythm', '--buzz'];
+const VALUED = ['--bpm', '--mute', '--ttl', '--rhythm', '--buzz', '--tick', '--tick-ms'];
 const argv = process.argv.slice(2), flag = (k) => argv.includes(k), opt = (k, d) => { const i = argv.indexOf(k); return i < 0 ? d : argv[i + 1]; };
 const [what, sub] = argv.filter((a, i) => !a.startsWith('--') && !VALUED.includes(argv[i - 1]));
 const dry = flag('--dry-run');
@@ -91,8 +91,11 @@ const facts = (r, bpm) => ({ id: r.id, name: r.name, bpm, status: r.status, step
 async function play() {
   const r = find(sub), bpm = opt('--bpm') ? bpmOf(opt('--bpm')) : r.tempo.bpm, mute = mutes(r, opt('--mute')), still = flag('--still');
   const ttl = Math.max(10, Math.min(600, +opt('--ttl', 600)));
+  // the rim's tick on the motor (0: Molty's own, 22 ms at 80 percent); for tuning it by feel
+  const tick = (k, lo, hi) => { const v = Math.round(+opt(k, 0)); if (v && !(v >= lo && v <= hi)) throw new Error(`${k} must be ${lo}..${hi} (or 0)`); return v; };
+  const params = { tick_ms: tick('--tick-ms', 5, 60), tick: tick('--tick', 25, 100) };
   await ensure();
-  const scene = () => send('scene.play', { pkg: PKG, layout: LAYOUT, params: {}, ttl_s: ttl });
+  const scene = () => send('scene.play', { pkg: PKG, layout: LAYOUT, params, ttl_s: ttl });
   try { await scene(); } catch (e) {
     if (e.code !== 'not_installed') throw e;
     await install(await entry());   // the store was wiped (a factory flash): once more
@@ -100,7 +103,7 @@ async function play() {
   }
   await send('rhythm.play', { rhythms: LIB.map(wire), pick: LIB.indexOf(r), bpm, ...(mute?.length ? { mute } : {}), ...(flag('--buzz') ? { buzz: true } : {}), ...(still ? { paused: true } : {}) });
   const off = mute?.map((id) => r.layers[id].name.split(',')[0].toLowerCase()).join(' and ');
-  console.log(`SAY: ${still ? `${r.name}. Press the accept button to start.` : off ? `${r.name} without ${off}.` : `${r.name}, at ${bpm}.`}`);
+  console.log(`SAY: ${still ? `${r.name}. Tap the middle to start.` : off ? `${r.name} without ${off}.` : `${r.name}, at ${bpm}.`}`);
   console.log(`FACTS: ${JSON.stringify(facts(r, bpm))}`);
 }
 
@@ -111,7 +114,7 @@ async function set() {
   if (opt('--mute') !== undefined) args.mute = mutes(r, opt('--mute'));
   if (flag('--next')) args.next = true;
   if (opt('--buzz') !== undefined) args.buzz = opt('--buzz') === 'on';
-  if (flag('--pause')) args.paused = true;
+  if (flag('--pause')) args.paused = true;    // stopped on the clock, choosing (the human taps the middle to play)
   if (flag('--resume')) args.paused = false;
   if (!Object.keys(args).length) throw new Error('set what? --bpm, --rhythm, --mute, --next, --buzz, --pause or --resume');
   const got = await send('rhythm.set', args);
@@ -130,7 +133,7 @@ try {
     case 'install': await ensure(); break;
     case 'uninstall': await send('pkg.remove', { id: PKG }); console.log(`removed ${PKG}`); break;
     case 'status': console.log(JSON.stringify(await send('pkg.list', {}))); break;
-    default: throw new Error('usage: rhythm.mjs play <id> [--bpm n] [--mute drum] [--buzz] [--still] | set ... | stop | list | check | install | uninstall | status [--dry-run]');
+    default: throw new Error('usage: rhythm.mjs play <id> [--bpm n] [--mute drum] [--buzz] [--still] [--tick pct] [--tick-ms ms] | set ... | stop | list | check | install | uninstall | status [--dry-run]');
   }
 } catch (e) {
   console.error(`molty-rhythm: ${e.message}`);

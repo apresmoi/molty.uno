@@ -1,14 +1,14 @@
 ---
 name: molty-rhythm
-description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a rim they turn for the tempo and a centre tap to choose another rhythm. Twelve verified rhythms (chacarera, clave, bossa nova, the 12/8 bell, solea, aksak and more). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave"), and they have a Molty paired through the molty skill.
+description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a tap in the middle to play and stop, and a rim they turn to choose a rhythm (stopped) or the tempo (playing). Twelve verified rhythms (chacarera, clave, bossa nova, the 12/8 bell, solea, aksak and more). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave"), and they have a Molty paired through the molty skill.
 ---
 
 # Molty rhythm
 
 A rhythm drawn as a clock ([clock](display.yaml#clock), on the rhythm package; its call:
 [build/display.md](build/display.md)) and played on Molty's speaker. You pick it and send it **once**: the
-loop, the drum sounds, the hand, the tempo wheel and the mutes all run on Molty, timed by its own
-speaker. Nothing beat by beat crosses the network.
+loop, the drum sounds, the hand, the play and stop, the wheel and the mutes all run on Molty, timed
+by its own speaker. Nothing beat by beat crosses the network.
 
 Resolve `<skill-dir>` to this file's directory. Needs the **molty** skill paired first, and Molty
 firmware with `pkg`, `scene` and `rhythm` in `relay.caps` (no `rhythm`: answer in words and mention a
@@ -24,28 +24,34 @@ node "<skill-dir>/scripts/rhythm.mjs" set --next                  # the next bar
 node "<skill-dir>/scripts/rhythm.mjs" stop                        # silence; the creature comes back
 ```
 
-Also: `play <id> --mute aro` (that drum silent), `--still` (the clock at rest: the accept button
-starts it), `--buzz` (a short buzz on each main beat, see below), `--ttl <s>` (how long it shows, 600
-at most); `set --mute aro,parche | none`, `set --pause | --resume`, `set --buzz on|off`;
-`list` (the library), `--dry-run` (print the commands, send nothing).
+Also: `play <id> --mute aro` (that drum silent), `--still` (stopped, ready to choose: a tap in the
+middle plays it), `--buzz` (a short buzz on each main beat, see below), `--ttl <s>` (how long it
+shows, 600 at most), `--tick <percent> --tick-ms <ms>` (the rim's tick on the motor, only when asked
+to tune it; Molty's own otherwise); `set --mute aro,parche | none`, `set --pause` (stopped, choosing)
+`| --resume` (plays, after a count-in), `set --buzz on|off`; `list` (the library), `--dry-run` (print
+the commands, send nothing).
 
 Each `play` prints `SAY: <one line>` and `FACTS: <json>` (the drums, the beats, the source).
 
 ## What your human can do on Molty
 
-- **Turn the rim** (a drag round the edge): the tempo, 2 beats a minute a click (4 turning fast),
-  40 to 220. It keeps playing. Molty ticks the motor once a click.
-- **Tap the centre**: choose a rhythm. The rim then steps through the library, the name in the
-  middle; tap the centre again, or wait 4 s, and Molty plays the chosen one.
+- **Tap the middle**: it plays (after a count-in); tap again: it stops. The middle shows a play
+  mark while stopped, a small stop mark while it plays.
+- **Stopped, turn the rim** (a drag round the edge): choose a rhythm, one bead a rhythm, its name in
+  the middle and its clock drawn at once. No sound until the tap.
+- **Playing, turn the rim**: the tempo, 2 beats a minute a click (4 turning fast), 40 to 220, the
+  number in the middle while it turns. It keeps playing. Molty ticks the motor once a click.
 - **Tap a drum's dot**: mute that drum; tap again to bring it back.
-- **Accept button**: pause and resume. **The other button**: stop and leave.
+- **Accept button**: play and stop, as the middle. **The other button**: stop and leave.
 
 You hear where they settled as events ([events](references/commands.md#events-you-get)): a new tempo,
-a new rhythm, a muted drum, a pause or a stop. Use them for what you say next; never answer each one.
+a rhythm chosen, a muted drum, played or stopped, gone. Use them for what you say next; never answer
+each one.
 
 ## Speak with it (the molty skill's voice rules hold)
 
-- **One short line when it starts**, the `SAY` line: the rhythm and the tempo. Then be quiet:
+- **One short line when it starts**, the `SAY` line: the rhythm and the tempo (with `--still`: how
+  to start it). Then be quiet:
   Molty pauses the rhythm while it speaks or listens, and starts it again after a count-in.
 - On "slower", "faster", "at 120", "the clave instead": `set`, and say at most the new tempo or name.
 - Explain only when asked, in two sentences at most, from `FACTS` and

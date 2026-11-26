@@ -1025,9 +1025,11 @@ sound and places each hit on its exact sample (`rhythm_player.h`). Nothing beat 
   voice is never mixed with it, and the microphone never hears it.
 - **The clock** is the rhythm package's screen (a `beat` item, [PACKAGES.md](PACKAGES.md#layouts)): it draws from the
   speaker's own clock. The sound lives as long as its clock: with none on screen for 2 s it stops; stopped, the clock goes.
-- **On Molty itself:** the rim turns the tempo, the centre chooses a rhythm, a dot mutes a drum (`ring` and `tap`
-  events); while a rhythm plays the accept button pauses and resumes it and the reject button stops it, whatever they
-  are bound to (`rhythm` events).
+- **On Molty itself:** a tap in the middle plays (after a count-in) and stops; stopped, the clock waits at rest with
+  a play mark in the middle and the rim chooses the rhythm (shown at once, silent); playing, the rim turns the tempo
+  and a dot mutes a drum (`ring`, `tap` and `rhythm` events). While a rhythm shows the accept button plays and stops
+  it as the middle does and the reject button stops it and leaves, whatever they are bound to. `paused: true` is the
+  same rest (back at the phrase's start); `rhythm.stop` leaves.
 - **The buzz** (`buzz: true`, off unless asked): a 30 ms buzz on each main beat, started 30 ms early so the motor is up
   to speed when the beat is heard; dropped like any buzz (no motor, the mic open). While it buzzes the shake detector is
   deaf, so shake to talk waits.
@@ -1043,8 +1045,8 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `say.done` | `{job}` | a `say` finished playing (its last PCM left the speaker) |
 | `shake` | `{peak_g, reversals, ms, listen?}` | the board was shaken (boards with an IMU): ≥ 3 sign reversals of > 1.2 g dynamic acceleration on one axis within 800 ms; ≤ 1 per 2 s. `peak_g` largest dynamic acceleration (g), `ms` first peak → detection; `listen` the local id of the listen it started ([Shake to talk](#shake-to-talk)); a gesture bound to talk sends the same event with `peak_g` 0 and `input` (`double_tap`, `button_accept`, ...), plus `hold: true` for a button held to talk (the relay then never ends that listen on an end of turn: only the release, a tap's stop, or the window) |
 | `tap` | `{x, y, spot?, opened?, closed?, muted?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a rhythm clock's drum dot: `spot` the drum, `muted` whether it is silent now (Molty muted it itself). On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
-| `ring` | `{spot, value}` · `{spot, index, label?, id?}` | a scene's wheel settled ([PACKAGES.md](PACKAGES.md#layouts)): the finger left a number wheel (`value`) or a face-0 choice, or the centre's tap or its wait made a face-1 choice (`index`, `label`; `id`: the rhythm a pick chose, which now plays). Never one a click |
-| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm, bpm}` | the beat player's state changed on the device itself: the accept button paused or resumed it, the reject button stopped it, or its clock left the screen ([Rhythm](#rhythm)) |
+| `ring` | `{spot, value}` · `{spot, index, label?, id?}` | a scene's wheel settled ([PACKAGES.md](PACKAGES.md#layouts)): the finger left a wheel where it moved it: a number (`value`) or a choice (`index`, `label`; `id`: the rhythm a pick chose, shown stopped until a tap in the middle plays it). Never one a click |
+| `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm, bpm}` | the beat player's state changed on the device itself: a tap in the middle or the accept button played it (`playing`) or stopped it on the clock, choosing (`paused`); the reject button, or its clock leaving the screen, stopped it and it left (`stopped`) ([Rhythm](#rhythm)) |
 | `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
 | `button` | `{id: "accept"\|"reject"}` | a button was pressed (the board's accept / reject buttons); ≤ 4/s. For agents it means acknowledge / dismiss, never an answer (answers come only from `ask`) |
