@@ -29,13 +29,13 @@ name: CI
 #                         molty-voice editable: a voice change runs both suites)
 #   creatures             device/creatures/**
 #   website               apps/website/**, docs/**, root *.md (CONTRIBUTING.md is
-#                         synced), device/creatures/** (@creatures, @molty-files, synced
-#                         READMEs, @molty-catalog),
+#                         synced), device/creatures/** (the og script reads
+#                         catalog/catalog.json), packages/** (@packages),
 #                         device/firmware/boards/** (repoBoards.ts, setup-match.test.ts)
 #   hygiene               always (secrets, paths, licences, versions, skill: check-skill
 #                         reads the relay sources, so a relay change is covered here)
 #   everything            .github/**, Makefile, VERSION (baked into console, firmware,
-#                         relay, cli), .gitignore, .gitattributes, ci-changes.*, any
+#                         relay, cli), .gitignore, ci-changes.*, any
 #                         path no rule knows, a manual run, a new branch / force push
 #   no job (hygiene only) plugin manifests, LICENSE,
 #                         tools/scripts/{hygiene.sh,check-skill.mjs,version.mjs}
@@ -465,19 +465,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # Every later step is skipped (not failed) on a branch without apps/website/.
-      - name: Report missing website
-        if: hashFiles('apps/website/package.json') == ''
-        run: echo "::notice::apps/website/ not present on this ref; skipping"
-
       - name: Set up pnpm
-        if: hashFiles('apps/website/package.json') != ''
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Set up Node
-        if: hashFiles('apps/website/package.json') != ''
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -485,23 +478,19 @@ jobs:
           cache-dependency-path: apps/website/pnpm-lock.yaml
 
       - name: Install dependencies
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm install --frozen-lockfile
 
       - name: Check
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm check
 
       # /setup's board matcher against the real device/firmware/boards/**/board.json
       - name: Test
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm test
 
       - name: Build
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm build
 
