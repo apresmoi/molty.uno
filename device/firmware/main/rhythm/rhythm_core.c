@@ -20,6 +20,30 @@ static rhythm_ev_t s_ev[8];
 static int s_nev;
 static float s_orphan;
 static bool s_yielded;                             /* paused for a job on the speaker: back after it */
+static rhy_region_t s_regions[RHY_REGIONS];       /* the library's, as it came (rhythm.play)          */
+static int s_nregions;
+static int32_t s_ahead_us;                         /* the picture's delay (rhythm_view_ahead)        */
+static int s_sync_ms;                              /* the human's trim                                */
+static bool s_sync_new;                            /* ... changed: kept once the lock is let go       */
+void rhythm_view_ahead(int32_t us) { rhythm_lock(); s_ahead_us = us; rhythm_unlock(); }
+void rhythm_sync_init(int ms) { s_sync_ms = ms < -RHYTHM_SYNC_MAX ? -RHYTHM_SYNC_MAX : ms > RHYTHM_SYNC_MAX ? RHYTHM_SYNC_MAX : ms; }
+int rhythm_sync(void) { return s_sync_ms; }
+/* after the lock: a new trim kept (a flash write: never under the lock, the speaker's fill takes it) */
+static void sync_keep(void) {
+    rhythm_lock();
+    const bool keep = s_sync_new;
+    s_sync_new = false;
+    const int ms = s_sync_ms;
+    rhythm_unlock();
+    if (keep) rhythm_sync_saved(ms);
+}
+/* {sync: ms}: a new trim (locked); false: not a whole number of ms in range */
+static bool sync_of(const cJSON *j) {
+    if (!j) return true;
+    if (!cJSON_IsNumber(j) || j->valuedouble != (int)j->valuedouble || j->valueint < -RHYTHM_SYNC_MAX || j->valueint > RHYTHM_SYNC_MAX) return false;
+    if (j->valueint != s_sync_ms) { s_sync_ms = j->valueint; s_sync_new = true; }
+    return true;
+}
 
 static bool ready(void) {
     if (!s_p && (s_p = RHY_CALLOC(sizeof(rhy_player_t)))) rhy_init(s_p);
@@ -75,16 +99,19 @@ static cJSON *state_json(void) {
     cJSON_AddItemToObject(o, "muted", m);
     cJSON_AddBoolToObject(o, "paused", s_p->paused);
     cJSON_AddBoolToObject(o, "buzz", s_p->buzz);
+    cJSON_AddNumberToObject(o, "sync", s_sync_ms);
     return o;
 }
 
 const char *rhythm_play(const cJSON *args, cJSON **out) {
-    static const char *const KEYS[] = { "rhythms", "pick", "bpm", "mute", "buzz", "paused" };
-    const char *e = only(args, KEYS, 6), *why = NULL;
+    static const char *const KEYS[] = { "rhythms", "regions", "pick", "bpm", "mute", "buzz", "paused", "sync" };
+    const char *e = only(args, KEYS, 8), *why = NULL;
     if (e || !args) return "invalid_args";
     static rhy_pattern_t *lib;
     if (!lib && !(lib = RHY_CALLOC(sizeof(rhy_pattern_t) * RHY_LIB))) return "oom";
-    const int n = rhy_parse_lib(cJSON_GetObjectItemCaseSensitive(args, "rhythms"), lib, &why);
+    static rhy_region_t regions[RHY_REGIONS];          /* (a static: the link task's stack stays small) */
+    const int nr = rhy_parse_regions(cJSON_GetObjectItemCaseSensitive(args, "regions"), regions, &why);
+    const int n = nr < 0 ? -1 : rhy_parse_lib(cJSON_GetObjectItemCaseSensitive(args, "rhythms"), nr, lib, &why);
     const cJSON *pick = cJSON_GetObjectItemCaseSensitive(args, "pick");
     float bpm = 0.f;
     int buzz, paused;
@@ -96,17 +123,20 @@ const char *rhythm_play(const cJSON *args, cJSON **out) {
         return "invalid_args";
     rhythm_lock();
     if (!ready()) { rhythm_unlock(); return "oom"; }
+    if (!sync_of(cJSON_GetObjectItemCaseSensitive(args, "sync"))) { rhythm_unlock(); return "invalid_args"; }
     rhy_load(s_p, lib, n, pick->valueint, bpm, mute, paused == 1);
+    memcpy(s_regions, regions, sizeof(regions[0]) * (size_t)nr); s_nregions = nr;
     s_p->buzz = buzz == 1;
     s_orphan = 0.f;
     if (out) *out = state_json();
     rhythm_unlock();
+    sync_keep();
     return NULL;
 }
 
 const char *rhythm_set(const cJSON *args, cJSON **out) {
-    static const char *const KEYS[] = { "bpm", "pick", "mute", "next", "buzz", "paused" };
-    if (only(args, KEYS, 6) || !args || !args->child) return "invalid_args";
+    static const char *const KEYS[] = { "bpm", "pick", "mute", "next", "buzz", "paused", "sync" };
+    if (only(args, KEYS, 7) || !args || !args->child) return "invalid_args";
     rhythm_lock();
     const char *err = NULL;
     if (!on()) err = "not_playing";
@@ -119,7 +149,7 @@ const char *rhythm_set(const cJSON *args, cJSON **out) {
     const cJSON *mj = cJSON_GetObjectItemCaseSensitive(args, "mute");
     if (!err && (!bpm_of(cJSON_GetObjectItemCaseSensitive(args, "bpm"), &bpm) || (mj && !rhy_parse_mute(pt, mj, &mute)) ||
                  (next && !cJSON_IsTrue(next)) || !flag_of(cJSON_GetObjectItemCaseSensitive(args, "buzz"), &buzz) ||
-                 !flag_of(cJSON_GetObjectItemCaseSensitive(args, "paused"), &paused)))
+                 !flag_of(cJSON_GetObjectItemCaseSensitive(args, "paused"), &paused) || !sync_of(cJSON_GetObjectItemCaseSensitive(args, "sync"))))
         err = "invalid_args";
     if (!err) {
         if (pick && pick->valueint != s_p->cur) rhy_pick(s_p, pick->valueint);
@@ -131,6 +161,7 @@ const char *rhythm_set(const cJSON *args, cJSON **out) {
         if (out) *out = state_json();
     }
     rhythm_unlock();
+    sync_keep();
     return err;
 }
 
@@ -145,7 +176,8 @@ bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt) {
     rhythm_lock();
     const bool have = s_p && s_p->nlib && s_p->on;
     if (have) {
-        rhy_view(s_p, rhythm_heard(), v);
+        const int64_t ahead = (int64_t)s_ahead_us + (int64_t)s_sync_ms * 1000;
+        rhy_view(s_p, rhythm_heard((int32_t)ahead), v);
         v->rest = s_p->paused && !s_yielded;
         if (pt) *pt = s_p->lib[s_p->cur];
     } else memset(v, 0, sizeof(*v));
@@ -153,12 +185,34 @@ bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt) {
     return have;
 }
 
-int rhythm_labels(char (*out)[RHYTHM_LABEL_ROOM], int max) {
+int rhythm_labels(int region, char (*out)[RHYTHM_LABEL_ROOM], int *index, int max) {
     rhythm_lock();
-    const int n = s_p ? (s_p->nlib < max ? s_p->nlib : max) : 0;
-    for (int i = 0; i < n; i++) strcpy(out[i], s_p->lib[i].label);
+    int n = 0;
+    for (int i = 0; s_p && i < s_p->nlib && n < max; i++) {
+        if (region >= 0 && s_p->lib[i].region != region) continue;
+        strcpy(out[n], s_p->lib[i].label);
+        if (index) index[n] = i;
+        n++;
+    }
     rhythm_unlock();
     return n;
+}
+int rhythm_regions(char (*label)[RHYTHM_LABEL_ROOM], uint32_t *rgb, int *count, int max) {
+    rhythm_lock();
+    const int n = s_nregions < max ? s_nregions : max;
+    for (int r = 0; r < n; r++) {
+        strcpy(label[r], s_regions[r].label);
+        if (rgb) rgb[r] = s_regions[r].rgb;
+        if (count) { count[r] = 0; for (int i = 0; s_p && i < s_p->nlib; i++) count[r] += s_p->lib[i].region == r; }
+    }
+    rhythm_unlock();
+    return n;
+}
+int rhythm_region_of(int i) {
+    rhythm_lock();
+    const int r = s_p && i >= 0 && i < s_p->nlib ? s_p->lib[i].region : 0;
+    rhythm_unlock();
+    return r;
 }
 
 const char *rhythm_id(int i, char out[RHY_ID_MAX + 1]) {

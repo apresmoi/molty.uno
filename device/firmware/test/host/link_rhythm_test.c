@@ -116,8 +116,20 @@ int main(void) {
     rhythm_local_pick(1);
     char id[RHY_ID_MAX + 1], labels[4][RHYTHM_LABEL_ROOM];
     assert(rhythm_now(&v, NULL) && v.cur == 1 && v.bpm == 150.f && v.count_in && !v.mute);
-    assert(rhythm_labels(labels, 4) == 2 && !strcmp(labels[1], "SON CLAVE") && !strcmp(rhythm_id(1, id), "son-clave"));
+    assert(rhythm_labels(-1, labels, NULL, 4) == 2 && !strcmp(labels[1], "SON CLAVE") && !strcmp(rhythm_id(1, id), "son-clave"));
     assert(!rhythm_take_event(&ev));                       /* the wheel's own event is the wheel's (mole_fluid.c) */
+
+    /* the sync trim: kept on the device (NVS) when it changes, only then; out of range refused; the kept one at boot */
+    const int w0 = sdk_rhythm_sync_writes;
+    cJSON *sy = cJSON_Parse("{\"sync\":-35}"), *sy2 = cJSON_Parse("{\"sync\":300}");
+    assert(rhythm_cmd_set(sy, &out) == ESP_OK && cJSON_GetObjectItem(out, "sync")->valueint == -35 && sdk_rhythm_sync == -35 && sdk_rhythm_sync_writes == w0 + 1);
+    cJSON_Delete(out); out = NULL;
+    assert(rhythm_cmd_set(sy, NULL) == ESP_OK && sdk_rhythm_sync_writes == w0 + 1);   /* (the same: no write) */
+    assert(rhythm_cmd_set(sy2, NULL) == ESP_ERR_INVALID_ARG && rhythm_sync() == -35);
+    sdk_rhythm_sync = 40; rhythm_dev_init();
+    assert(rhythm_sync() == 40);
+    cJSON_Delete(sy); cJSON_Delete(sy2);
+    printf("  sync    the trim kept in NVS when it changes, refused past 250 ms, read back at boot\n");
 
     /* the clock left the screen: it stops after RHYTHM_ORPHAN_S */
     rhythm_orphan(false, 1.f);

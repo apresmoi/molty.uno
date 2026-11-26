@@ -5,6 +5,9 @@
  *
  *   link      rhythm.play / rhythm.set / rhythm.stop (cap "rhythm", boards with a speaker): the library and the tempo
  *             once; the player loops by itself.
+ *   sync      the picture shows where the sound will be when the frame is seen: the speaker's clock (rhy_clock_t, from
+ *             the samples written and the DMA ring) read ahead by the picture's own delay (rhythm_view_ahead), plus a
+ *             trim the human sets by ear and eye (`sync`, ms, kept on the device).
  *   speaker   the audio task plays it between its jobs (rhythm_dev.c): a say, a listen or the chirp after it takes the
  *             speaker, the rhythm fades out within RHY_FADE samples and waits; after the job it starts again with a
  *             count-in at the bar it stopped in. One owner of the speaker at a time, as ever.
@@ -38,9 +41,15 @@ const char *rhythm_stop(void);
 /** The pattern playing and where the speaker is in it now (v->rest: stopped at rest, not paused for the speaker).
  *  False: no rhythm loaded. */
 bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt);
-/** The library's labels (the wheel's names), how many. */
+/** The labels of region r's rhythms (the wheel's names; every rhythm for r < 0) and their indices in the library into
+ *  index (NULL: not wanted); how many. */
 #define RHYTHM_LABEL_ROOM 25            /* a label as a wheel holds it (PKG_KEY_MAX + 1) */
-int  rhythm_labels(char (*out)[RHYTHM_LABEL_ROOM], int max);
+int  rhythm_labels(int region, char (*out)[RHYTHM_LABEL_ROOM], int *index, int max);
+/** The library's regions (rhythm.play's `regions`): labels, tints (rgb, NULL: not wanted) and how many rhythms each
+ *  holds (NULL: not wanted); how many (0: the library has none, one level only). */
+int  rhythm_regions(char (*label)[RHYTHM_LABEL_ROOM], uint32_t *rgb, int *count, int max);
+/** Rhythm i's region (0 without regions). */
+int  rhythm_region_of(int i);
 /** The library's rhythm i's id ("" none). */
 const char *rhythm_id(int i, char out[RHY_ID_MAX + 1]);
 /** The screen's own acts. A mute, a play, a rest and a stop are sent to the agent (rhythm_take_event); a tempo or a
@@ -79,7 +88,18 @@ bool   rhythm_wants_speaker(void);
 bool   rhythm_take_buzz(uint64_t upto, bool *first);
 uint64_t rhythm_made(void);                 /* samples made so far                                                 */
 
-/* the host's: a lock over the player (any task), and the sample the speaker plays now */
+/* the host's: a lock over the player (any task), the sample the speaker plays ahead_us from now (UINT64_MAX: all that
+ * was made), and the place the sync trim is kept */
 void rhythm_lock(void);
 void rhythm_unlock(void);
-uint64_t rhythm_heard(void);
+uint64_t rhythm_heard(int32_t ahead_us);
+void rhythm_sync_saved(int ms);
+
+/** The picture's own delay (mole_fluid.c, each frame): from reading the player to the light, centred on the frame.
+ *  rhythm_now shows the sound at that moment, plus the human's sync trim. */
+void rhythm_view_ahead(int32_t us);
+/** The human's trim (ms, RHYTHM_SYNC_MAX either way, `sync` of rhythm.play / rhythm.set): kept on the device
+ *  (rhythm_sync_saved); rhythm_dev.c gives back the kept one at boot. */
+#define RHYTHM_SYNC_MAX 250
+void rhythm_sync_init(int ms);
+int  rhythm_sync(void);

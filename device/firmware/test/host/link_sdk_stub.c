@@ -16,7 +16,10 @@ unsigned sdk_drained;
 esp_err_t sdk_play_error;
 cJSON *sdk_sent;
 
-esp_err_t nvs_open(const char *name, int mode, nvs_handle_t *out) { (void)mode; assert(!strcmp(name,"agent_link")); *out=1; return ESP_OK; }
+esp_err_t nvs_open(const char *name, int mode, nvs_handle_t *out) { (void)mode; assert(!strcmp(name,"agent_link") || !strcmp(name,"rhythm")); *out=!strcmp(name,"rhythm")?2:1; return ESP_OK; }
+int32_t sdk_rhythm_sync; int sdk_rhythm_sync_writes;   /* the beat player's trim ("rhythm" sync) */
+esp_err_t nvs_get_i32(nvs_handle_t n, const char *key, int32_t *out) { assert(n==2 && !strcmp(key,"sync")); *out=sdk_rhythm_sync; return ESP_OK; }
+esp_err_t nvs_set_i32(nvs_handle_t n, const char *key, int32_t v) { assert(n==2 && !strcmp(key,"sync")); sdk_rhythm_sync=v; sdk_rhythm_sync_writes++; return ESP_OK; }
 void nvs_close(nvs_handle_t n) { (void)n; }
 esp_err_t nvs_get_blob(nvs_handle_t n, const char *key, void *out, size_t *len) {
     (void)n; assert(!strcmp(key,"device_key"));
