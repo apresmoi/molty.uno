@@ -1283,6 +1283,22 @@ int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, 
     return n + on;
 }
 
+int scene_hold_ring(fluid_shape_t *shp, int n, int stage, float hold) {
+    const float show = SCENE_HOLD_SHOW_S / SCENE_HOLD_S;
+    if (hold < show || n < 0 || n + SCENE_HOLD_DOTS > FLUID_MAX_SHAPES) return n;
+    const float f = fminf(1.f, (hold - show) / (1.f - show)), c = stage * 0.5f, r = SCENE_HOLD_R * c;
+    int c0 = n;
+    while (c0 > 0 && shp[c0 - 1].tag == FLUID_TAG_CAPTION) c0--;
+    memmove(shp + c0 + SCENE_HOLD_DOTS, shp + c0, sizeof(fluid_shape_t) * (size_t)(n - c0));
+    const int lit = (int)lrintf(f * SCENE_HOLD_DOTS);
+    for (int q = 0; q < SCENE_HOLD_DOTS; q++) {
+        const float a = (90.f - 360.f * q / SCENE_HOLD_DOTS) * DEG;
+        shp[c0 + q] = (fluid_shape_t){ .k = FLUID_SHAPE_DISC, .rgb = FLUID_RGB | (q < lit ? SCENE_HOLD_RGB : 0x2e4a3au),
+                                       .x = c + r * cosf(a), .y = c - r * sinf(a), .r = q < lit ? 2.6f : 1.8f };
+    }
+    return n + SCENE_HOLD_DOTS;
+}
+
 /* ── a beat: the beat player's pattern as a clock ──────────────────────────────────────────────────────────────── */
 
 static const float BEAT_RING[SCENE_BEAT_LAYERS] = { 1.f, 0.75f, 0.525f, 0.3375f };   /* of the beat's r          */
@@ -1292,7 +1308,8 @@ static const float BEAT_RING[SCENE_BEAT_LAYERS] = { 1.f, 0.75f, 0.525f, 0.3375f 
 #define BEAT_SWELL 1.9f                 /* a sounding hit, at its biggest, of its dot                            */
 #define BEAT_PLAY_GAP 0.058f            /* the play mark's dots apart (on the design's 0.672 ring)                 */
 #define BEAT_PLAY_Y   0.005f            /* ... its centre, over the name                                            */
-#define BEAT_STOP_RGB 0x8a8fa6u         /* the stop mark while it plays: there, never louder than the hand         */
+#define BEAT_STOP_RGB 0x4f9a72u         /* the stop mark while it plays: the accent, quiet, never louder than the hand */
+#define BEAT_MARK     0x6c7290u         /* a step's mark (a main beat's is BEAT_INK: stronger)                      */
 
 static scene_item_t *beat_item(scene_t *sc, uint8_t k, bool live) {
     if (sc->nitems >= SCENE_ITEMS_MAX + SCENE_LIVE_MAX) return NULL;
@@ -1341,7 +1358,7 @@ void scene_beat(scene_t *sc, const scene_beat_t *b) {
         scene_item_t *o = beat_item(sc, PK_RING, false);
         if (o) { o->r = R * BEAT_RING[l]; o->rgb = BEAT_GRID; }
     }
-    for (int s = 0; s < ns; s++) beat_spoke(sc, b->angle[s], R * 1.1f, (b->beats >> s & 1 ? 0.067f : 0.025f) * k, BEAT_HAIR, BEAT_INK, false);
+    for (int s = 0; s < ns; s++) beat_spoke(sc, b->angle[s], R * 1.1f, (b->beats >> s & 1 ? 0.067f : 0.025f) * k, BEAT_HAIR, b->beats >> s & 1 ? BEAT_INK : BEAT_MARK, false);
     /* live: this bar's hits, the middle (the play mark at rest, a small stop mark playing), the name, the phrase's pips,
      * the hand, the swelling hits, the count-in's click */
     for (int l = 0; l < nl; l++) for (int s = 0; s < ns; s++) {
@@ -1349,19 +1366,24 @@ void scene_beat(scene_t *sc, const scene_beat_t *b) {
         const float a = b->angle[s] * DEG, r = R * BEAT_RING[l];
         beat_disc(sc, r * cosf(a), r * sinf(a), dot, b->muted >> l & 1 ? scale_rgb(b->rgb[l], SCENE_BEAT_MUTED) : b->rgb[l], true, l);
     }
-    if (b->rest)                                        /* a triangle of dots pointing right: 4, 3, 2, 1 a column */
+    if (b->enter)                                       /* the regions: a ring of dots round one, a tap goes in */
+        for (int q = 0; q <= 8; q++) {
+            const float a = q * 45.f * DEG, rr = q < 8 ? 0.062f * k : 0.f;
+            beat_disc(sc, rr * cosf(a), rr * sinf(a) + BEAT_PLAY_Y * k, (q < 8 ? 0.012f : 0.019f) * k, SCENE_NOTCH_RGB, true, -1);
+        }
+    else if (b->rest)                                   /* a triangle of dots pointing right: 4, 3, 2, 1 a column */
         for (int c = 0; c < 4; c++) for (int q = 0; q < 4 - c; q++)
-            beat_disc(sc, (c - 1.3f) * BEAT_PLAY_GAP * 0.87f * k, ((float)q - (3 - c) * 0.5f) * BEAT_PLAY_GAP * k + BEAT_PLAY_Y * k, 0.019f * k, 0xffffffu, true, -1);
+            beat_disc(sc, (c - 1.3f) * BEAT_PLAY_GAP * 0.87f * k, ((float)q - (3 - c) * 0.5f) * BEAT_PLAY_GAP * k + BEAT_PLAY_Y * k, 0.019f * k, SCENE_NOTCH_RGB, true, -1);
     else if (!b->hide_name)                             /* a small square of dots: a tap stops it */
         for (int q = 0; q < 9; q++) beat_disc(sc, (q % 3 - 1) * 0.022f * k, (q / 3 - 1) * 0.022f * k, 0.007f * k, BEAT_STOP_RGB, true, -1);
     if (!b->hide_name) beat_text(sc, b->label, -0.17f * k, 0.078f * k, 0xffffff, true);
-    for (int q = 0; b->norder > 1 && q < b->norder && q < 16; q++) {
+    for (int q = 0; b->norder > 1 && !b->enter && q < b->norder && q < 16; q++) {
         const float x = (q - (b->norder - 1) * 0.5f) * 0.045f * k;
         beat_disc(sc, x, -0.27f * k, (q == b->slot ? 0.016f : 0.01f) * k, q == b->slot ? 0xffffff : BEAT_GRID, true, -1);
     }
     const float u = fminf(1.f, fmaxf(0.f, b->since / SCENE_BEAT_SWELL_S)), swell = (1.f - u) * (1.f - u);
     if (b->step >= 0 && b->step < ns) {
-        if (b->rest) beat_spoke(sc, b->angle[b->step], 0.13f * k, R * 0.92f, 0.012f, BEAT_GRID, true);   /* (at rest: a hairline, clear of the play mark) */
+        if (b->rest) beat_spoke(sc, b->angle[b->step], 0.34f * k, R * 0.92f - 0.34f * k, 0.012f, BEAT_GRID, true);   /* (at rest: a hairline, clear of the play mark and the region above it) */
         else beat_spoke(sc, b->angle[b->step], 0.08f * k, R * 0.975f, 0.03f, B.rgb, true);
         for (int l = 0; l < nl && swell > 0.f; l++) {
             if (!(b->hits[l] >> b->step & 1) || (b->muted >> l & 1)) continue;
@@ -1426,28 +1448,33 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
         for (int i = 0; i < w->nlabels; i++) {
             int rel = i - w->index;
             rel -= w->nlabels * (int)floorf((rel + w->nlabels * 0.5f) / w->nlabels);
-            const float a = 90.f - rel * step - w->turn;
+            const float a = 90.f - rel * step;
             if (fabsf(a - 90.f) > 165.f) continue;
-            beat_disc(sc, r * cosf(a * DEG), r * sinf(a * DEG), (rel ? 0.013f : 0.022f), rel ? BEAT_GRID : 0xffffffu, true, -1);
+            const uint32_t tint = w->tints && w->tints[i] ? w->tints[i] : 0;
+            beat_disc(sc, r * cosf(a * DEG), r * sinf(a * DEG), (rel ? 0.013f : 0.022f),
+                      rel ? (tint ? scale_rgb(tint, 0.55f) : BEAT_GRID) : w->level && tint ? tint : 0xffffffu, true, -1);
         }
-    } else {                                                            /* fine ticks turning with the finger, the top of the rim */
+    } else {   /* fine ticks at the top of the rim, still: they never slide with the finger (a sliding tick redraws its cells
+                * every frame, and a turn's frames then owed the middle's cells to the next: the hand a frame late) */
         const int ticks = (int)lrintf(360.f / step);
-        for (int q = 0; q < ticks && q < 90; q++) {
-            float a = fmodf(q * step - w->turn, 360.f);
-            a = a > 180.f ? a - 360.f : a < -180.f ? a + 360.f : a;
+        for (int q = -ticks / 2; q <= ticks / 2; q++) {
+            const float a = q * step;
             if (fabsf(a) <= SCENE_WHEEL_SCALE) beat_spoke(sc, 90.f + a, r - 0.015f, 0.03f, BEAT_HAIR, BEAT_GRID, true);
         }
     }
-    beat_spoke(sc, 90.f, r - 0.055f, 0.07f + 0.03f * w->flash, 0.03f, toward_white(SCENE_NOTCH_RGB, w->flash), true);
+    beat_spoke(sc, 90.f, r - 0.055f, 0.07f + 0.03f * w->flash, 0.03f, toward_white(w->face ? SCENE_CHOOSE_RGB : SCENE_NOTCH_RGB, w->flash), true);
     if (!scene_wheel_words(sc, w)) return;
     char words[PKG_KEY_MAX + 1];
     if (w->nlabels > 0) {
         snprintf(words, sizeof words, "%s", w->labels[(w->index % w->nlabels + w->nlabels) % w->nlabels]);
-        const float size = fminf(0.09f, 1.2f / (0.6f * (float)strlen(words)));   /* (its width inside the rings) */
-        beat_text(sc, words, sc->beat >= 0 ? -0.17f * sc->items[sc->beat].r / 0.672f : 0.f, size, 0xffffffu, true);   /* (a beat's: where its name is, under the play mark) */
+        const float size = fminf(0.09f, 1.2f / (0.6f * (float)strlen(words))), k = sc->beat >= 0 ? sc->items[sc->beat].r / 0.672f : 1.f;   /* (its width inside the rings) */
+        const int i = (w->index % w->nlabels + w->nlabels) % w->nlabels;
+        beat_text(sc, words, sc->beat >= 0 ? -0.17f * k : 0.f, size, w->level && w->tints && w->tints[i] ? w->tints[i] : 0xffffffu, true);   /* (a beat's: where its name is, under the play mark) */
+        if (w->above) beat_text(sc, w->above, SCENE_WHEEL_ABOVE_Y * k, 0.055f * k, w->above_rgb ? w->above_rgb : BEAT_INK, true);
+        if (w->below) beat_text(sc, w->below, -0.27f * k, 0.05f * k, BEAT_INK, true);
     } else {
         snprintf(words, sizeof words, "%d", (int)lrintf(w->value));
-        beat_text(sc, words, 0.04f, 0.22f, 0xffffffu, true);
+        beat_text(sc, words, 0.03f, 0.16f, 0xffffffu, true);   /* (0.16: its letters' cells, redrawn each click, fit the frame) */
         if (d.sets == 1) beat_text(sc, "BPM", -0.13f, 0.07f, BEAT_INK, true);
     }
 }

@@ -241,9 +241,15 @@ void mole_fluid_spot_id(unsigned spot, char *id, size_t size, char *open, size_t
 typedef struct { char pkg[33], layout[25], spot[41], why[6]; } mole_scene_evt_t;
 bool mole_fluid_scene_event(mole_scene_evt_t *out);
 /** A press at panel pixel (px, py) is a scene's wheel's (scene_player.h: the dial up, from its r0 out: 1), its centre's
- *  (2) or on a beat's dot (3); 0: none. sense.c asks first: such a press is the fluid task's alone (it turns the wheel,
+ *  (2), on a beat's dot (3, while it plays) or on the region's label above a pick (4); 0: none. sense.c asks first: such a press is the fluid task's alone (it turns the wheel,
  *  plays or stops the beat, mutes the drum), never a spot or a `tap`. Any task. */
 int mole_fluid_zone(int px, int py);
+/** A skill's scene shows (any task). mole_fluid_scene_close: close it whole, the creature back (the reject button,
+ *  sense.c; the fluid task does it at its next frame, a `scene` event why "close"). mole_fluid_take_closed: holds on
+ *  the glass that closed a scene since the last call (a touch buzz each, sense.c). */
+bool mole_fluid_scene_up(void);
+void mole_fluid_scene_close(void);
+int  mole_fluid_take_closed(void);
 /** Clicks of a scene's wheel since the last call (sense.c ticks the motor for them, haptic_wheel_due), and its dial's
  *  tick: *ms, *strength (0: haptic_plan.h HAPTIC_WHEEL_*). */
 int mole_fluid_take_ticks(int *ms, int *strength);

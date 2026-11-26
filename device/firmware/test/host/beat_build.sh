@@ -7,6 +7,6 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../../../.." && pwd)"
 OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-beat.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
-node --input-type=module -e "import { load, wire } from '$ROOT/skills/molty-rhythm/scripts/library.mjs'; console.log(JSON.stringify(load().map(wire)));" > "$OUT/lib.json"
+node --input-type=module -e "import { load, wireLibrary } from '$ROOT/skills/molty-rhythm/scripts/library.mjs'; console.log(JSON.stringify(wireLibrary(load())));" > "$OUT/lib.json"
 "$HERE/../../web/build.sh" test "$OUT" "$HERE/beat_test.c"
 "$OUT/beat_test" "$ROOT" "$OUT/lib.json"

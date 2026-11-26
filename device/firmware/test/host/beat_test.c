@@ -110,7 +110,7 @@ static int count_items(const scene_t *sc, bool live, int k) {
     return n;
 }
 static float hand_angle(const scene_t *sc) {
-    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].live && sc->items[q].k == PK_TICKS && sc->items[q].r < 0.2f) return sc->items[q].a0;
+    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].live && sc->items[q].k == PK_TICKS && sc->items[q].r < 0.5f) return sc->items[q].a0;
     return -999.f;
 }
 static uint32_t dim_of(uint32_t c) { const float k = SCENE_BEAT_MUTED; return (uint32_t)lrintf((c >> 16 & 255) * k) << 16 | (uint32_t)lrintf((c >> 8 & 255) * k) << 8 | (uint32_t)lrintf((c & 255) * k); }
@@ -125,16 +125,21 @@ static int events_named(const char *name, cJSON **last) {
     cJSON_Delete(a); free(e);
     return n;
 }
-static char LIB_ARGS[8192];
+static char LIB_ARGS[65536];
+/* the library's ids, in its order (rhythm.play's pick) */
+static char IDS[RHY_LIB][RHY_ID_MAX + 1];
+static int NIDS;
+static int P(const char *id) { for (int i = 0; i < NIDS; i++) if (!strcmp(IDS[i], id)) return i; fprintf(stderr, "beat_test: no %s\n", id); exit(2); }
+static const char *pick(const char *id, const char *more) { static char b[128]; snprintf(b, sizeof b, "\"pick\":%d%s%s", P(id), more[0] ? "," : "", more); return b; }
 static void show(const char *pick_bpm) {
     CHECK(wm_scene_op("clock", "{\"tick_ms\":0,\"tick\":0}", 600, 0) == 0, "the clock shows");
-    char args[9000];
+    static char args[sizeof LIB_ARGS + 256];
     snprintf(args, sizeof args, "%s,%s}", LIB_ARGS, pick_bpm);
     CHECK(wm_rhythm("rhythm.play", args) == 0, "rhythm.play");
 }
 
 static void test_clock(void) {
-    show("\"pick\":6,\"bpm\":104");                     /* son clave: 16 steps, 1 4 7 11 13 */
+    show(pick("son-clave", "\"bpm\":104"));             /* son clave: 16 steps, 1 4 7 11 13 */
     frames(30);
     scene_t *sc = s_sp.cur;
     CHECK(sc && sc->beat >= 0, "the scene has its beat");
@@ -168,7 +173,8 @@ static void test_clock(void) {
     rhy_view_t v; rhythm_now(&v, NULL);
     CHECK(v.bpm == 160.f && !v.count_in, "the new tempo, no restart");
     /* a new rhythm: the kept drawing changes, the scene stays (no forming from dust) */
-    CHECK(wm_rhythm("rhythm.set", "{\"pick\":9}") == 0, "rhythm.set pick");
+    char set[64]; snprintf(set, sizeof set, "{%s}", pick("bell-12", ""));
+    CHECK(wm_rhythm("rhythm.set", set) == 0, "rhythm.set pick");
     frames(10);
     CHECK(s_sp.gen == gen && sc->serial != serial && sc->look == look && count_items(sc, false, PK_RING) == 2, "a new rhythm: redrawn in place, the same scene, the same look");
     printf("  clock   son clave: 1 ring, 16 marks, 5 dots; the hand on the player's step %d frames running; tempo and rhythm change in place\n", 200);
@@ -209,10 +215,10 @@ static void drag(float from, int deg, int per) {
 }
 static void lift(void) { touch_at(0, 0.f, 0.f); frames(2); }
 static void tap(float x, float y) { touch_at(1, x, y); frames(2); lift(); }
-/* the play mark: a triangle of ten white dots in the middle */
+/* the play mark: a triangle of ten dots in the accent in the middle */
 static int play_dots(const scene_t *sc) {
     int n = 0;
-    for (int q = sc->nfixed; q < sc->nitems; q++) { const scene_item_t *it = &sc->items[q]; n += it->live && it->k == PK_DISC && it->rgb == 0xffffffu && fabsf(it->x) < 0.1f && fabsf(it->y) < 0.1f; }
+    for (int q = sc->nfixed; q < sc->nitems; q++) { const scene_item_t *it = &sc->items[q]; n += it->live && it->k == PK_DISC && it->rgb == SCENE_NOTCH_RGB && fabsf(it->x) < 0.1f && fabsf(it->y) < 0.1f; }
     return n;
 }
 
@@ -270,24 +276,26 @@ static void test_wheel(void) {
     tap(0.05f, 0.05f); frames(10);
     rhythm_now(&v, NULL);
     const scene_t *sc = s_sp.cur;
-    CHECK(v.rest && !rhythm_sounding() && s_wh.w.face == 1 && s_wh.w.nlabels == 12 && s_wh.w.index == 0, "a centre tap: stopped at rest, the rhythms on the rim (face %d, %d labels)", s_wh.w.face, s_wh.w.nlabels);
+    CHECK(v.rest && !rhythm_sounding() && s_wh.w.face == 1 && s_wh.w.level == 0 && s_wh.w.nlabels == s_wh.count[s_wh.region] && s_wh.w.index == 0 &&
+          s_wh.w.above && !strcmp(s_wh.w.above, "ARGENTINA"), "a centre tap: stopped at rest, Argentina's rhythms on the rim, its name above (face %d, %d labels)", s_wh.w.face, s_wh.w.nlabels);
     CHECK(play_dots(sc) == 10 && fabsf(hand_angle(sc) - 90.f) < 0.01f, "at rest: the play mark (%d dots), the hand at 12 o'clock (%.1f)", play_dots(sc), hand_angle(sc));
     CHECK(events_named("rhythm", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "state")), "paused"), "rhythm {state: paused}");
     /* choosing: 60 degrees, two beads on: the clock shows carnavalito at once, still silent; one ring when it settles */
     drag(90.f, 60, 2);
     rhythm_now(&v, NULL);
-    CHECK(s_wh.w.index == 2 && v.cur == 2 && v.rest && !rhythm_sounding(), "60 degrees at rest: the third rhythm on the clock, silent");
+    const int third = s_wh.map[2];
+    CHECK(s_wh.w.index == 2 && v.cur == third && v.rest && !rhythm_sounding(), "60 degrees at rest: the region's third rhythm on the clock, silent");
     CHECK(wm_wheel_ticks(NULL, NULL) == 2, "a tick a bead");
     lift();
-    CHECK(events_named("ring", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "id")), "carnavalito"),
-          "ring {spot: rhythm, index: 2, id: carnavalito}");
+    CHECK(events_named("ring", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "id")), IDS[third]),
+          "ring {spot: rhythm, index: 2, id: %s}", IDS[third]);
     frames(300);                                        /* 5 s untouched: still choosing, never back on its own */
     rhythm_now(&v, NULL);
     CHECK(v.rest && s_wh.w.face == 1 && !rhythm_sounding() && scene_wheel_words(s_sp.cur, &s_wh.w), "5 s untouched: still at rest, its name up");
     /* the centre again: it plays the chosen one, after a count-in; the rim is the tempo again */
     tap(0.f, -0.05f); frames(4);
     rhythm_now(&v, NULL);
-    CHECK(!v.rest && v.cur == 2 && v.count_in && rhythm_sounding() && s_wh.w.face == 0 && !play_dots(s_sp.cur), "a centre tap: carnavalito plays after a count-in, the tempo on the rim");
+    CHECK(!v.rest && v.cur == third && v.count_in && rhythm_sounding() && s_wh.w.face == 0 && !play_dots(s_sp.cur), "a centre tap: the chosen one plays after a count-in, the tempo on the rim");
     CHECK(events_named("rhythm", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "state")), "playing"), "rhythm {state: playing}");
     CHECK(wm_wheel_ticks(NULL, NULL) == 0, "the centre buzzes as a tap, never a wheel tick");
     /* a tap on a drum's dot mutes it; again, back */
@@ -300,7 +308,7 @@ static void test_wheel(void) {
     rhythm_now(&v, NULL);
     CHECK(v.mute == 2u && events_named("tap", &last) == 1 && cJSON_IsTrue(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "muted")), "a dot's tap: parche muted, a tap {spot: parche, muted: true}");
     int dim = 0;
-    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].layer == 1 && sc->items[q].rgb == dim_of(0xff9a7au)) dim++;
+    for (int q = sc->nfixed; q < sc->nitems; q++) if (sc->items[q].layer == 1 && sc->items[q].rgb == dim_of(0xffa36bu)) dim++;
     CHECK(dim == 2, "its dots at 30 percent (%d)", dim);
     tap(dx, dy);
     rhythm_now(&v, NULL);
@@ -316,7 +324,7 @@ static void test_wheel(void) {
     wm_button(1, 1); frames(2); wm_button(1, 0); frames(30);
     CHECK(!rhythm_active() && !s_sp.cur && events_named("button", NULL) == 0, "reject: stopped, the clock gone, no button event");
     /* the agent's `play --still`: at rest, choosing, the play mark up */
-    show("\"pick\":3,\"bpm\":90,\"paused\":true");
+    show(pick("milonga", "\"bpm\":90,\"paused\":true"));
     frames(30);
     rhythm_now(&v, NULL);
     CHECK(v.rest && !rhythm_sounding() && s_wh.w.face == 1 && play_dots(s_sp.cur) == 10, "paused: true: at rest, choosing, the play mark");
@@ -333,6 +341,53 @@ static void test_wheel(void) {
     CHECK(!rhythm_active(), "after 2 s with no clock: stopped");
     cJSON_Delete(last);
     printf("  wheel   playing: 40 degrees = +6 bpm (3 ticks of %d ms at %d percent), clamped at 220; centre: at rest, 60 degrees = carnavalito, centre: it plays; a dot mutes; buttons\n", HAPTIC_WHEEL_MS, HAPTIC_WHEEL_STRENGTH);
+}
+
+/* ── regions: a level above the rhythms while stopped ─────────────────────────────────────────────────────────────── */
+static void test_regions(void) {
+    wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(60);
+    show(pick("zamba", "\"bpm\":80,\"paused\":true"));
+    frames(60);
+    cJSON *last = NULL;
+    CHECK(s_wh.w.face == 1 && s_wh.w.level == 0 && s_wh.w.above && !strcmp(s_wh.w.above, "ARGENTINA") && s_wh.nregions >= 10,
+          "at rest: the region's rhythms, its name above (%d regions)", s_wh.nregions);
+    events_named("x", NULL);
+    tap(0.f, SCENE_WHEEL_ABOVE_Y);                      /* the region's name: up a level */
+    frames(4);
+    CHECK(s_wh.w.level == 1 && s_wh.w.nlabels == s_wh.nregions && s_wh.w.index == 0 && s_wh.w.below && strstr(s_wh.w.below, "RHYTHMS") &&
+          wm_closed_buzz() == 0, "a tap on it: the regions on the rim, Argentina under the notch, its size under its name (%s)", s_wh.w.below ? s_wh.w.below : "");
+    int enter = 0;
+    for (int q = s_sp.cur->nfixed; q < s_sp.cur->nitems; q++) enter += s_sp.cur->items[q].live && s_sp.cur->items[q].k == PK_DISC && s_sp.cur->items[q].rgb == SCENE_NOTCH_RGB;
+    CHECK(enter == 9 && play_dots(s_sp.cur) != 10, "the centre shows the enter mark (a ring of dots), not the play mark (%d)", enter);
+    rhy_view_t v; rhythm_now(&v, NULL);
+    const int was = v.cur;
+    drag(90.f, 60, 2);                                  /* two regions on */
+    rhythm_now(&v, NULL);
+    CHECK(s_wh.w.index == 2 && v.cur == was && !rhythm_sounding(), "turning the regions: the highlight moves, the clock keeps its rhythm, silent");
+    lift();
+    CHECK(events_named("ring", &last) == 1 && !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "spot")), "region") &&
+          !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "label")), s_wh.regions[2]), "ring {spot: region, label: %s}", s_wh.regions[2]);
+    tap(0.02f, -0.02f); frames(4);                      /* the centre: into it */
+    rhythm_now(&v, NULL);
+    CHECK(s_wh.w.level == 0 && s_wh.region == 2 && rhythm_region_of(v.cur) == 2 && v.rest && !rhythm_sounding() && !strcmp(s_wh.w.above, s_wh.regions[2]),
+          "the centre: into %s, its first rhythm on the clock, still silent", s_wh.regions[2]);
+    const int first = v.cur;
+    drag(90.f, 33, 2); lift();                          /* one on, then up and back: the region remembers it */
+    rhythm_now(&v, NULL);
+    const int second = v.cur;
+    tap(0.f, SCENE_WHEEL_ABOVE_Y); frames(4);
+    tap(0.02f, -0.02f); frames(4);
+    rhythm_now(&v, NULL);
+    CHECK(second != first && v.cur == second && s_wh.region == 2, "up and back in: the region's last rhythm again");
+    /* the agent's pick of another region's rhythm: the wheel follows to its region */
+    char c[64]; snprintf(c, sizeof c, "{%s}", pick("teental", ""));
+    wm_rhythm("rhythm.set", c); frames(4);
+    CHECK(s_wh.w.level == 0 && s_wh.region == rhythm_region_of(P("teental")) && !strcmp(s_wh.w.above, "INDIA"), "the agent picks teental: the wheel on India");
+    tap(0.02f, -0.02f); frames(10);
+    rhythm_now(&v, NULL);
+    CHECK(!v.rest && v.cur == P("teental") && s_wh.w.face == 0 && !s_wh.w.above, "the centre plays it; playing, no region label");
+    cJSON_Delete(last);
+    printf("  regions %d regions: the label above goes up, the rim steps through regions, the centre enters (its last rhythm), the agent's pick follows\n", s_wh.nregions);
 }
 
 /* ── no change of picture while the clock is up ─────────────────────────────────────────────────────────────────────
@@ -399,13 +454,19 @@ static void test_still_picture(void) {
     const struct { const char *what; int k; float a, b; const char *cmd; } STEPS[] = {
         { "the tempo turned and settled", 1, 90.f, 60.f, NULL },
         { "the centre: stopped, choosing", 2, 0.05f, 0.05f, NULL },
+        { "the region's name: up to the regions", 2, 0.f, SCENE_WHEEL_ABOVE_Y, NULL },
+        { "a region turned", 1, 90.f, 33.f, NULL },
+        { "the centre: into it", 2, 0.02f, -0.02f, NULL },
+        { "up again", 2, 0.f, SCENE_WHEEL_ABOVE_Y, NULL },
+        { "back, into the first", 1, 90.f, -33.f, NULL },
+        { "the centre: into Argentina", 2, 0.02f, -0.02f, NULL },
         { "a rhythm chosen on the rim, both ways", 1, 90.f, 90.f, NULL },
         { "... and back", 1, 0.f, -60.f, NULL },
         { "the centre: it plays", 2, 0.f, -0.05f, NULL },
         { "a drum muted", 3, 1.f, 0.f, NULL },
         { "... and back", 3, 1.f, 0.f, NULL },
         { "the agent's tempo", 0, 0.f, 0.f, "{\"bpm\":150}" },
-        { "the agent's rhythm", 0, 0.f, 0.f, "{\"pick\":6}" },
+        { "the agent's rhythm", 0, 0.f, 0.f, NULL },
         { "the agent's rhythm, a phrase", 0, 0.f, 0.f, "{\"pick\":0}" },
         { "the accept button: stopped", 4, 0.f, 0.f, NULL },
         { "the accept button: it plays", 4, 0.f, 0.f, NULL },
@@ -424,7 +485,8 @@ static void test_still_picture(void) {
             for (int i = sc->nfixed; i < sc->nitems; i++) if (sc->items[i].layer == 0) { touch_at(1, sc->items[i].x, sc->items[i].y); break; }
             watch(2); touch_at(0, 0.f, 0.f);
         } else if (k == 4) { wm_button(0, 1); watch(2); wm_button(0, 0); }
-        else wm_rhythm("rhythm.set", STEPS[q].cmd);
+        else if (STEPS[q].cmd) wm_rhythm("rhythm.set", STEPS[q].cmd);
+        else { char c[64]; snprintf(c, sizeof c, "{%s}", pick("son-clave", "")); wm_rhythm("rhythm.set", c); }
         watch(150);                                     /* (2.5 s: the words fade, a bar or two goes by) */
         if (s_tr.changes || s_tr.looks) { bad_steps++; printf("    %s: %d changes of picture, %d new looks\n", STEPS[q].what, s_tr.changes, s_tr.looks); }
         s_tr.changes = s_tr.looks = 0;
@@ -449,13 +511,131 @@ static double device_ms(bool turn, double *worst) {
         if (turn) touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an));
         wm_frame(dt);
         const float ms = wm_frame_info()[FI_FRAME_MS];
-        dt = (uint32_t)(ms * 1000.f);
         if (q >= 30) { sum += ms; n++; if (ms > *worst) *worst = ms; }
     }
     if (turn) touch_at(0, 0.f, 0.f);
     wm_device(0);
     return sum / n;
 }
+/* the wheel turning ten seconds with the bell at 220 (device mode: the panel keeps what is not sent): every frame the
+ * hand is drawn for that frame's own step, and the drawer owes no cell to the next frame (an owed cell shows the frame
+ * before: the middle lagging, the hand a frame late) */
+static void test_turn_fresh(void) {
+    wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(60);
+    show(pick("bell-12", "\"bpm\":220"));
+    formed();
+    wm_device(1);
+    int late[2] = { 0, 0 }, owed[2] = { 0, 0 };
+    double px[2] = { 0, 0 }; int pxmax[2] = { 0, 0 };   /* the pixels drawn into the glass a frame: the work, untimed */
+    for (int turning = 0; turning < 2; turning++) {     /* ten seconds still, then ten seconds turning */
+        float a = 90.f;
+        if (turning) { touch_at(1, 0.f, 0.93f); wm_frame(DT); }
+        for (int f = 0; f < 600; f++) {
+            if (turning) {
+                a += f % 200 >= 100 ? 2.f : -2.f;          /* 120 degrees a second, both ways in turn */
+                touch_at(1, 0.93f * cosf(a * 0.017453293f), 0.93f * sinf(a * 0.017453293f));
+            }
+            wm_frame(DT);
+            rhy_view_t v; rhy_pattern_t pt;
+            rhythm_now(&v, &pt);
+            const float want = (float)(90.0 - 360.0 * rhy_onset(&pt, v.step) / pt.start[pt.steps]);
+            if (v.step >= 0 && fabsf(hand_angle(s_sp.cur) - want) > 0.01f) late[turning]++;
+            owed[turning] += s_draw->nowed > 0;
+            px[turning] += s_draw->ndrawn + s_draw->nowed * 64; if (s_draw->ndrawn > pxmax[turning]) pxmax[turning] = s_draw->ndrawn;
+        }
+        if (turning) { touch_at(0, 0.f, 0.f); frames(2); }
+    }
+    wm_device(0);
+    /* the work a frame of the turn adds, in pixels drawn (the drawer's budget is timed, on the device and in the model,
+     * so the frames that owe a cell vary with the computer's load: reported, not checked) */
+    px[0] /= 600; px[1] /= 600;
+    CHECK(!late[0] && !late[1], "ten seconds of turning: the hand on its own frame's step every frame (%d not)", late[1]);
+    CHECK(px[1] <= px[0] * 1.3 && pxmax[1] <= 20000, "a frame of the turn draws about what a still frame does: %.0f px against %.0f, at most %d (the drawer takes 40000)", px[1], px[0], pxmax[1]);
+    printf("  turn    600 frames turning with the bell at 220: the hand on each frame's own step; %.0f px drawn a frame (%.0f still, at most %d), %d frames owed a cell (%d still)\n", px[1], px[0], pxmax[1], owed[1], owed[0]);
+}
+
+/* ── closing any scene by hand: the reject button closes it whole, a finger held still a second closes one level ── */
+static const char *scene_why(cJSON **last) {
+    if (events_named("scene", last) < 1) return "";
+    return str(cJSON_GetObjectItem(cJSON_GetObjectItem(*last, "data"), "why"));
+}
+static void hold_at(float x, float y, int n) { touch_at(1, x, y); frames(n); }
+static void test_close(const char *rhythm_pkg, size_t rlen) {
+    /* a plain package: a chart whose spot opens a close-up (the astrology skill's shape), no beat, no wheel */
+    static const char *PKG = "{\"v\":\"molty-pkg/1\",\"id\":\"plain\",\"name\":\"Plain\",\"version\":\"1.0.0\",\"kind\":\"scenes\",\"layouts\":{"
+        "\"chart\":{\"dur\":0,\"items\":[{\"k\":\"ring\",\"r\":0.6},{\"k\":\"spot\",\"x\":0.4,\"y\":0,\"r\":0.12,\"say\":\"a planet\",\"id\":\"mars\",\"open\":\"close\"}]},"
+        "\"close\":{\"dur\":0,\"items\":[{\"k\":\"ring\",\"r\":0.3},{\"k\":\"disc\",\"r\":0.1}]}}}";
+    wm_rhythm("rhythm.stop", NULL); wm_scene_clear(); frames(90);
+    CHECK(wm_package(PKG, strlen(PKG)) == 0, "a plain package");
+    cJSON *last = NULL;
+    /* the button: no scene up, it does as before (bound to the screen or an event); a scene up, it closes it */
+    const int bound = gesture_binds_get(mole_fluid_gestures(), GESTURE_IN_BUTTON_REJECT);
+    events_named("x", NULL);
+    wm_button(1, 1); frames(2); wm_button(1, 0); frames(40);
+    const int before = events_named("button", NULL);
+    CHECK(!s_sp.cur && (bound != GESTURE_DO_EVENT || before == 1) && (bound != GESTURE_DO_SCREEN || !mole_fluid_screen_on()),
+          "no scene: the reject button does what it is bound to (%d: %d events, screen %d)", bound, before, mole_fluid_screen_on());
+    frames(60);
+    if (bound == GESTURE_DO_SCREEN) { wm_button(1, 1); frames(2); wm_button(1, 0); frames(60); }   /* (the screen back on) */
+    CHECK(wm_scene_op("chart", "{}", 600, 0) == 0, "the chart shows"); frames(90);
+    events_named("x", NULL);
+    wm_button(1, 1); frames(2); wm_button(1, 0); frames(10);
+    CHECK(!s_sp.cur && !strcmp(scene_why(&last), "close") && events_named("button", NULL) == 0 && wm_closed_buzz() == 0,
+          "a scene up: the reject button closes it, a scene {why: close}, no button event, no buzz");
+    frames(90);
+    /* the hold: a tap and an early release never close; a second still closes one level, then the next */
+    wm_scene_op("chart", "{}", 600, 0); frames(90);
+    events_named("x", NULL);
+    hold_at(-0.3f, 0.3f, 3); touch_at(0, 0.f, 0.f); frames(30);
+    CHECK(s_sp.cur && events_named("scene", NULL) == 0, "a tap: nothing closes");
+    hold_at(-0.3f, 0.3f, 45); touch_at(0, 0.f, 0.f); frames(30);
+    CHECK(s_sp.cur && events_named("scene", NULL) == 0, "held 0.75 s and let go: nothing closes");
+    touch_at(1, -0.3f, 0.3f); frames(20);
+    for (int q = 0; q < 40; q++) { touch_at(1, -0.3f + q * 0.004f, 0.3f); frames(1); }   /* drifts 0.16: a drag */
+    touch_at(0, 0.f, 0.f); frames(30);
+    CHECK(s_sp.cur && events_named("scene", NULL) == 0, "a finger that moves: nothing closes");
+    touch_at(1, 0.4f, 0.f); frames(2); touch_at(0, 0.f, 0.f); frames(60);   /* the spot */
+    CHECK(s_sp.cur && !strcmp(s_sp.cur->layout, "close"), "a tap on the spot opens the close-up");
+    /* held on the close-up's own drawing: back to the chart (a press beside it goes back at once, as a tap does) */
+    events_named("x", NULL);
+    hold_at(0.f, 0.f, 70);
+    touch_at(0, 0.f, 0.f); frames(10);
+    CHECK(s_sp.cur && !strcmp(s_sp.cur->layout, "chart") && !strcmp(scene_why(&last), "close") &&
+          !strcmp(str(cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "layout")), "chart") && wm_closed_buzz() == 1,
+          "held a second in the close-up: back to the chart, a scene {why: close, layout: chart}, one touch buzz");
+    touch_at(1, 0.4f, 0.f); frames(2); touch_at(0, 0.f, 0.f); frames(60);
+    events_named("x", NULL);
+    hold_at(-0.5f, -0.5f, 70); touch_at(0, 0.f, 0.f); frames(10);
+    CHECK(s_sp.cur && !strcmp(s_sp.cur->layout, "chart") && !strcmp(scene_why(&last), "back") && wm_closed_buzz() == 0,
+          "held beside the close-up: back one level only (its press went back), never two");
+    hold_at(0.f, -0.5f, 70); touch_at(0, 0.f, 0.f); frames(10);
+    CHECK(!s_sp.cur && !strcmp(scene_why(&last), "close") && !cJSON_GetObjectItem(cJSON_GetObjectItem(last, "data"), "layout"),
+          "held again at the top: the creature back, a scene {why: close} with no layout");
+    /* the ring of dots while it fills: none at first, some halfway */
+    wm_scene_op("chart", "{}", 600, 0); frames(90);
+    touch_at(1, 0.2f, -0.4f); frames(8);
+    const int n0 = s_nshp; frames(30);
+    const int n1 = s_nshp;
+    touch_at(0, 0.f, 0.f); frames(10);
+    CHECK(n1 >= n0 + SCENE_HOLD_DOTS, "while it is held a ring of dots shows (%d shapes, then %d)", n0, n1);
+    wm_scene_clear(); frames(90);
+    /* the rhythm: a slow drag round the rim and a centre tap never close it; a hold does, and the rhythm stops */
+    CHECK(wm_package(rhythm_pkg, rlen) == 0, "the rhythm package again");
+    show("\"pick\":0,\"bpm\":100");
+    frames(120);
+    events_named("x", NULL);
+    touch_at(1, 0.f, 0.93f); frames(1);
+    for (int q = 1; q <= 30; q++) { const float an = (90.f - q * 0.4f) * 0.017453293f; touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an)); frames(4); }   /* 12 degrees in 2 s */
+    touch_at(0, 0.f, 0.f); frames(4);
+    CHECK(s_sp.cur && events_named("scene", NULL) == 0, "a slow drag round the rim never counts as a hold");
+    tap(0.03f, 0.03f); frames(20); tap(0.03f, 0.03f); frames(20);
+    CHECK(s_sp.cur && events_named("scene", NULL) == 0 && rhythm_active(), "the centre's taps never close it");
+    hold_at(-0.4f, 0.1f, 70); touch_at(0, 0.f, 0.f); frames(40);
+    CHECK(!s_sp.cur && !rhythm_active() && !strcmp(scene_why(&last), "close"), "a hold closes the clock, the rhythm stops with it");
+    cJSON_Delete(last);
+    printf("  close   the reject button closes any scene (as bound with none); a still finger for %.1f s closes a level; taps, a drag, the rim and an early lift never do\n", SCENE_HOLD_S);
+}
+
 static void test_cost(void) {
     wm_scene_clear(); frames(120);
     double w0, w1, w2;
@@ -463,7 +643,7 @@ static void test_cost(void) {
     double t0 = now_us();
     frames(120);
     const double creature = (now_us() - t0) / 120;
-    show("\"pick\":9,\"bpm\":220");                      /* the bell 12/8, the busiest */
+    show(pick("bell-12", "\"bpm\":220"));                      /* the bell 12/8, the busiest */
     frames(120);
     t0 = now_us();
     touch_at(1, 0.f, 0.93f);
@@ -490,14 +670,22 @@ int main(int argc, char **argv) {
     size_t ll;
     char *lib = slurp(argv[2], &ll);
     while (ll && (lib[ll - 1] == '\n' || lib[ll - 1] == ' ')) lib[--ll] = 0;
-    snprintf(LIB_ARGS, sizeof LIB_ARGS, "{\"rhythms\":%s", lib);
+    snprintf(LIB_ARGS, sizeof LIB_ARGS, "%.*s", (int)ll - 1, lib);      /* ({regions, rhythms} without its last brace) */
+    {
+        cJSON *L = cJSON_Parse(lib), *r;
+        cJSON_ArrayForEach(r, cJSON_GetObjectItem(L, "rhythms")) snprintf(IDS[NIDS++], RHY_ID_MAX + 1, "%s", str(cJSON_GetObjectItem(r, "id")));
+        cJSON_Delete(L);
+    }
     free(lib);
     if (wm_start(S, 7, 0) != 0 || wm_package(pkg, len) != 0) { fprintf(stderr, "beat_test: no start\n"); return 2; }
     wm_sense(1);
     frames(60);
     test_clock();
     test_wheel();
+    test_regions();
     test_still_picture();
+    test_turn_fresh();
+    test_close(pkg, len);
     test_cost();
     free(pkg);
     printf("beat_test: %d passed, %d failed\n", s_pass, s_fail);

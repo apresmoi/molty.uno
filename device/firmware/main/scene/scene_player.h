@@ -133,6 +133,7 @@ typedef struct {
     float since;                        /* s since that step or click began                  */
     int slot, norder;                   /* where in the phrase                              */
     bool rest;                          /* stopped, choosing: the hand at rest, the play mark */
+    bool enter;                         /* ... at the regions: the enter mark instead        */
     bool hide_name;                     /* (a wheel shows its own words in the middle)       */
     char label[13];
 } scene_beat_t;
@@ -145,23 +146,32 @@ int scene_beat_hit(const scene_t *sc, float x, float y);
  * (sense/ring_input.h), on the device, with no round trip: a number (a tempo) or a choice among labels (a list, the beat
  * player's library). Two faces, each its own dial: face 0 while the beat plays (or with no beat), face 1 while it is
  * stopped; the centre's tap plays and stops it (mole_fluid.c). The agent hears where a wheel settled (a `ring` event).
- * scene_wheel draws them, live, each frame: the rail, its ticks (a number) or one bead a label (a choice) turning with
- * the finger, the notch at 12 o'clock that flashes on each click, and in the middle the value while it turns (and
+ * scene_wheel draws them, live, each frame: the rail, its ticks (a number) or one bead a label (a choice) stepping a
+ * click at a time (never sliding: a frame of a turn redraws only what a click changed), the notch at 12 o'clock that
+ * flashes on each click, and in the middle the value while it turns (and
  * SCENE_WHEEL_SHOW_S after), or the choice, under the beat's play mark, all the while face 1 is up. */
 #define SCENE_WHEEL_SHOW_S 0.9f
-#define SCENE_WHEEL_SCALE  75.f        /* a number's ticks: this far each side of the notch (a turning tick is a redraw) */
+#define SCENE_WHEEL_SCALE  75.f        /* a number's ticks: this far each side of the notch */
 #define SCENE_WHEEL_LABELS 32
-#define SCENE_NOTCH_RGB   0x7be0a0u     /* the notch: Molty's green                      */
+#define SCENE_NOTCH_RGB   0x7be0a0u     /* the notch on face 0 (the tempo): Molty's green, the accent */
+#define SCENE_CHOOSE_RGB  0xffd88au     /* ... on face 1 (choosing): warm gold                       */
+#define SCENE_WHEEL_ABOVE_Y 0.27f       /* a pick's region label above the name (of the beat's 0.672 r), its zone's half */
+#define SCENE_WHEEL_ABOVE_W 0.30f       /* width and half height: a tap there goes up a level             */
+#define SCENE_WHEEL_ABOVE_H 0.075f
 typedef struct {
     int face;                           /* 0, 1: the dial up                              */
     float value;                        /* its value (a number dial)                      */
     int index;                          /* its label (a choice)                           */
-    float turn;                         /* degrees turned since the last click, clockwise (the finger on it) */
     bool turning;                       /* a finger is on it                              */
     float since;                        /* s since the finger left it                      */
     float flash;                        /* the notch's flash: 1 at a click, down to 0     */
     int nlabels;
     const char (*labels)[PKG_KEY_MAX + 1];
+    const uint32_t *tints;              /* each label's tint (a bead), NULL: none            */
+    int level;                          /* a pick's: 0 a region's rhythms, 1 the regions     */
+    const char *above, *below;          /* small words over the name (the region, a tap goes up) and under it (a
+                                         * region's size), NULL: none                         */
+    uint32_t above_rgb;
 } scene_wheel_t;
 /** The dial on face f, the centre: item indices, -1 none. */
 int scene_dial(const scene_t *sc, int face);
@@ -318,6 +328,16 @@ typedef struct {
 #define SCENE_RING_HW   1.5f            /* half its width, px                              */
 int scene_rings(fluid_shape_t *shp, int n, int stage, const fluid_ring_t *ring, const fluid_progress_t *prog, bool thinking,
                 uint32_t listen_rgb, uint32_t prog_rgb);
+/** A finger held to close the scene (hold: its share of SCENE_HOLD_S): from SCENE_HOLD_SHOW_S on, SCENE_HOLD_DOTS dots
+ *  round the glass at SCENE_HOLD_R (inside a wheel's rail), filling clockwise from 12 o'clock, the rest faint. Into
+ *  shp[n..) before the caption's letters; returns the new count. */
+#define SCENE_HOLD_S      1.0f          /* held this long, still: the scene closes                                */
+#define SCENE_HOLD_SHOW_S 0.25f         /* ... its ring shows from here (a tap never flashes it)                  */
+#define SCENE_HOLD_SLOP   0.05f         /* glass units it may move (~12 px; a wheel's click is 0.19 at its rim)   */
+#define SCENE_HOLD_DOTS   32
+#define SCENE_HOLD_R      0.885f
+#define SCENE_HOLD_RGB    0x7be0a0u     /* Molty's green, as the notch                                            */
+int scene_hold_ring(fluid_shape_t *shp, int n, int stage, float hold);
 /** The scene's shapes at t with its tapped spot (sc->focus) at full growth and lit, no caption: what its fine dust
  *  gathers round (fluid_fine_want). n of them (-1: too many); key: a hash of them (the same drawing, the same key). */
 int scene_full_shapes(fluid_sim_t *s, const scene_t *sc, float t, fluid_shape_t *out, uint32_t *key);

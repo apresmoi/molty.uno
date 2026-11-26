@@ -251,6 +251,7 @@ static void imu_feed(uint32_t now) {
 
 static int s_wheel_ticks;              /* the motor's ticks a wheel asked for, not yet taken (wm_wheel_ticks) */
 static int s_tick_ms, s_tick_strength; /* ... the last one's plan (haptic_plan_wheel) */
+static int s_close_buzzes;              /* touch buzzes for a scene closed by a hold, not yet taken */
 static uint32_t s_tick_at;
 
 /* sense.c sense_task, one pass (the device: every 10 ms; here once a frame) */
@@ -259,11 +260,11 @@ static void sense_tick(uint32_t now) {
     imu_feed(now);
     if (pair) gesture_reset(&s_g);
     if (s_lis.on && s_voice_in >= 0.05f) s_lis.speech_ms += (uint32_t)(s_fi[FI_FRAME_MS] + 0.5f);   /* the VAD hears it */
-    const bool beat = !pair && !s_q.open && rhythm_active();
+    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && rhythm_active();
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
-        if (beat) {                    /* sense.c: a rhythm shows: accept plays and stops it, reject stops it and leaves */
-            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else rhythm_local_stop(); }
+        if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept plays and stops a rhythm */
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
             s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
             s_btn_prev[b] = on;
             continue;
@@ -307,6 +308,7 @@ static void sense_tick(uint32_t now) {
     if (spot && !pair) spot_do(spot, now);
     mole_scene_evt_t sv;               /* the screen changed on the device itself: the relay hears what is up */
     if (mole_fluid_scene_event(&sv)) ws_emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
+    s_close_buzzes += mole_fluid_take_closed();   /* sense.c: a hold closed a scene, the touch buzz (wm_closed_buzz) */
     {   /* sense.c: a wheel's clicks, its own tick, one at most every HAPTIC_WHEEL_GAP_MS */
         int ms, strength;
         haptic_plan_t pl;
@@ -327,6 +329,8 @@ static void sense_tick(uint32_t now) {
 
 /** The motor's ticks a wheel asked for since the last call (sense.c: one a click, one at most every 60 ms); ms and
  *  strength (non-NULL): the last one's. */
+/** The touch buzzes a hold that closed a scene asked for since the last call. */
+WM_API int wm_closed_buzz(void) { const int n = s_close_buzzes; s_close_buzzes = 0; return n; }
 WM_API int wm_wheel_ticks(int *ms, int *strength) {
     const int n = s_wheel_ticks;
     s_wheel_ticks = 0;

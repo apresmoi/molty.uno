@@ -22,8 +22,9 @@
  * A press on a scene's wheel, its centre or a beat's dot (mole_fluid_zone) is the fluid task's alone: no spot, no tap
  * event; the centre and a dot buzz as a tap that does something, the wheel ticks once a click with its own firmer
  * tick (mole_fluid_take_ticks, haptic_wheel: at most one every HAPTIC_WHEEL_GAP_MS, so a fast turn feels fewer ticks
- * than it makes). It sends a `ring` event once it settles. While a rhythm shows (rhythm.h) the accept button plays and
- * stops it (as the centre does) and the reject button stops it and leaves, whatever they are bound to.
+ * than it makes). It sends a `ring` event once it settles. While a skill's scene shows the reject button closes it
+ * (mole_fluid_scene_close), whatever it is bound to; with a rhythm on it the accept button plays and stops it (as the
+ * centre does). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
  * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
  * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
  * tap, a drag), never a physical button (it clicks by itself).
@@ -216,11 +217,13 @@ static void sense_task(void *arg)
             }
         }
 
-        const bool beat = !pairing && !link_ask_pending() && rhythm_active();
+        /* a skill's scene shows: the reject button closes it (the creature comes back), whatever it is bound to; with a
+         * rhythm on it the accept button plays and stops it (as the centre does). Never a buzz: a button clicks by itself */
+        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && rhythm_active();
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
-            if (beat) {   /* a rhythm shows: accept plays and stops it (as the centre), reject stops it (its clock goes with it) */
-                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else rhythm_local_stop(); }
+            if (up && (b == MOLTY_BTN_REJECT || beat)) {
+                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
                 presser[b].pending = false; gesture_switch_reset(&sw[b]); sw[b].down = on;
                 prev[b] = on;
                 continue;
@@ -260,6 +263,7 @@ static void sense_task(void *arg)
         if (spot && !pairing) spot_do(spot, now, &tap_l);
         mole_scene_evt_t sv;                            /* the screen changed on the device itself: the relay hears what is up */
         if (mole_fluid_scene_event(&sv)) emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
+        if (mole_fluid_take_closed()) acted();         /* a hold on the glass closed a scene: the touch buzz */
         {   /* a wheel's clicks: its own tick (haptic_plan.h HAPTIC_WHEEL_*, or the dial's), one at most every 60 ms */
             static uint32_t tick_at;
             int ms, strength;

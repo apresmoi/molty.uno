@@ -212,7 +212,8 @@ WM_API void wm_haze_water(float kx, float ky) { if (s_haze_live) { s_haze_water[
 /* ── the beat player (rhythm.h): one thread here, and the speaker is the page's: what is made is heard ──────────── */
 void rhythm_lock(void) {}
 void rhythm_unlock(void) {}
-uint64_t rhythm_heard(void) { return UINT64_MAX; }   /* (rhy_view: all that was made) */
+uint64_t rhythm_heard(int32_t ahead_us) { (void)ahead_us; return UINT64_MAX; }   /* (rhy_view: all that was made) */
+void rhythm_sync_saved(int ms) { (void)ms; }       /* (no flash: the page's trim lives as long as the page) */
 #define WM_PCM_MAX 8192
 static int16_t s_pcm[WM_PCM_MAX];
 static int s_npcm;
