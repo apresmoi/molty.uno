@@ -17,7 +17,8 @@
  *            haptic_quiet() (the buzz, then HAPTIC_SETTLE_MS).
  *   cues     the device's own buzzes (haptic_cue): a question with buttons or a pairing code
  *            appears (double). touch: a tap on the screen that does something (haptic_touch: a spot,
- *            a question's or a pairing's answer). Never a physical button (it clicks by itself).
+ *            a question's or a pairing's answer). wheel: a click of a scene's dial (haptic_wheel). Never a
+ *            physical button (it clicks by itself).
  *            Nothing else buzzes by itself.
  *
  * Boards without a motor: haptic_buzz answers ESP_ERR_NOT_SUPPORTED, haptic_quiet is false.
@@ -55,6 +56,8 @@ esp_err_t haptic_buzz(const haptic_plan_t *p);
 esp_err_t haptic_cue(const char *name);
 /** The touch feedback (HAPTIC_TOUCH_MS at HAPTIC_TOUCH_STRENGTH); dropped like any buzz. */
 esp_err_t haptic_touch(void);
+/** A wheel's click (haptic_plan_wheel: 0, 0 for HAPTIC_WHEEL_*); dropped like any buzz. */
+esp_err_t haptic_wheel(int ms, int strength);
 /** True while a buzz runs and HAPTIC_SETTLE_MS after it: the IMU feels the motor. */
 bool      haptic_quiet(void);
 

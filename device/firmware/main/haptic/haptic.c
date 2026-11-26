@@ -127,6 +127,13 @@ esp_err_t haptic_touch(void)
     return haptic_buzz(&p);
 }
 
+esp_err_t haptic_wheel(int ms, int strength)
+{
+    haptic_plan_t p;
+    haptic_plan_wheel(&p, ms, strength);
+    return haptic_buzz(&p);
+}
+
 bool haptic_quiet(void) { return s_mux && esp_timer_get_time() < atomic_load(&s_quiet_until); }
 
 /* ── POST /api/haptic, the link's buzz ────────────────────────────────────── */

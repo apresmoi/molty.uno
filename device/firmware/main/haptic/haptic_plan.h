@@ -38,6 +38,13 @@ extern "C" {
 #define HAPTIC_TOUCH_MS       15
 #define HAPTIC_TOUCH_STRENGTH 35   /* percent. Measured on the 1.75C: the motor does not turn at 20 or below and starts
                                     * at 25 held; 15 ms at 35 is the weakest pulse the IMU saw reliably. Not lower. */
+/* A wheel's click (a scene's dial, haptic_plan_wheel): felt by a finger sliding on the glass while the speaker plays
+ * drums, so far firmer than the touch buzz, yet short enough to stay a crisp tick, not a buzz (the motor spins up in
+ * ~15 ms; past ~30 ms it hums). A dial may carry its own (pkg `tick_ms`, `tick`: the skill tunes it with no new
+ * firmware); 0 there takes these. Chosen by feel on the 1.75C, here only. */
+#define HAPTIC_WHEEL_MS       22
+#define HAPTIC_WHEEL_STRENGTH 80   /* percent */
+#define HAPTIC_WHEEL_GAP_MS   60   /* one tick at most this often (haptic_wheel_due): faster clicks share one */
 
 typedef struct {
     uint16_t seg[HAPTIC_SEGS];   /* ms: even index on, odd off */
@@ -50,6 +57,11 @@ bool haptic_plan_one(haptic_plan_t *p, int ms, int strength);
 /** segs[0..n): on, off, on, ... False for n outside 1..HAPTIC_SEGS, a negative segment, or
  *  nothing on (every on segment 0). */
 bool haptic_plan_pattern(haptic_plan_t *p, const int *segs, int n, int strength);
+/** A wheel's click: ms at strength, each 0 for HAPTIC_WHEEL_MS / HAPTIC_WHEEL_STRENGTH. */
+bool haptic_plan_wheel(haptic_plan_t *p, int ms, int strength);
+/** A wheel's clicks are waiting at now_ms: tick now (and *last_ms = now_ms), unless one went under HAPTIC_WHEEL_GAP_MS
+ *  ago. One caller's *last_ms (sense.c's task). */
+bool haptic_wheel_due(uint32_t *last_ms, uint32_t now_ms);
 /** The named pattern `name` (above) at strength. False for an unknown name. */
 bool haptic_plan_named(haptic_plan_t *p, const char *name, int strength);
 /** The i-th named pattern's name, NULL past the last. */

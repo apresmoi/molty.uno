@@ -26,6 +26,18 @@ bool haptic_plan_one(haptic_plan_t *p, int ms, int strength)
     return haptic_plan_pattern(p, &ms, 1, strength);
 }
 
+bool haptic_plan_wheel(haptic_plan_t *p, int ms, int strength)
+{
+    return haptic_plan_one(p, ms > 0 ? ms : HAPTIC_WHEEL_MS, strength > 0 ? strength : HAPTIC_WHEEL_STRENGTH);
+}
+
+bool haptic_wheel_due(uint32_t *last_ms, uint32_t now_ms)
+{
+    if (*last_ms && now_ms - *last_ms < HAPTIC_WHEEL_GAP_MS) return false;
+    *last_ms = now_ms ? now_ms : 1;
+    return true;
+}
+
 static const struct { const char *name; int n; int seg[3]; } NAMED[] = {
     { "tick",   1, { 30 } },
     { "tap",    1, { 60 } },
