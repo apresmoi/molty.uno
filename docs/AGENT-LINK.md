@@ -852,15 +852,21 @@ Out-of-range or mistyped values → `invalid_args`.
 
 Moods (`mood` cmd, and the implicit `listening`/`speaking` around audio jobs) are moods
 of the creature on screen: the device applies
-`{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (blob when no creature is loaded).
+`{"state":"creature","mood":"<mood>"[,"hold_s":N]}` (the boot word "molty.uno" while no
+creature is loaded).
 During `say` the text state wins over the creature view.
 
 What the screen does between commands (`device/firmware/main/fluid/fluid_director.h`):
 
 - **The creature is home.** The device boots into it, and re-sending the state or mood it
-  already shows changes nothing: a mood blends inside the creature instead of melting it
-  and re-forming. The demo reel runs only on an explicit `state:"autoplay"` (never
-  saved; pairing and the Improv "hi" go back to the creature, not the reel).
+  already shows changes nothing: a mood blends inside the creature. `state` takes
+  `creature` or `text`; anything else is refused (`set_failed`), the old demo states
+  (`blob`, `thinking`, `effect:*`, `autoplay`) included.
+- **Every change of picture is the one dissolve.** The old picture breaks into dust over the
+  whole glass and the dust gathers into the new one (about 1.2 s): the creature, a say's
+  words, a question, a scene, another creature. Nothing else shows between two pictures; if
+  the next one is not ready the old one stays. At power on "molty.uno" gathers on the empty
+  glass and stays until the creature is made, then dissolves into it.
 - **Quick moods revert.** `happy` (3 s) and `surprised` (2 s) return to `idle` on their
   own; `listening`, `thinking`, `speaking`, `sleepy` persist until the next mood.
   `hold_s` overrides either (`0` = until the next mood).
@@ -1078,9 +1084,13 @@ held a second, [Closing a screen](#closing-a-screen)) or `end` (a scene ran out:
 | `dnd` | `{on}` | after each welcome and each change (cap `dnd`): the human's do not disturb (the PWR button's double click, `POST /api/power`). Relay-internal: kept per device; while on, `say` / `quick` / `listen` / `talk` / `ask` / `buzz` without `in_reply_to` fail `do_not_disturb`, and agents get a `dnd` event on each change |
 | `creature` | `{id, name, about?, gestures?, moods?}` | after each welcome and whenever the creature on screen changes: a package's `cp_info` (`about` {look, gestures, moods}: its own words, [CREATURES.md](CREATURES.md) section 1; `gestures` it plays that the firmware knows; `moods` idle and its own), `{id: "", name}` for a creature that is not a package. Relay-internal: kept per device (below) |
 
-Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the fluid stops
-simulating and drawing and the panel sleeps; a touch (not a tap), a shake, a button, new
-words, a question or a listen turns it back on. `GET /api/power` has the battery and the last
+Screen off (the PWR button's `screen` binding, `POST /api/power {screen}`): the picture
+dissolves to an empty glass (about 0.9 s), then the fluid stops simulating and drawing and
+the panel sleeps; a touch (not a tap), a shake, a button, new words, a question or a listen
+turns it back on, and the picture gathers on the empty glass (about 0.65 s). Power off (PWR
+held) dissolves into "bye!", which holds a moment and dissolves to an empty glass before the
+power goes (about 2.5 s; the power goes after 4 s whatever the screen does). A restart the
+device chooses (an update, `POST /api/reboot`) dissolves to the empty glass first too. `GET /api/power` has the battery and the last
 12 h of per-minute samples (device/firmware/main/power/power.h).
 
 The screen also goes off by itself (`screen_nap.h`) once the creature has slept for the human's

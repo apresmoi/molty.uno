@@ -6,6 +6,20 @@ All notable changes to Molty are recorded here. One version covers the whole pro
 
 ## Unreleased
 
+- **Every change of picture is the one dissolve**: the picture breaks into dust and the dust gathers into
+  the next, and nothing else shows between two pictures. At power on "molty.uno" gathers on the empty glass
+  and waits for the creature (never the ball that moved around, and the word stays if the creature cannot be
+  made); a say's words come and go by the dissolve, and the last word no longer comes back over the cat; a
+  question over a scene no longer pops to coarse dots; the relay's first welcome no longer re-melts the word
+  or cuts a dissolve short; a creature change and every way home (the octopus and the duck too) dissolve.
+- **Going dark is the dissolve too**: the screen going off (by hand or the nap) dissolves to an empty glass
+  before the panel sleeps, and waking gathers the picture from dust (about 0.65 s). Power off dissolves into
+  "bye!" and then to an empty glass (about 2.5 s, was 4 s: no ball, no pond, no fade), and a restart after an
+  update or `POST /api/reboot` dissolves to the empty glass first.
+- **The old demo states are gone**: `state` takes `creature` or `text`; `blob`, `thinking`,
+  `effect:ripple|vortex|wave` and `autoplay` are refused like any unknown value, and `GET /api/creature/state`
+  no longer reports `autoplay` or `reel_step`.
+
 - **No more starved boot**: the fluid takes internal RAM only once the relay link is up, and only what is
   left above 40 KB. Before, it took it before Wi-Fi and TLS, leaving 2 KB at the link's handshake on the
   1.75C (failed connects, LCD and USB errors until the heap guard gave it back).
