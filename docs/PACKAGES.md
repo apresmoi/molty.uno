@@ -187,16 +187,21 @@ frame, with no round trip.
   further out is the wheel's until it lifts, so it never stirs the water, never taps a spot and never sends a `tap`.
   Every `step` degrees (12) turned is one click: clockwise adds `by` (1; `fast` turning over 200 degrees a second) to its
   value, held to `min`..`max`, from `value`; with `labels` (a list param, each element's `label` field) it steps through
-  them instead, one bead each, `step` apart, the chosen one under the notch at 12 o'clock. Each click flashes the notch
+  them instead, one bead each, `step` apart, the chosen one under the notch at 12 o'clock; beads and ticks step a click at
+  a time, never sliding with the finger (a frame of a turn redraws only what a click changed). Each click flashes the notch
   and ticks the motor, `tick_ms` (5 to 60) at `tick` percent (25 to 100); 0 or left out is the device's own wheel tick
   (22 ms at 80, firmer than a tap's buzz), at most one every 60 ms. While a number turns, and 0.9 s after, it shows in
   the middle; a choice's label shows all the while its face is up. `sets: "tempo"` makes the value the beat player's
-  tempo at once; `sets: "pick"` steps through the beat player's rhythms (its labels), the clock showing each at once.
+  tempo at once; `sets: "pick"` steps through the beat player's rhythms (its labels), the clock showing each at once;
+  when `rhythm.play` sent `regions`, it steps through one region's rhythms, the region's name small above the rhythm's
+  (a tap there goes up: the rim steps through the regions, each bead its tint, a tap on the centre opens the one
+  chosen on its last rhythm, a `ring` event `{spot: "region", index, label}` when it settles there).
   `face: 0` is up while the beat plays (or with no beat), `face: 1` while it is stopped. When it settles where the
   finger moved it the agent gets one `ring` event: `{spot: id, value}`, or `{spot, index, label}` (and `id`, the
   rhythm a pick chose).
 - A **`centre`** is a disc of radius `r` round the centre: a tap there plays the beat (after a count-in) or stops it
-  at rest, back at the phrase's start (a `rhythm` event, `playing` or `paused`). A layout with a centre has a beat.
+  at rest, back at the phrase's start (a `rhythm` event, `playing` or `paused`); at the regions it opens the one chosen
+  (its mark a ring of dots). A layout with a centre has a beat. A beat's dots take a tap only while it plays.
 
 The rhythm package's clock is all three: `{ "k": "beat", "r": 0.672 }`, a tempo dial (`step` 12, `by` 2, `fast` 4, 40 to
 220, `sets: "tempo"`), a pick dial on face 1 (`step` 30, `sets: "pick"`), both ticking `$tick_ms` at `$tick`, and a

@@ -207,6 +207,8 @@ draw:
   percent; left out, Molty's own). The agent hears one `ring` event when it settles. `face: 0` is up while the clock
   plays (or with no clock), `face: 1` while it is stopped.
 - `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` on the screen.
+- Sent with regions (`rhythm.play`'s `regions`), a `sets: pick` wheel shows one region's rhythms, the region's name small
+  above: a tap on it goes up to the regions, and `centre_tap` there opens the one chosen.
 
 The molty-rhythm skill (`skills/molty-rhythm/`) is the example; [PACKAGES.md](PACKAGES.md#layouts) has every rule.
 

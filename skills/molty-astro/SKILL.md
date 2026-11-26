@@ -30,7 +30,8 @@ instant, `--ttl <s>` (how long a held scene stays, max 600), `--dry-run` (print 
 nothing). Event kinds: `transit`, `occultation`, `appulse`, `solar-eclipse`, `lunar-eclipse`.
 
 Each run prints `SAY: <one line>` and `FACTS: <json>`. The first scene replaces the screen,
-the rest queue behind it; Molty melts back to its creature when they end.
+the rest queue behind it; Molty melts back when they end. Closed by hand (reject button, a finger held
+1 s): `scene` event, why `close`.
 
 ## Screens
 

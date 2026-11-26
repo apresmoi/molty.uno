@@ -1,6 +1,6 @@
 ---
 name: molty-rhythm
-description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a tap in the middle to play and stop, and a rim they turn to choose a rhythm (stopped) or the tempo (playing). Twelve verified rhythms (chacarera, clave, bossa nova, the 12/8 bell, solea, aksak and more). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave"), and they have a Molty paired through the molty skill.
+description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a tap in the middle to play and stop, and a rim they turn to choose a rhythm (stopped) or the tempo (playing). 67 verified rhythms in 12 regions (Argentina: chacarera, zamba, chamamé, gato, cueca and more; the Caribbean, Brazil, flamenco, West Africa, the Middle East, the Balkans, India, Ireland, the US, the basics). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave", "something from Brazil"), and they have a Molty paired through the molty skill.
 ---
 
 # Molty rhythm
@@ -21,15 +21,17 @@ node "<skill-dir>/scripts/rhythm.mjs" play chacarera --bpm 100   # the clock, a 
 node "<skill-dir>/scripts/rhythm.mjs" set --bpm 90                # slower, at once, without restarting
 node "<skill-dir>/scripts/rhythm.mjs" set --rhythm son-clave      # another rhythm, after a count-in
 node "<skill-dir>/scripts/rhythm.mjs" set --next                  # the next bar of the phrase
+node "<skill-dir>/scripts/rhythm.mjs" play --region brazil         # a region's rhythms, stopped, to choose from
 node "<skill-dir>/scripts/rhythm.mjs" stop                        # silence; the creature comes back
 ```
 
 Also: `play <id> --mute aro` (that drum silent), `--still` (stopped, ready to choose: a tap in the
 middle plays it), `--buzz` (a short buzz on each main beat, see below), `--ttl <s>` (how long it
 shows, 600 at most), `--tick <percent> --tick-ms <ms>` (the rim's tick on the motor, only when asked
-to tune it; Molty's own otherwise); `set --mute aro,parche | none`, `set --pause` (stopped, choosing)
-`| --resume` (plays, after a count-in), `set --buzz on|off`; `list` (the library), `--dry-run` (print
-the commands, send nothing).
+to tune it; Molty's own otherwise), `--sync <ms>` (below); `set --mute aro,parche | none`, `set --pause`
+(stopped, choosing) `| --resume` (plays, after a count-in), `set --region <id>` (that region's first
+rhythm), `set --buzz on|off`, `set --sync <ms>`; `list [--region <id>]`, `regions` (the regions and
+how many each holds), `--dry-run` (print the commands, send nothing).
 
 Each `play` prints `SAY: <one line>` and `FACTS: <json>` (the drums, the beats, the source).
 
@@ -37,12 +39,18 @@ Each `play` prints `SAY: <one line>` and `FACTS: <json>` (the drums, the beats, 
 
 - **Tap the middle**: it plays (after a count-in); tap again: it stops. The middle shows a play
   mark while stopped, a small stop mark while it plays.
-- **Stopped, turn the rim** (a drag round the edge): choose a rhythm, one bead a rhythm, its name in
-  the middle and its clock drawn at once. No sound until the tap.
+- **Stopped, turn the rim** (a drag round the edge): choose a rhythm of the region, one bead a rhythm,
+  its name in the middle and its clock drawn at once. No sound until the tap.
+- **Stopped, tap the region's name** (small, above the rhythm's): up to the regions. The rim steps
+  through them (each its own tint, how many rhythms under its name); a tap in the middle opens the
+  one under the notch, on the rhythm last chosen there.
 - **Playing, turn the rim**: the tempo, 2 beats a minute a click (4 turning fast), 40 to 220, the
   number in the middle while it turns. It keeps playing. Molty ticks the motor once a click.
 - **Tap a drum's dot**: mute that drum; tap again to bring it back.
-- **Accept button**: play and stop, as the middle. **The other button**: stop and leave.
+- **Accept button**: play and stop, as the middle.
+- **Close it**: the other button, or a finger held still on the glass for a second (a ring of dots
+  fills round the rim). The rhythm stops and the creature comes back; you get a `scene` event, why
+  `close`. Do not show it again unless they ask.
 
 You hear where they settled as events ([events](references/commands.md#events-you-get)): a new tempo,
 a rhythm chosen, a muted drum, played or stopped, gone. Use them for what you say next; never answer
@@ -60,9 +68,19 @@ each one.
 
 ## The library
 
-Twelve rhythms, each confirmed by two sources (`list` shows them): chacarera, chacarera trunca,
-carnavalito, milonga campera, tango marcato, habanera, son clave, rumba clave, bossa nova, the 12/8
-bell, solea, aksak 9/8. The data format, the sources and what was left out: [library.md](references/library.md).
+67 rhythms, each given the same way by two independent sources, in 12 regions (`regions`, `list`):
+Argentina (15: chacarera, zamba, chamamé, gato, escondido, cueca, chacarera doble and trunca,
+carnavalito, vidala, rasguido doble, milonga, tango marcato and síncopa, vals criollo), Latin America
+(candombe, cumbia), the Caribbean (claves, tresillo, cinquillo, habanera, tumbao, one drop, ska,
+dembow), Brazil (bossa nova, samba, baião), flamenco, West Africa, the Middle East, the Balkans,
+India, Ireland, the US and the basics (waltz, polka, march, 3:2, 4:3). The data format, every source,
+the colours and what was left out (and why): [library.md](references/library.md).
+
+## Sync
+
+Molty draws each frame for the moment it is seen and the sound it hears then. If your human says the
+picture is early or late, run `rhythm.mjs calibrate` (one click a beat, one flash), then `set --sync
+<ms>`: positive draws the picture earlier, negative later, -250 to 250, kept on Molty.
 
 ## Install, once
 

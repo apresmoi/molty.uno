@@ -453,6 +453,10 @@ first: Molty asks `INSTALL <NAME>?` and they tap `install` (`declined` = they ta
 in a minute; don't retry unasked). A ring then grows round the screen while Molty downloads the file and
 flashes when it is in. Installs are kept; never reinstall what is `installed` and current.
 
+**Closing.** Your human can close any scene on Molty itself: the reject button, or a finger held still on the glass
+for a second (a ring of dots fills round the rim). You then get a `scene` event with `why: "close"` (`layout`: the
+one now up, none when the creature is back): the screen is gone, do not put it back unasked.
+
 **Playing.** Don't send `scene.*` by hand: the entry's `skills` know the package, e.g. **molty-astro**
 for the sky (`https://github.com/apresmoi/molty.uno/tree/main/skills/molty-astro`); its `layouts` are
 what it can draw. The format: `https://github.com/apresmoi/molty.uno/blob/main/docs/PACKAGES.md`.
