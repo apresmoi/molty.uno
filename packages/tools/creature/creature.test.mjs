@@ -23,7 +23,7 @@ import { LIMITS, SCHEMA, build, check } from './build.mjs';
 import { preview } from './preview.mjs';
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url)), CAT = join(ROOT, 'moltys/cat'), PIP = join(ROOT, 'docs/examples/molty-pip');
-const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = '73b6ad846267a744c9ae3bc992d955e75b5377f528260a48bc1bd56efa1040d0';
+const GOLDEN = join(ROOT, 'packages/cat/cat.json'), GOLDEN_SHA = 'a3918d352d778c3b641a39f2db9db9638efc1f4277c8634e05eefbf0d138a0ee';
 const CLI = join(ROOT, 'packages/tools/molty-creature.mjs'), EXPORTER = join(ROOT, 'tools/blender/molty_export.py');
 const TMP = mkdtempSync(join(tmpdir(), 'molty-creature-'));
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -63,7 +63,7 @@ test('golden: the cat\'s folder builds today\'s cat.json byte for byte, with no 
   const bytes = readFileSync(out);
   assert.equal(sha(bytes), GOLDEN_SHA);
   assert.ok(bytes.equals(readFileSync(GOLDEN)), 'the built Molty is packages/cat/cat.json');
-  assert.equal(bytes.length, 218469);
+  assert.equal(bytes.length, 217253);
   const r = check(CAT);
   assert.deepEqual([r.errors, r.warnings], [[], []]);
   assert.equal(r.doc.about, readFileSync(join(ROOT, 'packages/cat/description.txt'), 'utf8').trim(), 'the catalog line is molty.json\'s about');

@@ -27,12 +27,12 @@
   },
   "cat": {
     "name": "Cat",
-    "version": "2.3.1",
+    "version": "2.3.2",
     "kind": "creature",
     "description": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
     "path": "packages/cat/cat.json",
-    "size": 218469,
-    "sha256": "73b6ad846267a744c9ae3bc992d955e75b5377f528260a48bc1bd56efa1040d0"
+    "size": 217253,
+    "sha256": "a3918d352d778c3b641a39f2db9db9638efc1f4277c8634e05eefbf0d138a0ee"
   },
   "duck": {
     "name": "Duck",
