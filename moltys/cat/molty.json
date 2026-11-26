@@ -2,7 +2,7 @@
   "molty": "molty/2",
   "id": "cat",
   "name": "Cat",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "about": "A small cat that lives on the screen, with its own moods and gestures. Built into every Molty; install only for a newer version.",
   "look": "A slim lavender cat drawn as a fine outline: pointy ears pink inside, round green eyes, a pink nose, whiskers, a white chest. A long darker tail. It sits, stands, lies in a loaf and walks.",
   "body": "cat.glb",
@@ -52,8 +52,10 @@
     "walk": { "about": "gets up and walks a few steps across the floor, then settles again", "hold": 6, "lasts": 8 },
     "groom": { "about": "licks a raised front paw and wipes it over its ear and face, now and then switching paws", "habit": true,
       "chain": { "first": ["groom_lick_l", "groom_lick_r"], "then": ["groom_lick_l", "groom_lick2_l", "groom_wipe_l", "groom_wipe2_l", "groom_lick_r", "groom_lick2_r", "groom_wipe_r", "groom_wipe2_r", "paw_l_to_paw_r", "paw_r_to_paw_l"], "rounds": [3, 8] } },
-    "wash": { "about": "turns its head round and licks its shoulder or its flank in a few strokes", "habit": true,
-      "chain": { "then": ["wash_shoulder_l", "wash_flank_l", "wash_shoulder_r", "wash_flank_r"], "rounds": [1, 3] } },
+    "wash_l": { "about": "washes its left side: chest, shoulder and flank in long strokes along the fur", "habit": true,
+      "chain": { "then": ["wash_chest_l", "wash_shoulder_l", "wash_flank_l"], "rounds": [2, 4] } },
+    "wash_r": { "about": "washes its right side: chest, shoulder and flank in long strokes along the fur", "habit": true,
+      "chain": { "then": ["wash_chest_r", "wash_shoulder_r", "wash_flank_r"], "rounds": [2, 4] } },
     "leg_up": { "about": "sits back, one hind leg straight up, and licks under it; now and then it looks up, tongue out", "habit": true,
       "chain": { "then": ["legup_lick", "legup_lick2", "legup_blep"], "rounds": [2, 4] } }
   },
@@ -81,7 +83,7 @@
       { "layer": "gaze_up", "clip": "look_ud", "by": "head_y", "zero": 0.5, "bones": ["neck", "head"], "weight": "free" }
     ],
     "moments": [
-      { "every": [40, 90], "pick": { "groom": 3, "wash": 2, "leg_up": 2, "stretch": 1, "yawn": 0.5, "glance_left": 1, "glance_right": 1, "look_up": 1 } }
+      { "every": [40, 90], "pick": { "groom": 3, "wash_l": 1, "wash_r": 1, "leg_up": 2, "stretch": 1, "yawn": 0.5, "glance_left": 1, "glance_right": 1, "look_up": 1 } }
     ]
   }
 }
