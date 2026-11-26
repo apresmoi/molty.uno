@@ -9,7 +9,8 @@
  *     one change into the creature starts, as soon as the creature is made (at 2.8 s if it was made before); with no
  *     creature the word stays for good, lit, and a say over it comes back to it;
  *   the relay's first welcome (the grid rebuilt in internal RAM): never while the word is up or a change runs, so the
- *     word never melts and the change is never cut short; the rebuild still happens once the picture is still.
+ *     word never melts and the change is never cut short; the rebuild still happens once the picture is still;
+ *   a say's words going back to the cat: the last word never comes back over the cat as its dust gathers.
  *
  *   picture_flow_test <repo root> <case>   (picture_flow_build.sh runs every case)
  */
@@ -131,6 +132,38 @@ static boot_t boot_run(int until, int welcome_at) {
     return b;
 }
 
+/* the lit pixels in the reader's box (where a say's word stands, over the cat's chest) */
+static int box_lit(void) {
+    const uint8_t *p = wm_pixels();
+    int n = 0;
+    for (int y = 205; y < 262; y++) for (int x = 150; x < 320; x++) { const uint8_t *q = p + ((size_t)y * PX + x) * 4; n += q[0] > LIT || q[1] > LIT || q[2] > LIT; }
+    return n;
+}
+
+/* a say's words, then back to the cat by one change; the last word never comes back over the cat as the dust gathers
+ * (the letters stay out of the new picture) */
+static void case_say(const char *state, bool held) {
+    CHECK(wm_creature("cat", s_cat, s_cat_len) == 0 && wm_start(PX, 20260516, 0) == 0, "power on");
+    wm_device(1);
+    frames(150);
+    CHECK(wm_state(state) == 0, "the words");
+    int most = 0, n = 0, start = -1, words = 0;
+    bool was = false;
+    for (int i = 0; i < 360 && (start < 0 || was || n < 10); i++) {
+        if (held && i == 75) CHECK(wm_state("{\"state\":\"creature\"}") == 0, "home");
+        frame();
+        const bool on = fluid_draw_morphing(s_draw);
+        if (s_cur == ST_TEXT) words = box_lit() > words ? box_lit() : words;
+        if (on && !was && s_cur == ST_CREATURE) start = s_fno;
+        if (start >= 0 && s_fno >= start + 20) { const int b = box_lit(); if (b > most) most = b; n += !on; }   /* (its gathering half) */
+        was = on;
+    }
+    const int settled = box_lit();
+    printf("%s: the words %d lit px in the reader's box; going: most %d, the cat settled %d\n", state, words, most, settled);
+    CHECK(start > 0 && words > 2 * settled, "the words were up, then one change back to the cat (at frame %d)", start);
+    CHECK(most <= settled * 115 / 100, "the word came back over the cat: %d lit px in its box, the cat alone %d", most, settled);
+}
+
 /* each case is a power on of its own (the module starts once): picture_flow_test <repo root> <case> */
 static void case_early(void) {   /* the cat made in the first frame (the module's way); it stands 1.2 s after the word's 2.8 s */
     power_on(0, false);
@@ -206,6 +239,10 @@ int main(int argc, char **argv) {
     else if (!strcmp(c, "welcome-word")) case_welcome_word(0);
     else if (!strcmp(c, "welcome-late")) case_welcome_word(135);
     else if (!strcmp(c, "welcome-change")) case_welcome_change();
+    else if (!strcmp(c, "say")) case_say("{\"state\":\"text\",\"text\":\"Build passed. Three tests were flaky.\"}", false);
+    else if (!strcmp(c, "hold")) {   /* a held word, then home */
+        case_say("{\"state\":\"text\",\"text\":\"update\",\"hold\":true}", true);
+    }
     else { fprintf(stderr, "picture_flow_test: no case %s\n", c); return 2; }
     printf("picture_flow_test %s: %d passed, %d failed\n", c, s_pass, s_fail);
     return s_fail ? 1 : 0;

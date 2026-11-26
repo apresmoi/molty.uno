@@ -1258,7 +1258,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
     } else if (s_cur != ST_SCENE) {                        /* a scene's letters: scene_fill below */
         s_melt_t += rdt; s_melt = s_melt_t;
-        if (s_melt_t > 0.8f) s_noverlay = 0;               /* condensed letters melt away */
+        /* condensed letters melt away; into a rigged creature the change of picture takes them from the glass at once
+         * (left in, it would gather them into the creature's picture too) */
+        if (s_melt_t > 0.8f || (s_cur == ST_CREATURE && s_cpk && cpk_crisp(s_cpk) && fluid_draw_morph_carries(s_draw))) s_noverlay = 0;
     }
 
     /* hold: crystallise the shape once the flow had time to arrive */
