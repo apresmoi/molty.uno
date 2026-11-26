@@ -1,0 +1,35 @@
+{
+  "id": "tango-sincopa",
+  "name": "Tango sincopa",
+  "label": "SINCOPA",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "bass": {
+      "name": "The bass",
+      "sound": "low",
+      "hits": [1, 2, 4, 5],
+      "accent": [1]
+    }
+  },
+  "source": "sincopa a tierra: Martinez (UNCuyo) 2.1.8.1 p. 38; Marcipar (UGA DMA) fig. 2.27 downbeat syncopation; tempo a practice default",
+  "sources": [
+    {
+      "title": "Camilo Martinez, tesis on tango drumming (UNCuyo), 2.1.8.1 Sincopa a tierra",
+      "url": "https://25.bdigital.uncu.edu.ar/objetos_digitales/21662/martinez-camilo-tesis.pdf",
+      "shows": "4/4: accented eighth on beat 1, then a note on the and of 1, the and of 2, and beat 3, quarter rest on 4 (eighths 1, 2, 4, 5); accent on beat 1"
+    },
+    {
+      "title": "Iris Marcipar, DMA on tango double bass (University of Georgia), fig. 2.26 and 2.27",
+      "url": "https://openscholar.uga.edu/record/2010/files/MarciparIrisDMA.revised2.pdf",
+      "shows": "Downbeat syncopation: eighth, quarter, eighth, quarter, quarter rest (eighths 1, 2, 4, 5), the first two accented, the consequent softer"
+    }
+  ]
+}

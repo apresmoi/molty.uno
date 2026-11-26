@@ -1,0 +1,45 @@
+{
+  "id": "baiao",
+  "name": "Baiao",
+  "label": "BAIAO",
+  "status": "verified",
+  "region": "brazil",
+  "country": "Brazil",
+  "steps": 8,
+  "tempo": {
+    "bpm": 90,
+    "per": 4
+  },
+  "beats": [1, 5],
+  "layers": {
+    "zabumba": {
+      "name": "Zabumba, the low head",
+      "sound": "low",
+      "hits": [1, 4],
+      "accent": [1]
+    },
+    "triangle": {
+      "name": "The triangle, sixteenths",
+      "sound": "hat",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8]
+    }
+  },
+  "source": "Galvao 2018 (ANPPOM, after Barreto 2012 p.177); Patitucci, Electric Bass Complete (LinkedIn Learning), Baiao; Cortes 2014 Per Musi 29; 2/4 in sixteenths; tempo a practice default",
+  "sources": [
+    {
+      "title": "Galvao, C. (2018), Complexizacao do baiao na bateria, ANPPOM XXVIII",
+      "url": "https://anppom.org.br/anais/anaiscongresso_anppom_2018/5365/public/5365-18143-2-PB.pdf",
+      "shows": "zabumba: the first note (dotted eighth) and the fourth (sixteenth) of the first beat of a 2/4 bar are struck; the triangle fills every sixteenth"
+    },
+    {
+      "title": "John Patitucci, Electric Bass Complete: Baiao (LinkedIn Learning)",
+      "url": "https://www.linkedin.com/learning/john-patitucci-electric-bass-complete/baiao",
+      "shows": "'It basically relates to the bass drum': a dotted quarter, then an eighth on the and of two, tied to a half note (the same two attacks at double note values)"
+    },
+    {
+      "title": "Cortes, A. (2014), Como se toca o baiao, Per Musi 29 p.195-208",
+      "url": "https://periodicos.ufmg.br/index.php/permusi/article/download/39700/30468/127652",
+      "shows": "the triangle keeps the sixteenth subdivision; the tied figure (dotted eighth, sixteenth tied over) became the standard levada after 1949"
+    }
+  ]
+}

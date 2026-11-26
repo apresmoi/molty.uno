@@ -1,0 +1,39 @@
+{
+  "id": "chamame",
+  "name": "Chamamé",
+  "label": "CHAMAME",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 6,
+  "tempo": {
+    "bpm": 100,
+    "per": 3
+  },
+  "beats": [1, 4],
+  "layers": {
+    "bajo": {
+      "name": "Bajo, the bass",
+      "sound": "low",
+      "hits": [1, 3]
+    },
+    "rasguido": {
+      "name": "Rasguido, the chord stroke",
+      "sound": "rim",
+      "hits": [2, 5]
+    }
+  },
+  "source": "Gimenez (UNA) 2025, accordion left hand as played by Villareal, Florentin, Spicher, Schivert; Romero Garcia (U. Distrital, Bogota) 2017 fig. 12, guitar estilo correntino; tempo a practice default",
+  "sources": [
+    {
+      "title": "Gimenez, El acordeon del Litoral argentino. Un analisis de los distintos modos de acompanamiento en el chamame (Revista del IIMCV, UNA, 2025, vol. 2 num. 27)",
+      "url": "https://www.redalyc.org/journal/7876/787682987003/787682987003.pdf",
+      "shows": "6/8 as two beats of three eighths: bajos on the 1st and 3rd eighth, acordes on the 2nd and 5th eighth, the 5th accented and short; nothing on the 4th and 6th (Villareal, Imagen 1; same in Florentin, Spicher's first mode, Domingorena, Baez, Schivert)"
+    },
+    {
+      "title": "Romero Garcia, Chacarera, zamba y chamame: tres generos ... y su interpretacion en la guitarra (Universidad Distrital Francisco Jose de Caldas, Bogota, 2017), p. 43 fig. 12",
+      "url": "https://repository.udistrital.edu.co/server/api/core/bitstreams/93dc736a-5ea1-4a81-935e-05710525a03f/content",
+      "shows": "Chamame correntino on guitar, 6/8: the 1st and 3rd eighth with the index finger alone (low notes, marking the 3/4), the 2nd and 5th eighth marked with index, middle and ring in a block; it also adds the chasquido on the 4th and 6th eighth, left out here because Gimenez has rests there"
+    }
+  ]
+}

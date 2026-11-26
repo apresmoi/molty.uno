@@ -85,6 +85,7 @@ function checkSkill(name) {
         if (host.includes('<') || host.startsWith('…') || host.startsWith('$')) continue; // placeholder
         if (/^(github\.com|raw\.githubusercontent\.com|molty\.uno|example\.org)$/.test(host)) continue;
         if (file.endsWith('.svg') && host === 'www.w3.org') continue; // an SVG asset's namespace, not a place anything calls
+        if (file.endsWith('.json') && !file.includes('/scripts/') && /^\s*"url":\s*"https?:\/\//.test(line)) continue; // a citation in a skill's data (a source's link), not a place anything calls
         if (DEFAULT_RELAY.test(m[0]) && /MOLTY_RELAY|DEFAULT_RELAY|default relay/i.test(line)) continue;
         bad(`${at}: hard-coded host ${host} (write $MOLTY_RELAY, or a <placeholder>)`);
       }

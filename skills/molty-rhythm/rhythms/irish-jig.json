@@ -1,0 +1,35 @@
+{
+  "id": "irish-jig",
+  "name": "Irish jig, six eight",
+  "label": "JIG 6/8",
+  "status": "verified",
+  "region": "celtic",
+  "country": "Ireland",
+  "steps": 6,
+  "tempo": {
+    "bpm": 66,
+    "per": 3
+  },
+  "beats": [1, 4],
+  "layers": {
+    "drum": {
+      "name": "The bodhran, six counts",
+      "sound": "head",
+      "hits": [1, 2, 3, 4, 5, 6],
+      "accent": [1, 4]
+    }
+  },
+  "source": "C. S. MacCath bodhran workshop (count to six, emphasis on one and four); MIT session handout (6/8, in 2); tempo a practice default",
+  "sources": [
+    {
+      "title": "Bodhran workshop outline (C. S. MacCath)",
+      "url": "https://csmaccath.com/files/blog/bodhran_workshop_outline_0.pdf",
+      "shows": "Jig: counting to six with emphasis on the one and four"
+    },
+    {
+      "title": "Irish session tunes handout (MIT)",
+      "url": "https://web.mit.edu/~santucci/www/tunes/tunes.pdf",
+      "shows": "Jigs: 6/8, in 2"
+    }
+  ]
+}

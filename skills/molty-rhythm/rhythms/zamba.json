@@ -1,0 +1,39 @@
+{
+  "id": "zamba",
+  "name": "Zamba",
+  "label": "ZAMBA",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 12,
+  "tempo": {
+    "bpm": 75,
+    "per": 4
+  },
+  "beats": [1, 5, 9],
+  "layers": {
+    "aro": {
+      "name": "Aro, the rim",
+      "sound": "rim",
+      "hits": [1, 7]
+    },
+    "parche": {
+      "name": "Parche, the head",
+      "sound": "head",
+      "hits": [4, 5, 9]
+    }
+  },
+  "source": "Mola (FBA-UNLP) 2019, zamba base 2; Paredes (UNCuyo) 2025 fig. 13 after Rivero; tempo Bombometro's example (75 a quarter), a practice default",
+  "sources": [
+    {
+      "title": "Mola, Bombo leguero: una propuesta metodologica para la ensenanza de su ejecucion (FBA-UNLP, JIDAP 2019)",
+      "url": "https://sedici.unlp.edu.ar/bitstream/handle/10915/80536/Documento_completo.pdf-PDFA.pdf?sequence=1&isAllowed=y",
+      "shows": "Zamba base 2, 6/8 over 3/4: aro dotted eighth on 1, parche sixteenth before beat 2, parche on beat 2 (accented), aro on eighth 4, parche on beat 3 (eighth 5). Base 1 plays the first stroke on the parche."
+    },
+    {
+      "title": "Paredes, tesina de Licenciatura en Musica Popular (UNCuyo 2025), fig. 13 after Carlos Rivero",
+      "url": "https://25.bdigital.uncu.edu.ar/objetos_digitales/21695/paredes-juan-pablo-tesina.pdf",
+      "shows": "Zamba 6/8: aro dotted eighth, parche sixteenth, parche eighth, aro eighth, parche quarter (eighths 1, 2.5, 3, 4, 5); no accents marked"
+    }
+  ]
+}

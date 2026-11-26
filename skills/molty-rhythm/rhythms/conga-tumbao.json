@@ -1,0 +1,49 @@
+{
+  "id": "conga-tumbao",
+  "name": "Conga tumbao",
+  "label": "TUMBAO",
+  "status": "verified",
+  "region": "caribbean",
+  "country": "Cuba",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "heel": {
+      "name": "The palm heel",
+      "sound": "head",
+      "hits": [1, 5]
+    },
+    "tip": {
+      "name": "The finger tips",
+      "sound": "click",
+      "hits": [2, 4, 6]
+    },
+    "slap": {
+      "name": "The slap",
+      "sound": "slap",
+      "hits": [3]
+    },
+    "open": {
+      "name": "The two open tones",
+      "sound": "tom",
+      "hits": [7, 8]
+    }
+  },
+  "source": "Wikipedia Tumbao (after Mauleon 1993 p.63): H T S T H T O O; Thomann Online Expert, Congas first steps: same grid; one common way to play it; tempo a practice default",
+  "sources": [
+    {
+      "title": "Wikipedia, Tumbao (conga section, citing Mauleon 1993 p.63-64)",
+      "url": "https://en.wikipedia.org/wiki/Tumbao",
+      "shows": "basic tumbao counted 1 e & a 2 e & a: H T S T H T O O (heel, tip, slap, tip, heel, tip, open, open); open tones on the last offbeats 2& and 2a"
+    },
+    {
+      "title": "Thomann Online Expert, Congas: First Steps",
+      "url": "https://www.thomannmusic.com/onlineexpert_page_congas_first_steps.html",
+      "shows": "tumbao grid counted 1 + 2 + 3 + 4 +: heel, tap, slap, tap, heel, tap, open, open (the same eight strokes); played to son clave"
+    }
+  ]
+}

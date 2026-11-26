@@ -1,0 +1,51 @@
+{
+  "id": "one-drop",
+  "name": "One drop",
+  "label": "ONE DROP",
+  "status": "verified",
+  "region": "caribbean",
+  "country": "Jamaica",
+  "steps": 8,
+  "tempo": {
+    "bpm": 72,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "hat": {
+      "name": "The hi-hat",
+      "sound": "hat",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8]
+    },
+    "kick": {
+      "name": "The kick, on beat 3 only",
+      "sound": "low",
+      "hits": [5],
+      "accent": [5]
+    },
+    "rim": {
+      "name": "The rim click, on beat 3",
+      "sound": "rim",
+      "hits": [5],
+      "accent": [5]
+    }
+  },
+  "source": "Wikipedia One drop rhythm citing Strong 2011 p.163; MusicRadar one drop tutorial; Soundbrenner One drop; tempo from Soundbrenner practice exercise",
+  "sources": [
+    {
+      "title": "Wikipedia, One drop rhythm (Strong, Drums For Dummies 2011 p.163)",
+      "url": "https://en.wikipedia.org/wiki/One_drop_rhythm",
+      "shows": "4/4, hi-hat on eight eighths, kick and cross-stick snare on beat 3 only, beat 1 empty"
+    },
+    {
+      "title": "MusicRadar, How to program a typical one drop reggae beat",
+      "url": "https://www.musicradar.com/how-to/how-to-program-a-typical-one-drop-reggae-beat-and-add-fills",
+      "shows": "no kick on beat 1; kick and sidestick together on beat 3; steady hi-hat eighths"
+    },
+    {
+      "title": "Soundbrenner, One drop",
+      "url": "https://www.soundbrenner.com/blogs/articles/one-drop",
+      "shows": "grid: kick and snare/rim on beat 3 only, no backbeat on 2 and 4; 72 bpm practice tempo"
+    }
+  ]
+}

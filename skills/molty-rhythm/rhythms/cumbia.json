@@ -1,0 +1,45 @@
+{
+  "id": "cumbia",
+  "name": "Cumbia",
+  "label": "CUMBIA",
+  "status": "verified",
+  "region": "south-america",
+  "country": "Colombia",
+  "steps": 4,
+  "tempo": {
+    "bpm": 95,
+    "per": 2,
+    "range": [85, 110]
+  },
+  "beats": [1, 3],
+  "layers": {
+    "tambora": {
+      "name": "Tambora, on the beat",
+      "sound": "low",
+      "hits": [1, 3]
+    },
+    "llamador": {
+      "name": "Llamador, the offbeats",
+      "sound": "head",
+      "hits": [2, 4]
+    },
+    "guache": {
+      "name": "Guache or maracas, eighths",
+      "sound": "shaker",
+      "hits": [1, 2, 3, 4]
+    }
+  },
+  "source": "Burgos 2017 (UPN Bogota thesis, after Valencia 2004 Pitos y tambores) sec. 3.2.2-3.2.4; Orphiq, What is cumbia; 2/4; one common way to play it",
+  "sources": [
+    {
+      "title": "Burgos Palomino, J. A. (2017), Berroche, trabajo de grado, Universidad Pedagogica Nacional",
+      "url": "https://repositorio.upn.edu.co/bitstreams/bfe64022-4c23-44a8-bf41-47e01d0ae62b/download",
+      "shows": "pulse: 'golpe a tiempo con baqueta en madera en tambora de cumbia'; binary division (down on the beat, up on the offbeat) for maraca and guacho; 'contratiempo binario' for the llamador de cumbia"
+    },
+    {
+      "title": "Orphiq, What Is Cumbia? Origins, Rhythm, and Regional Styles",
+      "url": "https://orphiq.com/resources/what-is-cumbia",
+      "shows": "llamador marks the weak pulses, the offbeats, and holds steady; tambora low accents on the strong beats; guache or maraca running eighths; meter 2/2 or 2/4; 85 to 110 bpm commonly quoted"
+    }
+  ]
+}

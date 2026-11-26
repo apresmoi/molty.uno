@@ -1,0 +1,40 @@
+{
+  "id": "chiftetelli",
+  "name": "Chiftetelli",
+  "label": "CHIFTETELLI",
+  "status": "verified",
+  "region": "middle-east",
+  "country": "Turkey",
+  "steps": 16,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7, 9, 11, 13, 15],
+  "layers": {
+    "dum": {
+      "name": "Dum, the low stroke",
+      "sound": "low",
+      "hits": [1, 9, 11],
+      "accent": [1]
+    },
+    "tek": {
+      "name": "Tek, the slap",
+      "sound": "slap",
+      "hits": [4, 7, 13]
+    }
+  },
+  "source": "Baba Yaga Music diagrams; Jas Middle Eastern Rhythms FAQ (khafif); tempo a practice default",
+  "sources": [
+    {
+      "title": "Oriental dance rhythm diagrams and descriptions (Baba Yaga Music)",
+      "url": "https://www.babayagamusic.com/Music/oriental-dance-rhythm-diagrams-and-descriptions.htm",
+      "shows": "8/4, 32 sixteenths: D . . . . . T . . . . . T . . . D . . . D . . . T (read in eighths)"
+    },
+    {
+      "title": "Middle Eastern Rhythms FAQ (Jas, khafif)",
+      "url": "https://khafif.pages.dev/rhy",
+      "shows": "8/4: D---__T---__T---D---D---T---____ (read in eighths)"
+    }
+  ]
+}

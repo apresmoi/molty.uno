@@ -1,0 +1,41 @@
+{
+  "id": "polka",
+  "name": "Polka, two four",
+  "label": "POLKA",
+  "status": "verified",
+  "region": "basics",
+  "country": "Europe",
+  "steps": 2,
+  "tempo": {
+    "bpm": 104,
+    "per": 1,
+    "range": [96, 112]
+  },
+  "beats": [1, 2],
+  "layers": {
+    "oom": {
+      "name": "Oom, the low note on one",
+      "sound": "low",
+      "hits": [1],
+      "accent": [1]
+    },
+    "pah": {
+      "name": "Pah, the chord on two",
+      "sound": "rim",
+      "hits": [2]
+    }
+  },
+  "source": "Soundbrenner polka rhythm (2/4, low on beat 1 and chord on beat 2, practice tempo 96 to 112); Wikipedia Polka (oom-pah)",
+  "sources": [
+    {
+      "title": "Soundbrenner: polka rhythm",
+      "url": "https://www.soundbrenner.com/blogs/articles/polka-rhythm",
+      "shows": "Duple meter, especially 2/4; low sound on beat 1 and chord on beat 2; practice tempo 96 to 112"
+    },
+    {
+      "title": "Wikipedia: Polka",
+      "url": "https://en.wikipedia.org/wiki/Polka",
+      "shows": "Written in 2/4; Dutchmen-style polka features an oom-pah sound"
+    }
+  ]
+}

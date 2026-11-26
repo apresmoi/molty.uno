@@ -1,0 +1,50 @@
+{
+  "id": "rock-backbeat",
+  "name": "Rock backbeat",
+  "label": "ROCK BEAT",
+  "status": "verified",
+  "region": "usa",
+  "country": "United States",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "hat": {
+      "name": "Hi-hat, eighths",
+      "sound": "hat",
+      "hits": [1, 2, 3, 4, 5, 6, 7, 8]
+    },
+    "kick": {
+      "name": "Kick on one and three",
+      "sound": "low",
+      "hits": [1, 5]
+    },
+    "snare": {
+      "name": "Snare backbeat on two and four",
+      "sound": "snare",
+      "hits": [3, 7],
+      "accent": [3, 7]
+    }
+  },
+  "source": "Gear4Music basic drum beats (hi-hat eighths, kick 1 and 3, snare 2 and 4); Rockschool Drums Method, Example 1 basic eighth-note beat via MusicGurus; Wikipedia Backbeat (snare on 2 and 4); tempo a practice default",
+  "sources": [
+    {
+      "title": "Gear4Music: basic drum beats",
+      "url": "https://www.gear4music.com/blog/?p=43811",
+      "shows": "Eighth notes on the hi-hat, bass drum on beats 1 and 3, snare on beats 2 and 4"
+    },
+    {
+      "title": "Rockschool Drums Method: Example 1, basic eighth-note beat",
+      "url": "https://musicgurus.com/courses/rockschool-drums-method-for-beginners/lessons/example-1-basic-eighth-note-beat",
+      "shows": "Bass drum on 1 and 3, snare on 2 and 4"
+    },
+    {
+      "title": "Wikipedia: Backbeat",
+      "url": "https://en.wikipedia.org/wiki/Backbeat",
+      "shows": "Backbeat is the accent on beats 2 and 4, typically the snare"
+    }
+  ]
+}

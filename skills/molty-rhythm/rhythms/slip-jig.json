@@ -1,0 +1,35 @@
+{
+  "id": "slip-jig",
+  "name": "Slip jig, nine eight",
+  "label": "SLIP JIG",
+  "status": "verified",
+  "region": "celtic",
+  "country": "Ireland",
+  "steps": 9,
+  "tempo": {
+    "bpm": 66,
+    "per": 3
+  },
+  "beats": [1, 4, 7],
+  "layers": {
+    "drum": {
+      "name": "The pulse, three to the bar",
+      "sound": "head",
+      "hits": [1, 4, 7],
+      "accent": [1]
+    }
+  },
+  "source": "MIT session handout (slip jig 9/8, in 3); Wikipedia Jig citing Cowdery 1990 (9/8); dance pulse only, tempo a practice default",
+  "sources": [
+    {
+      "title": "Irish session tunes handout (MIT)",
+      "url": "https://web.mit.edu/~santucci/www/tunes/tunes.pdf",
+      "shows": "Slip jigs: a jig with an extra beat, 9/8, in 3"
+    },
+    {
+      "title": "Wikipedia: Jig",
+      "url": "https://en.wikipedia.org/wiki/Jig",
+      "shows": "Slip jigs are in 9/8 time (Cowdery 1990 p.17)"
+    }
+  ]
+}

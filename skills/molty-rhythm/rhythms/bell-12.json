@@ -1,4 +1,5 @@
 { "id": "bell-12", "name": "The standard bell", "label": "BELL 12/8", "status": "verified",
+  "region": "west-africa", "country": "Ghana",
   "steps": 12, "tempo": { "bpm": 100, "per": 3 }, "beats": [1, 4, 7, 10],
   "layers": {
     "bell": { "name": "The bell", "sound": "bell", "hits": [1, 3, 5, 6, 8, 10, 12] },

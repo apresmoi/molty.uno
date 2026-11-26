@@ -1,0 +1,34 @@
+{
+  "id": "rasguido-doble",
+  "name": "Rasguido doble",
+  "label": "RASG DOBLE",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 2
+  },
+  "beats": [1, 3, 5, 7],
+  "layers": {
+    "bajo": {
+      "name": "Bajo, the bass strings",
+      "sound": "low",
+      "hits": [1, 4, 7]
+    }
+  },
+  "source": "Casado, Figueras, Sturla (FBA-UNLP) 2021 apunte 4 via Adriani & Schinca (JIDAP 2022): 4/4 grouped 3+3+2 eighths; es.wikipedia Rasguido doble guitar staff (bordonas on eighths 1, 4, 7); tempo a practice default",
+  "sources": [
+    {
+      "title": "Adriani & Schinca, Rasguido doble: nuevas texturas y sonoridades (FBA-UNLP, JIDAP 2022), citing Casado, Figueras & Sturla 2021, Musica del Litoral, Produccion y analisis II, apunte 4, p. 4",
+      "url": "https://www4.fba.unlp.edu.ar/jidap2022/wp-content/uploads/sites/4/2022/12/2.-ADRIANI-SCHINCA.pdf",
+      "shows": "Prose: the genre's identifying trait is the accompaniment's grouping 3 3 2 at the eighth-note level in 4/4, i.e. group onsets on eighths 1, 4, 7"
+    },
+    {
+      "title": "Rasguido doble, Spanish Wikipedia, section 'Caracteristicas del rasguido en guitarra' (staff image Rasguido_doble_music_sheet.jpg)",
+      "url": "https://es.wikipedia.org/wiki/Rasguido_doble",
+      "shows": "4/4 in eighths: bordonas (low) on eighths 1 (accent), 4 and 7 (accent); primas (high) on 2 and 5; apagado x on 3, 6 and 8. Only the low 3+3+2 layer is shipped, the one both sources agree on"
+    }
+  ]
+}

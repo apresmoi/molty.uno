@@ -1,0 +1,45 @@
+{
+  "id": "gahu",
+  "name": "Gahu",
+  "label": "GAHU",
+  "status": "verified",
+  "region": "west-africa",
+  "country": "Ghana",
+  "steps": 16,
+  "tempo": {
+    "bpm": 120,
+    "per": 4
+  },
+  "beats": [1, 5, 9, 13],
+  "layers": {
+    "bell": {
+      "name": "Gankogui, the bell",
+      "sound": "bell",
+      "hits": [1, 4, 7, 9, 12, 15]
+    },
+    "axatse": {
+      "name": "Axatse, the rattle",
+      "sound": "shaker",
+      "hits": [1, 4, 5, 7, 9, 12, 13, 15]
+    },
+    "sogo": {
+      "name": "Sogo, open on 2 and 4",
+      "sound": "head",
+      "hits": [1, 5, 7, 9, 13, 15],
+      "accent": [5, 13]
+    }
+  },
+  "source": "Powers 2006 Gahu Part One (boxed notation); Schloss MUS 320 study guide, UVic (interval lists); tresillo-bell version; tempo a practice default",
+  "sources": [
+    {
+      "title": "Mark Powers, GAHU: Part One (2006)",
+      "url": "https://powerspercussion.com/wp-content/uploads/2015/07/gahuArticle.pdf",
+      "shows": "16 boxes 1 E & A ...: gakogui • - - • - - • - • - - • - - • -; axatse P - - P T - P - P - - P T - P -; sogo M - - - • - M - M - - - • - M - (• open, M muted)"
+    },
+    {
+      "title": "Andy Schloss, MUS 320 study guide / Quiz 1, University of Victoria",
+      "url": "https://web.uvic.ca/~aschloss/course_mat/MU320/Global%20Rhtyhm%20and%20Human%20Consciousness/quiz1.html",
+      "shows": "GAHU patterns (in 16): bell is tresillo (repeated 1st half of clave); Sogo (4 2 2 4 2 2); Axatse (3 1 2 2 3 1 2 2)"
+    }
+  ]
+}

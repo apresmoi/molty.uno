@@ -6,12 +6,43 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const DIR = join(dirname(fileURLToPath(import.meta.url)), '../rhythms');
-export const SOUNDS = ['low', 'head', 'rim', 'clap', 'bell', 'hat', 'snare', 'click'];
-/** A drum's colour on Molty by its sound (Molty's own palette), unless the file gives one. */
-export const COLOR = { low: '#ff9a7a', head: '#ff9a7a', snare: '#ff9a7a', rim: '#9fc0ff', hat: '#9fc0ff', bell: '#a8d890', clap: '#ffd678', click: '#ffd678' };
-export const LIMITS = { steps: 32, layers: 4, bars: 8, order: 16, label: 12, bpm: [40, 220] };
+export const SOUNDS = ['low', 'head', 'rim', 'clap', 'bell', 'hat', 'snare', 'click', 'tom', 'slap', 'shaker'];
+/** A drum's colour on Molty by its kind of sound, the same in every rhythm (a learner reads the sound by its colour):
+ *  warm for the drums' skins, cool for wood and metal, amber and lime for hands and seeds, white for the count. Each
+ *  at least 24 apart (CIE76) from every other, all lit on the black glass (references/library.md, Colours). */
+export const COLOR = {
+  low: '#ff6a5c',     // coral red: the bass drum, the bombo's low, a darbuka's dum
+  head: '#ffa36b',    // apricot: a drum's head, the parche
+  tom: '#ff86c8',     // pink: a hand drum's open tone
+  slap: '#d58cff',    // violet: a hand drum's slap, a darbuka's tek
+  snare: '#a3a0ff',   // periwinkle: the snare
+  rim: '#5fb0ff',     // blue: the rim, the aro, sticks, the clave
+  hat: '#5fe0d6',     // teal: the hi-hat, the ride, the triangle
+  bell: '#86df6e',    // green: a bell, the agogo, the cowbell
+  shaker: '#d9e85e',  // lime: shakers, maracas, the guacharaca
+  clap: '#ffcf4a',    // amber: hand claps, palmas
+  click: '#ffffff',   // white: the count, a metronome
+};
+/** The library's regions, in the order Molty's wheel steps through them: id, the label on Molty (capitals, up to 12),
+ *  the spoken name, and a quiet tint of its own (its beads and its label on the wheel). */
+export const REGIONS = [
+  { id: 'argentina', label: 'ARGENTINA', name: 'Argentina', color: '#8cc4ff' },
+  { id: 'south-america', label: 'LATIN AM', name: 'Latin America (beyond Argentina)', color: '#ffb38a' },
+  { id: 'caribbean', label: 'CARIBBEAN', name: 'The Caribbean', color: '#4fd1c5' },
+  { id: 'brazil', label: 'BRAZIL', name: 'Brazil', color: '#7ed957' },
+  { id: 'mexico', label: 'MEXICO', name: 'Mexico', color: '#ff8f8f' },
+  { id: 'spain', label: 'SPAIN', name: 'Spain, flamenco', color: '#ff7b6b' },
+  { id: 'west-africa', label: 'WEST AFRICA', name: 'West Africa', color: '#e8b04a' },
+  { id: 'middle-east', label: 'MIDDLE EAST', name: 'North Africa and the Middle East', color: '#d6a3ff' },
+  { id: 'balkans', label: 'BALKANS', name: 'Turkey and the Balkans', color: '#ff9ecf' },
+  { id: 'india', label: 'INDIA', name: 'India', color: '#ffb347' },
+  { id: 'celtic', label: 'CELTIC', name: 'Ireland and Scotland', color: '#6ee7a8' },
+  { id: 'usa', label: 'USA', name: 'The United States', color: '#a3b8ff' },
+  { id: 'basics', label: 'BASICS', name: 'Basics: meters and polyrhythms', color: '#cfd3e0' },
+];
+export const LIMITS = { steps: 32, layers: 4, bars: 8, order: 16, label: 12, bpm: [40, 220], rhythms: 96, regions: 16 };
 
-const KEYS = ['id', 'name', 'label', 'status', 'steps', 'lengths', 'swing', 'tempo', 'beats', 'count', 'layers', 'bars', 'phrase', 'source'];
+const KEYS = ['id', 'name', 'label', 'status', 'region', 'country', 'steps', 'lengths', 'swing', 'tempo', 'beats', 'count', 'layers', 'bars', 'phrase', 'source', 'sources'];
 const isSteps = (a, n) => Array.isArray(a) && a.every((s) => Number.isInteger(s) && s >= 1 && s <= n) && new Set(a).size === a.length;
 
 /** The problems with one rhythm file (none: []). */
@@ -25,6 +56,10 @@ export function check(r, file = r?.id) {
   need(/^[A-Z0-9 /-]{1,12}$/.test(r.label ?? ''), `label: capitals, up to ${LIMITS.label}`);
   need(['verified', 'unverified'].includes(r.status), 'status: verified or unverified');
   need(typeof r.source === 'string' && r.source.length > 8, 'source: where the pattern comes from (no source, no file)');
+  need(REGIONS.some((g) => g.id === r.region), `region: one of ${REGIONS.map((g) => g.id).join(' ')}`);
+  need(typeof r.country === 'string' && r.country.length > 1, 'country: where it comes from');
+  if (r.sources !== undefined) need(Array.isArray(r.sources) && r.sources.every((x) => typeof x?.title === 'string' && /^https?:\/\//.test(x?.url ?? '') && typeof x?.shows === 'string'), 'sources: [{title, url, shows}]');
+  if (r.status === 'verified' && r.sources !== undefined) need(r.sources.length >= 2, 'sources: two that agree, for verified');
   const n = r.steps;
   need(Number.isInteger(n) && n >= 2 && n <= LIMITS.steps, `steps: 2..${LIMITS.steps}`);
   if (r.lengths !== undefined) need(Array.isArray(r.lengths) && r.lengths.length === n && r.lengths.every((v) => v > 0 && v <= 8), 'lengths: one number (0..8] per step');
@@ -40,7 +75,7 @@ export function check(r, file = r?.id) {
     need(SOUNDS.includes(L.sound), `layer ${id}: sound one of ${SOUNDS.join(' ')}`);
     need(isSteps(L.hits, n) && L.hits.length > 0, `layer ${id}: hits`);
     if (L.accent !== undefined) need(isSteps(L.accent, n) && L.accent.every((s) => L.hits.includes(s)), `layer ${id}: accent must be some of its hits`);
-    if (L.color !== undefined) need(/^#[0-9a-f]{6}$/.test(L.color), `layer ${id}: color #rrggbb`);
+    for (const k of Object.keys(L)) need(['name', 'sound', 'hits', 'accent'].includes(k), `layer ${id}: unknown key ${k} (a colour comes from the sound)`);
   }
   const bars = Object.entries(r.bars ?? {});
   need(bars.length <= LIMITS.bars, `bars: at most ${LIMITS.bars}`);
@@ -57,8 +92,14 @@ export function check(r, file = r?.id) {
   return bad;
 }
 
-/** Every rhythm, in the library's order (the wheel's): the files sorted as the list below, then any others by id. */
-export const ORDER = ['chacarera', 'chacarera-trunca', 'carnavalito', 'milonga', 'tango-marcato', 'habanera', 'son-clave', 'rumba-clave', 'bossa-nova', 'bell-12', 'solea', 'aksak-9'];
+/** Every rhythm, in the library's order (the wheel's): by region (REGIONS), inside one as the list below (the best
+ *  known first), then any others by id. */
+export const ORDER = ['chacarera', 'zamba', 'chamame', 'gato', 'escondido', 'cueca', 'chacarera-doble', 'chacarera-trunca', 'carnavalito',
+  'vidala', 'rasguido-doble', 'milonga', 'tango-marcato', 'tango-sincopa', 'vals-criollo', 'candombe', 'cumbia', 'son-clave', 'rumba-clave', 'tresillo', 'cinquillo', 'habanera',
+  'conga-tumbao', 'one-drop', 'ska', 'dembow', 'bossa-nova', 'samba', 'baiao', 'solea', 'buleria', 'seguiriya', 'fandango-huelva',
+  'bell-12', 'gahu', 'ewe-axatse', 'kuku', 'soli', 'maqsum', 'baladi', 'saidi', 'malfuf', 'ayoub', 'chiftetelli', 'karsilama', 'aksak-9', 'rachenitsa', 'lesnoto',
+  'paidushko', 'kopanitsa', 'postupano', 'teental', 'keherwa', 'dadra', 'rupak', 'jhaptal', 'irish-jig', 'irish-reel', 'slip-jig',
+  'rock-backbeat', 'blues-shuffle', 'swing-ride', 'waltz', 'polka', 'march', 'three-against-two', 'four-against-three'];
 export function load(dir = DIR) {
   const all = readdirSync(dir).filter((f) => f.endsWith('.json')).map((f) => {
     let r;
@@ -68,13 +109,22 @@ export function load(dir = DIR) {
     if (bad.length) throw new Error(bad.join('\n'));
     return r;
   });
-  const rank = (r) => (ORDER.includes(r.id) ? ORDER.indexOf(r.id) : ORDER.length);
-  return all.sort((a, b) => rank(a) - rank(b) || a.id.localeCompare(b.id));
+  const rank = (r) => (ORDER.includes(r.id) ? ORDER.indexOf(r.id) : ORDER.length), reg = (r) => REGIONS.findIndex((g) => g.id === r.region);
+  return all.sort((a, b) => reg(a) - reg(b) || rank(a) - rank(b) || a.id.localeCompare(b.id));
 }
 
 /** One rhythm as Molty's beat player takes it (docs/AGENT-LINK.md "Rhythm"). */
+/** The regions the library has rhythms in, in REGIONS' order. */
+export const regionsOf = (lib) => REGIONS.filter((g) => lib.some((r) => r.region === g.id));
+/** The whole library as rhythm.play takes it: {regions: [{label, color}], rhythms: [wire(r), each with its region's
+ *  index]}. */
+export function wireLibrary(lib) {
+  const regions = regionsOf(lib);
+  return { regions: regions.map((g) => ({ label: g.label, color: g.color })), rhythms: lib.map((r) => ({ ...wire(r), region: regions.findIndex((g) => g.id === r.region) })) };
+}
+
 export function wire(r) {
-  const layers = Object.entries(r.layers).map(([id, L]) => ({ id, sound: L.sound, color: L.color ?? COLOR[L.sound], hits: L.hits, ...(L.accent?.length ? { accent: L.accent } : {}) }));
+  const layers = Object.entries(r.layers).map(([id, L]) => ({ id, sound: L.sound, color: COLOR[L.sound], hits: L.hits, ...(L.accent?.length ? { accent: L.accent } : {}) }));
   const out = { id: r.id, label: r.label, steps: r.steps, per: r.tempo.per, beats: r.beats, layers };
   if (r.lengths) out.lengths = r.lengths;
   if (r.swing) out.swing = r.swing;

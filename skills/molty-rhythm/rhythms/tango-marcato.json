@@ -1,4 +1,5 @@
 { "id": "tango-marcato", "name": "Tango marcato", "label": "MARCATO", "status": "verified",
+  "region": "argentina", "country": "Argentina",
   "steps": 4, "tempo": { "bpm": 100, "per": 1 }, "beats": [1, 2, 3, 4],
   "layers": { "marcato": { "name": "The marcato", "sound": "low", "hits": [1, 2, 3, 4], "accent": [1, 3] } },
   "source": "Peralta 2008 p. 56 via Martinez (UNCuyo) 2.1.3 (marcato en 2); tempo a practice default" }

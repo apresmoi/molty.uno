@@ -1,0 +1,50 @@
+{
+  "id": "kuku",
+  "name": "Kuku",
+  "label": "KUKU",
+  "status": "verified",
+  "region": "west-africa",
+  "country": "Guinea",
+  "steps": 32,
+  "tempo": {
+    "bpm": 130,
+    "per": 4
+  },
+  "beats": [1, 5, 9, 13, 17, 21, 25, 29],
+  "layers": {
+    "dununba": {
+      "name": "Dununba, the big drum",
+      "sound": "low",
+      "hits": [4, 13, 15, 17, 20]
+    },
+    "sangban": {
+      "name": "Sangban, open and closed",
+      "sound": "head",
+      "hits": [1, 4, 7, 9, 12, 15, 17, 20, 23, 25, 28, 31],
+      "accent": [1, 7, 9, 15, 17, 23, 25, 31]
+    },
+    "kenkeni": {
+      "name": "Kenkeni, the small drum",
+      "sound": "tom",
+      "hits": [1, 2, 5, 6, 9, 10, 13, 14, 17, 18, 21, 22, 25, 26, 29, 30]
+    },
+    "bell": {
+      "name": "Sangban bell",
+      "sound": "bell",
+      "hits": [1, 3, 4, 6, 7, 9, 11, 12, 14, 15, 17, 19, 20, 22, 23, 25, 27, 28, 30, 31]
+    }
+  },
+  "source": "reynders-bonhagen.nl Kuku grid; Malcolm Smith Kuku (The Old Way, 130 bpm); two bars of 4/4 in sixteenths; tempo from Malcolm Smith only",
+  "sources": [
+    {
+      "title": "KUKU (reynders-bonhagen.nl rhythm pages)",
+      "url": "http://www.reynders-bonhagen.nl/ritme/kuku.html",
+      "shows": "16-step grid 1 - - - 2 - - - ...: Sangban bell x . x x . x x . x . x x . x x . drum o . . i . . o . o . . i . . o .; Kenkeni bell (hard) x x . . x x . . drum o o . . o o . .; Dununba drum . . . o . . . . . . . . o . o . then follow-in bar o . . o . . . . . . . . . . . ."
+    },
+    {
+      "title": "Malcolm Smith, Kuku (thesmith.org.uk)",
+      "url": "https://www.thesmith.org.uk/music/projects/vitae/rhythms/kuku.html",
+      "shows": "The Old Way, 130bpm 4/4 1-&-2-&-: Bell 1 x.xx.xx.x.xx.xx. +Sangban G..g..G.G..g..G.; Bell 3 Xx..Xx..Xx..Xx.. +Kenkeni KK..KK..KK..KK..; +Dununba (32 steps) ...D........D.D.D..D............"
+    }
+  ]
+}

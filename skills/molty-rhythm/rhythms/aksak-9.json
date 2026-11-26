@@ -1,4 +1,5 @@
 { "id": "aksak-9", "name": "Aksak, nine eight", "label": "AKSAK 9/8", "status": "verified",
+  "region": "balkans", "country": "Turkey and the Balkans",
   "steps": 4, "lengths": [2, 2, 2, 3], "tempo": { "bpm": 100, "per": 2 }, "beats": [1, 2, 3, 4],
   "layers": { "drum": { "name": "The drum", "sound": "head", "hits": [1, 2, 3, 4] } },
   "source": "Toussaint 2005 (E(4,9)); Wikipedia Aksak citing Brailoiu 1951 (2+2+2+3); tempo a practice default" }

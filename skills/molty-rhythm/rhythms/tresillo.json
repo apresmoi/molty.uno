@@ -1,0 +1,35 @@
+{
+  "id": "tresillo",
+  "name": "Tresillo",
+  "label": "TRESILLO",
+  "status": "verified",
+  "region": "caribbean",
+  "country": "Cuba",
+  "steps": 8,
+  "tempo": {
+    "bpm": 100,
+    "per": 4
+  },
+  "beats": [1, 5],
+  "layers": {
+    "tresillo": {
+      "name": "The tresillo",
+      "sound": "low",
+      "hits": [1, 4, 7],
+      "accent": [1]
+    }
+  },
+  "source": "Toussaint 2005 fig. 1a E(3,8); Wikipedia Tresillo citing Penalosa 2010 p.43; tempo a practice default",
+  "sources": [
+    {
+      "title": "Toussaint, The Euclidean Algorithm Generates Traditional Musical Rhythms (2005)",
+      "url": "http://cgm.cs.mcgill.ca/~godfried/publications/banff.pdf",
+      "shows": "E(3,8) = [x . . x . . x .], the Cuban tresillo, 3+3+2"
+    },
+    {
+      "title": "Wikipedia, Tresillo (rhythm), citing Penalosa, The Clave Matrix (2010)",
+      "url": "https://en.wikipedia.org/wiki/Tresillo_(rhythm)",
+      "shows": "2/4 bar: dotted eighth, sixteenth, eighth rest, eighth; attacks on sixteenth steps 1, 4, 7 of 8"
+    }
+  ]
+}

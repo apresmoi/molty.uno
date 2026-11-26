@@ -1,0 +1,40 @@
+{
+  "id": "chacarera-doble",
+  "name": "Chacarera doble",
+  "label": "CHACA DOBLE",
+  "status": "verified",
+  "region": "argentina",
+  "country": "Argentina",
+  "steps": 6,
+  "tempo": {
+    "bpm": 104,
+    "per": 3
+  },
+  "beats": [1, 4],
+  "layers": {
+    "aro": {
+      "name": "Aro, the rim",
+      "sound": "rim",
+      "hits": [1, 4]
+    },
+    "parche": {
+      "name": "Parche, the head",
+      "sound": "head",
+      "hits": [3, 5],
+      "accent": [5]
+    }
+  },
+  "source": "the chacarera's bombo; doble differs only in form (12-bar sections, not 8): Paredes (UNCuyo) 2025 p. 27; Mola (FBA-UNLP) corpus of 127 simples and 23 dobles; tempo a practice default",
+  "sources": [
+    {
+      "title": "Paredes, tesina de Licenciatura en Musica Popular (UNCuyo 2025)",
+      "url": "https://25.bdigital.uncu.edu.ar/objetos_digitales/21695/paredes-juan-pablo-tesina.pdf",
+      "shows": "Simple and doble are the same chacarera, told apart by section length: 8 bars (simple) or 12 bars (doble); fig. 20 gives one basic chacarera bombo pattern, not split by type"
+    },
+    {
+      "title": "Mola, Analisis del aspecto ritmico en la melodia y en el acompanamiento de la chacarera (FBA-UNLP)",
+      "url": "https://jornadassecyt.fba.unlp.edu.ar/Jidap_pdf/eje_3/Mola.pdf",
+      "shows": "Corpus of 127 simple and 23 doble chacareras analysed together; dobles have 12-bar segments; one basic bombo scheme (eje estructural) is given for the whole corpus"
+    }
+  ]
+}

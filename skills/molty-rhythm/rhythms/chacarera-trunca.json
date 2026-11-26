@@ -1,4 +1,5 @@
 { "id": "chacarera-trunca", "name": "Chacarera trunca", "label": "TRUNCA", "status": "verified",
+  "region": "argentina", "country": "Argentina",
   "steps": 12, "tempo": { "bpm": 104, "per": 3 }, "beats": [1, 4, 7, 10],
   "layers": {
     "aro": { "name": "Aro, the rim", "sound": "rim", "hits": [1, 4, 8] },
