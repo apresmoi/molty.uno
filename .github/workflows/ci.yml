@@ -12,33 +12,29 @@ name: CI
 #   hygiene (always)                           ci-ok (needs all; the one stable check)
 #
 # Path filters: `changes` diffs the PR (base...head) or the push (before..after) and
-# tools/scripts/ci-changes.sh maps the paths to jobs; a job runs only when something
-# it reads changed. The map, from what each job's code/config actually reads:
+# tools/scripts/ci-changes.sh maps the paths to jobs. The rule: a job runs only if its
+# result can depend on a changed file. The map's table names, per path, the jobs whose
+# builds, tests or checks read it, found from their code (ci-changes.test.sh checks the
+# imports and the reads each job makes); in short:
 #
-#   console, console-e2e  device/console/**, device/creatures/** (vite @viewer/@molty
-#                         aliases; e2e loads frog.molty)
-#   firmware, boards      device/firmware/** (not test/), tools/scripts/firmware-*,
-#                         and everything console runs on (it bakes the console page);
-#                         console + boards run whenever firmware does (artifact, matrix)
-#   firmware-test         device/firmware/**, device/creatures/molty/** (cute_build.sh),
-#                         the JS creature player + mood engine + actions (creature_build.sh)
-#   relay                 services/relay/**, skills/molty/** (skill.test.ts),
-#                         docs/AGENT-LINK.md (events.test.ts)
+#   console, console-e2e  device/console/**, the fluid engine it imports
+#   firmware, boards      device/firmware/** but test/ and web/, the creature packages it
+#                         bakes, tools/scripts/firmware-*, and all console runs on
+#   firmware-test         device/firmware/**, the JS players, packages, packages/tools,
+#                         schema, the rhythm library
+#   relay                 services/relay/**, skills/molty/SKILL.md, docs/AGENT-LINK.md
 #   cli                   apps/cli/**
-#   python                services/molty-voice/**, tools/sim/** (the sim installs
-#                         molty-voice editable: a voice change runs both suites)
-#   creatures             device/creatures/**
-#   website               apps/website/**, docs/**, root *.md (CONTRIBUTING.md is
-#                         synced), device/creatures/** (the og script reads
-#                         catalog/catalog.json), packages/** (@packages),
-#                         device/firmware/boards/** (repoBoards.ts, setup-match.test.ts)
-#   hygiene               always (secrets, paths, licences, versions, skill: check-skill
-#                         reads the relay sources, so a relay change is covered here)
-#   everything            .github/**, Makefile, VERSION (baked into console, firmware,
-#                         relay, cli), .gitignore, ci-changes.*, any
-#                         path no rule knows, a manual run, a new branch / force push
-#   no job (hygiene only) plugin manifests, LICENSE,
-#                         tools/scripts/{hygiene.sh,check-skill.mjs,version.mjs}
+#   python                services/molty-voice/**, tools/sim/**, the relay's reflex
+#   creatures             the exporter, the kit specs, the committed .molty files
+#   website               apps/website/**, every .md under docs/ and skills/, README,
+#                         CONTRIBUTING, board.json and board photos, the web Molty and
+#                         the sources it is built from, the packages it imports
+#   VERSION, .gitignore   console, firmware, relay, cli, python (they bake VERSION);
+#                         creatures (its check lists untracked files)
+#   everything            this file, ci-changes.*, Makefile, .gitattributes, a path no
+#                         rule knows, a manual run, a new branch / force push
+#   no job (hygiene only) markdown and pictures no build reads, the other workflows,
+#                         plugin manifests, the hygiene/skill/package checks
 #
 # A job that `needs` a possibly-skipped job uses !cancelled() plus explicit result
 # checks, so it is not skipped transitively and never runs on a failed upstream.

@@ -18,6 +18,12 @@ Thanks for helping. Small, focused pull requests are easiest to review.
 CI ([`.github/workflows/ci.yml`](.github/workflows/ci.yml)) runs the same checks on
 every pull request, plus `make hygiene` (no secrets or local paths committed) and a
 firmware size gate (`make firmware-size`: the app must stay under 90% of its OTA slot).
+A job runs only if its result can depend on a file the pull request changed:
+[`tools/scripts/ci-changes.sh`](tools/scripts/ci-changes.sh) maps each changed path to
+the jobs whose builds, tests or checks read it (hygiene always runs), so a README or a
+picture no build reads compiles nothing, and a path the map does not know runs every
+job. To add a path, put a line in that script's table above its folder's catch-all and
+a row in `tools/scripts/ci-changes.test.sh`.
 
 ## Conventions
 
