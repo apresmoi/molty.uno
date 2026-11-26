@@ -4,8 +4,12 @@ name: Deploy Website
 # The custom domain comes from apps/website/public/CNAME, which Astro copies into dist/.
 # Repo settings: Pages → Source = "GitHub Actions"; DNS for molty.uno points at Pages.
 #
-# The site imports the real creature engine and .molty files, the console catalog,
-# and syncs repo docs (apps/website/src/config/docs.mjs), so changes there redeploy too.
+# The site is built from apps/website/ plus what it imports or syncs from the rest of the
+# repo, so only those redeploy it: the docs it syncs (apps/website/src/config/docs.mjs),
+# the board.json files and board photos (repoBoards.ts), the packages it imports, the
+# firmware's renderer (device/firmware/web/built), the sample commands the landing plays
+# (device/firmware/test/host/fixtures) and the astro skill's sky (skills/molty-astro/scripts).
+# What its tests alone read (every .md, the firmware sources) is CI's website job.
 #
 # /setup flashes boards from the browser (ESP Web Tools), which needs the firmware on
 # this origin: release assets have no CORS. So the build stages the latest release's
@@ -18,13 +22,17 @@ on:
       - main
     paths:
       - "apps/website/**"
-      - "device/creatures/**"
-      - "docs/**"
-      - "README.md"
+      - "docs/*.md"
       - "CONTRIBUTING.md"
       - "device/firmware/boards/**/board.json"
+      - "device/firmware/boards/**/*.jpg"
+      - "device/firmware/boards/**/*.jpeg"
+      - "device/firmware/boards/**/*.png"
+      - "device/firmware/boards/**/*.webp"
       - "device/firmware/web/built/**"
-      - "packages/**"
+      - "device/firmware/test/host/fixtures/astrology-commands.jsonl"
+      - "packages/*/*.json"
+      - "skills/molty-astro/scripts/**"
       - ".github/workflows/deploy-website.yml"
   workflow_dispatch:
   workflow_call:
