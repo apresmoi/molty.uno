@@ -485,11 +485,15 @@ class RealtimeFront:
         s = self._active
         if s is None or (rid and s.rid and rid != s.rid):
             return
-        s.said = (delta or s.said) if done else s.said + delta
+        if not done:
+            s.said += delta
+        elif delta and delta.split()[:s.words] == s.said.split()[:s.words]:
+            s.said = delta  # the final transcript, unless it changed words already cued and shown
         await self._said(s, done)
 
     async def _said(self, s: _Speech, done: bool) -> None:
-        """Word cues and the text so far, from the output transcript."""
+        """Word cues and the text so far, from the output transcript: the same whitespace-split words, word i cue i,
+        and each text the one before it plus whole words (the device's say_text takes it so)."""
         words = s.said.split()
         complete = len(words) if done or s.said[-1:].isspace() else max(0, len(words) - 1)
         while s.words < complete:
@@ -498,7 +502,7 @@ class RealtimeFront:
             await self._send_json({"t": "tts.word", "id": s.sid, "i": s.words, "text": words[s.words][:64], "start_s": round(s.last_start, 3)})
             s.words += 1
         # the text so far, once per word (the relay shows it on the device when the first sound goes out)
-        text = " ".join(words[:complete]) if not done else s.said.strip()
+        text = " ".join(words[:complete])
         if text and (done and not s.text_final or not done and text != s.text_sent):
             s.text_sent, s.text_final = text, done
             await self._send_json({"t": "tts.text", "id": s.sid, "text": text[:4000], **({"final": True} if done else {})})
