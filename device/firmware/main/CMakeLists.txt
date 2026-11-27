@@ -139,6 +139,8 @@ idf_component_register(
         "rhythm/rhythm_wire.c"   # rhythm.play's patterns, strictly (plain C, host-tested)
         "rhythm/rhythm_core.c"   # the one player: commands, the screen's acts, events (plain C)
         "rhythm/rhythm_dev.c"    # its lock, the speaker, the buzz, the link's commands
+        "rhythm/wave_player.c"   # the tone player: the drum hit at any rate, its cycles, the trace (plain C, host-tested)
+        "rhythm/wave_core.c"     # the chord on the screen: commands, the levels, events, its share of the speaker
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
         "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)

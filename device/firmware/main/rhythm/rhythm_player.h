@@ -139,6 +139,9 @@ static inline bool rhy_sounding(const rhy_player_t *p) { return p->on && (!p->pa
 size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n);
 /** u at output sample n (one the speaker plays now: n <= p->n). */
 double rhy_u_at(const rhy_player_t *p, uint64_t n);
+/** One accented hit of `sound` at its own level (no mix, no knee), as a voice plays it, into out (at most n samples:
+ *  its length, 16 kHz); how many. The tone player's drum (wave_player.c). */
+size_t rhy_sound(int sound, float *out, size_t n);
 /** A main beat placed at or before sample upto, not yet taken: true and *first (the bar's first). For the buzz. */
 bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first);
 

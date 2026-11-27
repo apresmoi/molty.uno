@@ -15,6 +15,7 @@
  */
 #include "rhythm.h"
 #include "rhythm_dev.h"
+#include "wave.h"
 #include "link_cmd.h"
 #include "molty_board.h"
 #include "haptic.h"
@@ -138,4 +139,17 @@ esp_err_t rhythm_cmd_stop(const cJSON *args, cJSON **out) {
     (void)args; (void)out;
     if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
     return answer(rhythm_stop());
+}
+esp_err_t wave_cmd_play(const cJSON *args, cJSON **out) {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
+    return answer(wave_play(args, out));
+}
+esp_err_t wave_cmd_set(const cJSON *args, cJSON **out) {
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
+    return answer(wave_set(args, out));
+}
+esp_err_t wave_cmd_stop(const cJSON *args, cJSON **out) {
+    (void)args; (void)out;
+    if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
+    return answer(wave_stop());
 }

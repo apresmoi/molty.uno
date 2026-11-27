@@ -48,8 +48,9 @@ extern "C" {
 #define PKG_GROW          1.25f         /* a spot's grow unless it says                      */
 
 /* PK_BEAT: the beat player's pattern as a clock (scene_player.h scene_beat), one a layout. PK_DIAL: a wheel round the
- * edge, turned in clicks on the device (scene_player.h "wheels"). PK_CENTRE: a tap in the middle plays and stops the beat. */
-enum { PK_RING, PK_ARC, PK_TICKS, PK_LINE, PK_CURVE, PK_DISC, PK_BALL, PK_GLYPH, PK_TEXT, PK_SPOT, PK_BEAT, PK_DIAL, PK_CENTRE, PK_KINDS };
+ * edge, turned in clicks on the device (scene_player.h "wheels"). PK_CENTRE: a tap in the middle plays and stops the beat.
+ * PK_WAVE: the tone player's chord on one circle (scene_player.h scene_wave), in a layout's beat's place. */
+enum { PK_RING, PK_ARC, PK_TICKS, PK_LINE, PK_CURVE, PK_DISC, PK_BALL, PK_GLYPH, PK_TEXT, PK_SPOT, PK_BEAT, PK_DIAL, PK_CENTRE, PK_WAVE, PK_KINDS };
 extern const char *const PKG_KIND_NAMES[PK_KINDS];
 
 /* an item's fields; the numeric ones first (PF_NUMS) */

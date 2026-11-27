@@ -147,7 +147,7 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
         if (f[PF_R].src == PV_NONE) o->r = it->k == PK_DIAL ? 0.95f : 0.26f;
         if (f[PF_R0].src == PV_NONE) o->r0 = 0.85f;
         const char *sets = str_of(b, &f[PF_SETS], el);
-        o->sets = sets && !strcmp(sets, "tempo") ? 1 : sets && !strcmp(sets, "pick") ? 2 : 0;
+        o->sets = sets && !strcmp(sets, "tempo") ? 1 : sets && !strcmp(sets, "pick") ? 2 : sets && !strcmp(sets, "pitch") ? 3 : 0;
         const char *id = str_of(b, &f[PF_ID], el);
         if (it->k == PK_DIAL && (!id || !say_add(sc, id, PKG_STR_MAX, &o->sid, &o->nsid))) return false;
         if (f[PF_LABELS].src == PV_PARAM) {               /* each element's label, '\n' between */
@@ -234,9 +234,9 @@ scene_t *scene_build(pkg_t *p, const char *layout, const cJSON *params, float tt
     sc->pkg = p;
     sc->focus = -1; sc->grow = 1.f;
     sc->look = sc->serial = next_serial();
-    sc->beat = -1;
-    for (int n = 0; n < sc->nitems; n++) if (sc->items[n].k == PK_BEAT) sc->beat = n;
-    sc->nfixed = sc->nitems; sc->nchars_fixed = sc->nchars;
+    sc->beat = sc->wave = -1;
+    for (int n = 0; n < sc->nitems; n++) { if (sc->items[n].k == PK_BEAT) sc->beat = n; if (sc->items[n].k == PK_WAVE) sc->wave = n; }
+    sc->nfixed = sc->nitems; sc->nchars_fixed = sc->nchars; sc->npts_fixed = sc->npts;
     snprintf(sc->pkg_id, sizeof(sc->pkg_id), "%s", p->id);
     snprintf(sc->layout, sizeof(sc->layout), "%s", l->name);
     sc->dur = l->dur;
@@ -1434,7 +1434,7 @@ int scene_dial_labels(const scene_t *sc, int n, char (*out)[PKG_KEY_MAX + 1], in
 
 bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w) {
     const int n = scene_dial(sc, w->face);
-    return n >= 0 && (w->turning || w->since < SCENE_WHEEL_SHOW_S || w->face == 1);
+    return n >= 0 && !w->quiet && (w->turning || w->since < SCENE_WHEEL_SHOW_S || w->face == 1);
 }
 
 void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
@@ -1462,7 +1462,7 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
             if (fabsf(a) <= SCENE_WHEEL_SCALE) beat_spoke(sc, 90.f + a, r - 0.015f, 0.03f, BEAT_HAIR, BEAT_GRID, true);
         }
     }
-    beat_spoke(sc, 90.f, r - 0.055f, 0.07f + 0.03f * w->flash, 0.03f, toward_white(w->face ? SCENE_CHOOSE_RGB : SCENE_NOTCH_RGB, w->flash), true);
+    beat_spoke(sc, 90.f, r - 0.055f, 0.07f + 0.03f * w->flash + 0.03f * w->land, 0.03f, toward_white(w->face ? SCENE_CHOOSE_RGB : SCENE_NOTCH_RGB, w->flash), true);
     if (!scene_wheel_words(sc, w)) return;
     char words[PKG_KEY_MAX + 1];
     if (w->nlabels > 0) {
@@ -1477,4 +1477,196 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
         beat_text(sc, words, 0.03f, 0.16f, 0xffffffu, true);   /* (0.16: its letters' cells, redrawn each click, fit the frame) */
         if (d.sets == 1) beat_text(sc, "BPM", -0.13f, 0.07f, BEAT_INK, true);
     }
+}
+
+/* ── a wave: the tone player's chord on one circle ──────────────────────────────────────────────────────────────── */
+
+#define WAVE_RC     0.5f                /* the design's circle (the item's r scales it all)                        */
+#define WAVE_HAND0  0.3f                /* the hand from here out to just inside the circle, clear of the middle    */
+#define WAVE_DOT    0.034f
+#define WAVE_SWELL_S 0.25f
+#define WAVE_MUTED  0.3f                /* a muted voice: this much of its colour                                  */
+#define WAVE_TOL    0.35f               /* px: the outline's strokes stay this close to its points, at first        */
+#define WAVE_RUN    30                  /* ... and never cross a multiple of this many (a change stays where it is)  */
+#define WAVE_STILL  0.4f                /* px: a point that moved less than this stays where it was drawn           */
+#define WAVE_PX     233.f               /* px a glass unit on the 1.75C (466 px across), for that tolerance         */
+static inline float wsmooth(float u) { u = u < 0.f ? 0.f : u > 1.f ? 1.f : u; return u * u * (3.f - 2.f * u); }
+static inline float wfrac(float v) { return v - floorf(v); }
+float scene_wave_fuse(float hz) { return wsmooth((log2f(fmaxf(hz, 1e-3f)) - log2f(12.f)) / (log2f(32.f) - log2f(12.f))); }
+
+static scene_item_t *wave_pts(scene_t *sc, uint32_t rgb, float w, int n) {   /* a live polyline of n points, after the rest */
+    if (sc->npts + n > SCENE_PTS_MAX + SCENE_LIVE_PTS) return NULL;
+    scene_item_t *o = beat_item(sc, PK_LINE, true);
+    if (o) { o->rgb = rgb; o->w = w; o->pts = (uint16_t)sc->npts; o->npts = (uint16_t)n; sc->npts += n; }
+    return o;
+}
+static int wave_text(scene_t *sc, const char *str, float x, float y, float size, uint32_t rgb, int layer, float reach) {
+    const int n0 = sc->nchars, n = (int)strlen(str);
+    beat_text(sc, str, y, size, rgb, true);
+    if (sc->nchars == n0) return 0;
+    scene_item_t *o = &sc->items[sc->nitems - 1];
+    o->x = x; o->layer = (int8_t)layer; o->r = reach / 2.4f;   /* (a voice's number: a tap within reach mutes it, scene_beat_hit) */
+    int shapes = 0;
+    for (int i = 0; i < n; i++) { if (sc->chars[n0 + i] == 'b') sc->chars[n0 + i] = GC_FLAT; shapes += str[i] != ' '; }
+    return shapes;
+}
+static int letters(const char *s) { int n = 0; for (; s && *s; s++) n += *s != ' '; return n; }
+static float fit(const char *s, float max, float room) { const int n = (int)strlen(s); return fminf(max, room / (0.6f * (float)(n > 1 ? n : 1))); }
+
+/* the outline's points (the trace round the circle, 12 o'clock clockwise) into at most max strokes: each stroke as long
+ * as its points stay within tol px of it (tol doubled until they fit), never across a multiple of WAVE_RUN points, so
+ * a change of a few points redraws the strokes there and no others */
+static int wave_outline(scene_t *sc, const float (*p)[2], int16_t *keep, uint32_t rgb, float w, int max) {
+    int n = 0;
+    for (float tol = WAVE_TOL / WAVE_PX; ; tol *= 2.f) {
+        n = 0; keep[n++] = 0;
+        for (int i = 0; i < SCENE_WAVE_PTS;) {
+            int j = i + 1;
+            const int grid = (i / WAVE_RUN + 1) * WAVE_RUN;
+            while (j + 1 <= grid && j + 1 <= SCENE_WAVE_PTS) {
+                const float ax = p[i][0], ay = p[i][1], dx = p[j + 1][0] - ax, dy = p[j + 1][1] - ay, l = sqrtf(dx * dx + dy * dy);
+                bool ok = true;
+                for (int q = i + 1; q <= j && ok; q++) ok = fabsf((p[q][0] - ax) * dy - (p[q][1] - ay) * dx) <= tol * l;
+                if (!ok) break;
+                j++;
+            }
+            keep[n++] = (int16_t)j; i = j;
+        }
+        if (n - 1 <= max || tol > 0.1f) break;
+    }
+    scene_item_t *o = wave_pts(sc, rgb, w, n);
+    if (!o) return 0;
+    for (int q = 0; q < n; q++) { sc->pts[o->pts + q][0] = p[keep[q]][0]; sc->pts[o->pts + q][1] = p[keep[q]][1]; }
+    return n - 1;
+}
+
+void scene_wave(scene_t *sc, const scene_wave_t *w) {
+    if (!sc || sc->wave < 0) return;
+    sc->npts = sc->npts_fixed;
+    /* the outline's points, and the radii last drawn (a point that barely moved stays: a still outline stays still,
+     * a slow one redraws only behind the hand): PSRAM, once */
+    static struct { float xy[SCENE_WAVE_PTS + 1][2], last[SCENE_WAVE_PTS + 1]; int16_t keep[SCENE_WAVE_PTS + 1]; unsigned look; } *scr;
+    if (!scr && !(scr = SCENE_CALLOC(sizeof(*scr)))) return;
+    float (*xy)[2] = scr->xy;
+    const scene_item_t W = sc->items[sc->wave];
+    const float k = W.r / WAVE_RC, RC = W.r;
+    const bool playing = w->on && w->level == SCENE_WAVE_PLAYING;
+    const int nv = w->on ? (w->nv < 5 ? w->nv : 5) : 0;
+    const float fc = playing ? fmaxf(w->fc, 1e-6f) : 1.f, h = playing ? w->H : 0.f, fr = playing ? w->f[0] : 1.f;
+    int budget = w->budget - 1;                         /* (the circle) */
+    #define MUTED(j) (playing && (w->muted >> (j) & 1))
+    uint32_t col[5];
+    for (int j = 0; j < nv; j++) col[j] = MUTED(j) ? scale_rgb(w->rgb[j], WAVE_MUTED) : w->rgb[j];
+
+    /* the hand: crisp while it can be followed, a blur of its sweep a frame, gone once the beats are a note */
+    if (playing) {
+        const float deg = 90.f - 360.f * h, gone = scene_wave_fuse(fr), crisp = (1.f - gone) * (1.f - wsmooth((fc - 2.5f) / 2.5f));
+        const float fan = (1.f - gone) * wsmooth((fc - 2.f) / 3.f), sweep = fminf(360.f, 360.f * fc / 30.f), len = (RC * 0.97f - WAVE_HAND0 * k);
+        if (fan > 0.01f) {                              /* thin arcs side by side: the hand's sweep in one frame */
+            const uint32_t c = scale_rgb(0xffffffu, fan * fminf(0.6f, fmaxf(0.1f, 18.f / sweep)));
+            for (int q = 0; q < 6; q++) {
+                scene_item_t *o = beat_item(sc, PK_ARC, true);
+                if (o) { o->r = WAVE_HAND0 * k + len * (q + 0.5f) / 6.f; o->w = len / 6.f * 1.15f; o->a0 = deg; o->a1 = deg + fmaxf(sweep, 1.f); o->rgb = c; }
+            }
+            budget -= 6;
+        }
+        if (crisp > 0.01f) {
+            for (int q = 6; q >= 1; q--) beat_spoke(sc, deg + fminf(sweep, 60.f) * q / 6.f, WAVE_HAND0 * k, len, 0.02f, scale_rgb(0xffffffu, crisp * 0.12f * (1.f - q / 7.f)), true);
+            beat_spoke(sc, deg, WAVE_HAND0 * k, len, 0.03f, scale_rgb(0xffffffu, crisp), true);
+            budget -= 7;
+        }
+    } else { beat_spoke(sc, 90.f, WAVE_HAND0 * k, RC * 0.97f - WAVE_HAND0 * k, 0.012f, BEAT_GRID, true); budget--; }
+    scene_item_t *ring = beat_item(sc, PK_RING, true);
+    if (ring) { ring->r = RC; ring->rgb = BEAT_GRID; }
+
+    /* the texts and marks first in the count (the outline takes what is left); drawn last */
+    const char *big = w->big ? w->big : "", *unit = w->unit ? w->unit : "", *name = w->name ? w->name : "", *top = w->top ? w->top : "";
+    char ratio[32] = "";
+    for (int j = 0, o = 0; playing && nv > 1 && j < nv; j++) o += snprintf(ratio + o, sizeof ratio - (size_t)o, j ? ":%d" : "%d", w->count[j] % 100);
+    const bool mark = w->on && (!playing || w->mark);
+    budget -= (mark ? (w->level == SCENE_WAVE_NOTES ? 9 : w->level == SCENE_WAVE_CHORDS ? 10 : 9) : 0) + letters(name) + letters(top) + letters(big) + letters(unit) + letters(ratio);
+
+    /* the hits: each voice's dots, joined as its shape (the densest voices' give way first when the room is short) */
+    float level = 0.f;
+    for (int j = 0; j < nv; j++) level = playing ? (MUTED(j) ? level : level + w->env[j]) : fmaxf(level, w->pluck[j] ? w->env[j] : 0.f);
+    const int room = budget - SCENE_WAVE_MIN_SEGS;
+    int used = 0;
+    bool dots[5] = { false }, shape[5] = { false };
+    for (int pass = 0; pass < 2; pass++)
+        for (int j = 0; j < nv; j++) {
+            const float show = 1.f - (playing ? scene_wave_fuse(w->f[j]) : 0.f);
+            const int n = w->count[j] ? w->count[j] : 1;
+            if (show < 0.01f) continue;
+            if (!pass && used + n <= room) { dots[j] = true; used += n; }
+            else if (pass && dots[j] && n >= 2 && used + n <= room) { shape[j] = true; used += n; }
+        }
+    /* the outline: what the hand drew, the sound's own wave (still while the beats are a note in whole numbers) */
+    const bool one = nv == 1;
+    const uint32_t line = scale_rgb(one && nv ? col[0] : 0xffffffu, 0.35f + 0.65f * fminf(1.f, level));
+    #define RAT(x) (w->trace ? w->trace[(int)lrintf(wfrac(x) * SCENE_WAVE_PTS)] * k : RC)
+    const bool fresh = scr->look != sc->look;
+    scr->look = sc->look;
+    for (int q = 0; q <= SCENE_WAVE_PTS; q++) {
+        float r = w->trace ? w->trace[q] * k : RC;
+        if (!fresh && fabsf(r - scr->last[q]) < WAVE_STILL / WAVE_PX) r = scr->last[q];
+        scr->last[q] = r;
+        const float a = (90.f - 360.f * q / SCENE_WAVE_PTS) * DEG;
+        xy[q][0] = r * cosf(a); xy[q][1] = r * sinf(a);
+    }
+    xy[SCENE_WAVE_PTS][0] = xy[0][0]; xy[SCENE_WAVE_PTS][1] = xy[0][1];
+    wave_outline(sc, (const float (*)[2])xy, scr->keep, line, 0.012f, budget - used);
+    for (int j = 0; j < nv; j++) {
+        if (!dots[j]) continue;
+        const int n = w->count[j] ? w->count[j] : 1;
+        const float show = 1.f - (playing ? scene_wave_fuse(w->f[j]) : 0.f), ph = playing ? w->ph[j] : 0.f;
+        scene_item_t *poly = shape[j] ? wave_pts(sc, scale_rgb(col[j], 0.55f * show), 0.010f, n + 1) : NULL;
+        const float size = fminf(WAVE_DOT * k, 0.42f * (6.2831853f * RC / n / 2.f)) * (0.35f + 0.65f * show);
+        for (int q = 0; q < n; q++) {
+            const float x = playing ? wfrac(h + (q - ph) / n) : (float)q / n, r = playing ? RAT(x) : RC, a = (90.f - 360.f * x) * DEG;
+            float sw = 0.f;
+            if (playing && !MUTED(j)) {
+                const float since = wfrac(h - x) / fc, inst = since < WAVE_SWELL_S ? (1.f - since / WAVE_SWELL_S) * (1.f - since / WAVE_SWELL_S) : 0.f;
+                const float P = 1.f / fc, m = fminf(P, WAVE_SWELL_S), u = 1.f - m / WAVE_SWELL_S, mean = WAVE_SWELL_S / (3.f * P) * (1.f - u * u * u);
+                sw = inst + (mean - inst) * wsmooth((fc - 2.f) / 4.f);
+            } else if (!playing) sw = 0.8f * (w->pluck[j] ? w->env[j] : 0.f);
+            beat_disc(sc, r * cosf(a), r * sinf(a), size * (1.f + 0.9f * fminf(1.f, fmaxf(0.f, sw))), scale_rgb(col[j], fminf(1.f, show * 1.4f)),
+                      true, playing && !MUTED(j) && show > 0.3f ? j : -1);
+            if (poly) { sc->pts[poly->pts + q][0] = r * cosf(a); sc->pts[poly->pts + q][1] = r * sinf(a); }
+        }
+        if (poly) { sc->pts[poly->pts + n][0] = sc->pts[poly->pts][0]; sc->pts[poly->pts + n][1] = sc->pts[poly->pts][1]; }
+    }
+    #undef RAT
+
+    /* the middle: the mark, the readout, the name; the top: the note or the whole numbers */
+    const float my = 0.15f * k;
+    if (mark && w->level == SCENE_WAVE_NOTES)           /* a ring of dots round one: a tap opens the note */
+        for (int q = 0; q <= 8; q++) { const float a = q * 45.f * DEG, rr = q < 8 ? 0.062f * k : 0.f; beat_disc(sc, rr * cosf(a), rr * sinf(a) + my, (q < 8 ? 0.012f : 0.019f) * k, SCENE_NOTCH_RGB, true, -1); }
+    else if (mark && w->level == SCENE_WAVE_CHORDS)     /* the play mark: a triangle of dots pointing right */
+        for (int c = 0; c < 4; c++) for (int q = 0; q < 4 - c; q++) beat_disc(sc, (c - 1.3f) * 0.05f * 0.87f * k, ((float)q - (3 - c) * 0.5f) * 0.05f * k + my, 0.016f * k, SCENE_NOTCH_RGB, true, -1);
+    else if (mark)                                      /* a small square of dots: a tap stops it */
+        for (int q = 0; q < 9; q++) beat_disc(sc, (q % 3 - 1) * 0.02f * k, (q / 3 - 1) * 0.02f * k + my, 0.0065f * k, BEAT_STOP_RGB, true, -1);
+    if (!w->on) return;
+    if (w->level == SCENE_WAVE_NOTES) wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.12f, 0.6f) * k, w->name_rgb, -1, 0.f);
+    else if (w->level == SCENE_WAVE_CHORDS) {
+        wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.09f, 0.62f) * k, w->name_rgb, -1, 0.f);
+        wave_text(sc, top, 0.f, SCENE_WAVE_TOP_Y * k, 0.07f * k, w->top_rgb, -1, 0.f);
+    } else {
+        const bool note = strncmp(unit, "HZ", 2) == 0;
+        wave_text(sc, big, 0.f, -0.02f * k, 0.12f * (1.f + 0.15f * fminf(1.f, fmaxf(0.f, w->land))) * k, 0xffffffu, -1, 0.f);
+        wave_text(sc, unit, 0.f, -0.13f * k, 0.05f * k, note ? scale_rgb(w->unit_rgb, 0.45f + 0.55f * w->tone) : w->unit_rgb, -1, 0.f);
+        if (nv > 1) {
+            wave_text(sc, name, 0.f, -0.23f * k, fit(name, 0.05f, 0.5f) * k, w->name_rgb, -1, 0.f);
+            /* the whole numbers up top, a number a voice in its colour: a tap on one mutes it */
+            const float size = fit(ratio, 0.075f, 0.9f) * k, adv = 0.6f * size, len = (float)strlen(ratio);
+            int i0 = 0;
+            for (int j = 0; j < nv; j++) {
+                char num[4];
+                const int l = snprintf(num, sizeof num, "%d", w->count[j] % 100);
+                wave_text(sc, num, (i0 + l * 0.5f - len * 0.5f) * adv, SCENE_WAVE_TOP_Y * k, size, col[j], j, fmaxf(0.06f * k, adv * l * 0.7f));
+                if (j + 1 < nv) wave_text(sc, ":", (i0 + l + 0.5f - len * 0.5f) * adv, SCENE_WAVE_TOP_Y * k, size, BEAT_GRID, -1, 0.f);
+                i0 += l + 1;
+            }
+        }
+    }
+    #undef MUTED
 }

@@ -42,6 +42,7 @@ typedef struct sdk_queue *QueueHandle_t;
 typedef struct sdk_ring *RingbufHandle_t;
 #define portMAX_DELAY UINT32_MAX
 #define pdMS_TO_TICKS(ms) (ms)
+#define pdTICKS_TO_MS(t) (t)
 #define pdTRUE 1
 #define pdPASS 1
 #define RINGBUF_TYPE_BYTEBUF 0

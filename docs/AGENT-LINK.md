@@ -1049,6 +1049,39 @@ sound and places each hit on its exact sample (`rhythm_player.h`). Nothing beat 
   to speed when the beat is heard; dropped like any buzz (no motor, the mic open). While it buzzes the shake detector is
   deaf, so shake to talk waits.
 
+### Waves
+
+The tone player (`device/firmware/main/rhythm/wave_player.h`, `wave.h`) is the beat player's sibling on the same
+speaker: the agent sends the chord kinds, a note and a pitch once (`wave.play`), and Molty holds the chord by itself,
+each voice the beat player's own low drum with a beater's click on it, hit once a cycle. Slow it is a rhythm; past about
+20 hits a second the hits fuse into a note. It needs a speaker and answers to the `rhythm` cap (older firmware:
+`unknown_command`). Playing it stops the rhythm, and `rhythm.play` stops it: one player on the speaker.
+
+- **A chord kind** is `{id, label, semis, ratio, spell}`: up to 5 voices, `semis` above the root (0 first), `ratio` the
+  voices' whole numbers (their hits a turn, up to 48, rising), `spell` the key its note names are spelt in. Up to 32
+  kinds, sent whole so the wheel browses them with no round trip (the molty-waves skill's `data/chords.json`).
+- **`wave.play`** `{chords, pick, note?, midi? | hz?, tuning?, paused?, mute?}`: kind `pick` on note `note` (0 is C) at
+  `midi` (fractions allowed, from -36, 1.02 Hz, up to where the top voice reaches 5760 Hz) or `hz`. `tuning: "just"`
+  (the default: voice i at `root * ratio[i] / ratio[0]`, its phase locked to the clock, the picture still) or
+  `"equal"` (the piano's). `paused: true`: stopped on the chooser, the chord plucked once. `mute`: voices, 1 the root.
+- **`wave.set`** one of `midi`, `hz`, `octave`, `count: true` (the octave where the clock turns about a turn a second)
+  and any of `note`, `pick`, `tuning`, `mute`, `paused`: a pitch glides in 30 ms, never restarts; a new kind or note
+  while playing starts it again in its octave after a 12 ms fade. **`wave.stop`**: silence.
+- **The sound.** Under 24.5 Hz the hit itself from each hit (a new one chokes the last over 2 ms); over 32 Hz one cycle
+  of that same choked hit for each semitone, band-limited under 7.2 kHz by FFT (made once when a chord is first sent,
+  about 430 KB of PSRAM, about 0.4 s; freed when nothing plays); between, the two crossfaded, one waveform at one phase.
+  Each pitch to a 0.45 peak or a 0.2 RMS, the chord times 1.25 over its voices, the beat player's soft knee, 16 kHz.
+  The speaker is shared and synced exactly as the rhythm's (its delay, its `sync` trim, its yield to a say or a listen).
+- **The scope** is the waves package's screen (a `wave` item, [PACKAGES.md](PACKAGES.md#layouts)): with none on screen
+  for 2 s the chord stops; stopped, the scope goes.
+- **On Molty itself:** three levels. The chord kinds on the rim, stopped (each plucked as the rim reaches it, root in the
+  middle of the piano); a tap on the note above the kind's name goes up to the twelve notes (each plucked), the middle
+  comes back down; the middle again plays it at the pitch just heard. Playing, the rim is the pitch, a semitone a click,
+  turning fast the chosen note's next octave (a longer tick); a tap on a whole number up top (or a voice's dots while
+  slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the middle stops it on the note it stopped at. `ring`
+  events as the rhythm's (`pitch` value, `chord` index and id, `note` index); a `wave` event `{state, chord, note, hz}`
+  when the human plays or stops it. The accept button is the middle; the reject button or a held finger closes it.
+
 ## Closing a screen
 
 Every scene a skill shows can be closed by the human on Molty itself, whatever it is:

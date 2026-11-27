@@ -1,0 +1,7 @@
+{
+  "title": "waves scope: the params of scene.play",
+  "type": "object",
+  "required": [],
+  "additionalProperties": false,
+  "properties": {}
+}

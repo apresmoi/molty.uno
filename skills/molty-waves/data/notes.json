@@ -1,0 +1,90 @@
+{
+ "a4_hz": 440,
+ "formula": "f = 440 * 2^((midi - 69) / 12)",
+ "notes": [
+  {
+   "pc": 0,
+   "sharp": "C",
+   "flat": "C",
+   "major": "C",
+   "minor": "C"
+  },
+  {
+   "pc": 1,
+   "sharp": "C#",
+   "flat": "Db",
+   "major": "Db",
+   "minor": "C#"
+  },
+  {
+   "pc": 2,
+   "sharp": "D",
+   "flat": "D",
+   "major": "D",
+   "minor": "D"
+  },
+  {
+   "pc": 3,
+   "sharp": "D#",
+   "flat": "Eb",
+   "major": "Eb",
+   "minor": "Eb"
+  },
+  {
+   "pc": 4,
+   "sharp": "E",
+   "flat": "E",
+   "major": "E",
+   "minor": "E"
+  },
+  {
+   "pc": 5,
+   "sharp": "F",
+   "flat": "F",
+   "major": "F",
+   "minor": "F"
+  },
+  {
+   "pc": 6,
+   "sharp": "F#",
+   "flat": "Gb",
+   "major": "F#",
+   "minor": "F#"
+  },
+  {
+   "pc": 7,
+   "sharp": "G",
+   "flat": "G",
+   "major": "G",
+   "minor": "G"
+  },
+  {
+   "pc": 8,
+   "sharp": "G#",
+   "flat": "Ab",
+   "major": "Ab",
+   "minor": "G#"
+  },
+  {
+   "pc": 9,
+   "sharp": "A",
+   "flat": "A",
+   "major": "A",
+   "minor": "A"
+  },
+  {
+   "pc": 10,
+   "sharp": "A#",
+   "flat": "Bb",
+   "major": "Bb",
+   "minor": "Bb"
+  },
+  {
+   "pc": 11,
+   "sharp": "B",
+   "flat": "B",
+   "major": "B",
+   "minor": "B"
+  }
+ ]
+}

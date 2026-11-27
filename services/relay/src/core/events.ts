@@ -323,6 +323,7 @@ export function eventSentence(ev: AgentEvent): string {
     case DRAFT_DROPPED_EVENT:
       return `Your draft opener was dropped (${String(d.reason ?? "")}): answer the utterance as usual`;
     case "tap":
+      if (typeof d.muted === "boolean" && /^voice-\d$/.test(String(d.spot))) return `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} of Molty's chord`;
       return typeof d.muted === "boolean" ? `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} on Molty's rhythm` : "Molty's screen was tapped";
     case "ring":
       if (d.spot === "region") return `The human is browsing ${String(d.label)} on Molty's wheel`;

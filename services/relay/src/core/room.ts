@@ -1311,7 +1311,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (!live.getMeta()?.caps?.includes(pkg ? PKG_CAP : SCENE_CAP)) return fail("unsupported", `this Molty's firmware has no ${pkg ? "packages" : "scenes"} (no \`${pkg ? PKG_CAP : SCENE_CAP}\` in its caps): update it`);
       if (cmd.name === "pkg.install") return this.startJob("pkg", cmd.args, false, by);
     }
-    if (cmd.name.startsWith("rhythm.") && !live.getMeta()?.caps?.includes(RHYTHM_CAP)) {
+    if ((cmd.name.startsWith("rhythm.") || cmd.name.startsWith("wave.")) && !live.getMeta()?.caps?.includes(RHYTHM_CAP)) {
       return fail("unsupported", `this Molty's firmware has no beat player (no \`${RHYTHM_CAP}\` in its caps): update it, or it has no speaker`);
     }
     if (cmd.name.startsWith("creature.") && !live.getMeta()?.caps?.includes(CREATURES_CAP)) {

@@ -35,6 +35,8 @@
 #define DEV_WAVE_COPY_US 0.05    /* a pixel of a wave's box copied from the kept glass (the same)                      */
 #define DEV_CELLS_MS     11.0    /* the drawer's cells pass (scene_test.c CELLS_MS; device logs: cells 9.8 to 12)       */
 #define DEV_SIM_MS       6.2     /* the sim task's own work (device log at e9f3195: anim wave.parts simw mean 6.2)     */
+#define DEV_SIM_TEXT_MS  28.8    /* .. with a say's words in the moving fluid (its whole step and the words' target every
+                                  * cell, every frame: device log 2026-11-27, the change into them, sim mean 27.5 to 30.1) */
 #define DEV_CPU_X        100.0   /* the device's cores do the firmware's own work this many times slower than the module
                                   * in a desktop browser: a fresh dust set builds in 0.45 to 0.8 s on the device (scene
                                   * drawer handover) and in 5.6 ms here (an M-series Mac, Node 22). Paces the work the
@@ -85,9 +87,10 @@ static void web_frame_after(void) {
                                             : s_sent.wins * DEV_WIN_MS + s_sent.px * DEV_PX_US / 1000.;
     const double cells = s_drew ? DEV_CELLS_MS : 0., draw = cells + send;
     const double floor_ms = (fd_asleep(&s_dir) ? FLUID_SLEEP_US : atomic_load(&s_screen) ? FLUID_FRAME_US : FLUID_OFF_POLL_MS * 1000) / 1000.;
-    const double work = draw > DEV_SIM_MS ? draw : DEV_SIM_MS;
+    const double sim = s_sim && s_cur == ST_TEXT && !s_sim->p.still ? DEV_SIM_TEXT_MS : DEV_SIM_MS;
+    const double work = draw > sim ? draw : sim;
     s_fi[FI_WINS] = (float)s_sent.wins; s_fi[FI_PX] = (float)s_sent.px; s_fi[FI_COMP] = (float)comp; s_fi[FI_WAVE] = wave;
-    s_fi[FI_CELLS_MS] = (float)cells; s_fi[FI_SEND_MS] = (float)send; s_fi[FI_DRAW_MS] = (float)draw; s_fi[FI_SIM_MS] = (float)DEV_SIM_MS;
+    s_fi[FI_CELLS_MS] = (float)cells; s_fi[FI_SEND_MS] = (float)send; s_fi[FI_DRAW_MS] = (float)draw; s_fi[FI_SIM_MS] = (float)sim;
     s_fi[FI_FRAME_MS] = (float)(work > floor_ms ? work : floor_ms);
     s_fi[FI_ANIM] = s_draw ? (float)s_draw->anim_on : 0.f;
     s_sent.wins = 0; s_sent.px = 0;
@@ -260,11 +263,11 @@ static void sense_tick(uint32_t now) {
     imu_feed(now);
     if (pair) gesture_reset(&s_g);
     if (s_lis.on && s_voice_in >= 0.05f) s_lis.speech_ms += (uint32_t)(s_fi[FI_FRAME_MS] + 0.5f);   /* the VAD hears it */
-    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && rhythm_active();
+    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active());
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
-        if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept plays and stops a rhythm */
-            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
+        if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept is a rhythm's or a chord's centre */
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else wave_local_centre(); } else mole_fluid_scene_close(); }
             s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
             s_btn_prev[b] = on;
             continue;
@@ -320,6 +323,8 @@ static void sense_tick(uint32_t now) {
     if (mole_fluid_ring_event(&re)) ws_emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
     rhythm_ev_t rv;                    /* the beat player's own: a mute, a pause, a stop */
     while (rhythm_take_event(&rv)) ws_emit(rhythm_event_frame(&rv));
+    wave_ev_t wv;                      /* the tone player's own: a mute, a play, a stop */
+    while (wave_take_event(&wv)) ws_emit(wave_event_frame(&wv));
     if (s_dl.on) {                     /* pkg_cmd.c download_task: the ring follows the bytes, then full and into the water */
         const float got = (float)(now - s_dl.t0) / (float)(s_dl.ms ? s_dl.ms : 1u);
         if (got < 1.f) mole_fluid_progress(DL_RING_PCT * got, false);

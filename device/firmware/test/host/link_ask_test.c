@@ -68,6 +68,10 @@ void rhythm_local_play(void) { }
 void rhythm_local_stop(void) { }
 bool rhythm_take_event(rhythm_ev_t *e) { (void)e; return false; }
 cJSON *rhythm_event_frame(const rhythm_ev_t *e) { (void)e; return NULL; }
+bool wave_active(void) { return false; }
+void wave_local_centre(void) { }
+bool wave_take_event(wave_ev_t *e) { (void)e; return false; }
+cJSON *wave_event_frame(const wave_ev_t *e) { (void)e; return NULL; }
 bool link_audio_say_waiting(void) { return false; }
 uint32_t link_audio_job_gen(void) { return 0; }
 void link_audio_request(uint32_t gen, link_audio_req_t what) { (void)gen; (void)what; }

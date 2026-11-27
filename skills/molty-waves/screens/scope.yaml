@@ -1,0 +1,11 @@
+about: The chord Molty plays, on one circle, from the speaker's own clock. Tap the centre to play and to stop; stopped, turn the rim to choose a chord (tap the note up top for the twelve notes); playing, turn it for the pitch and tap a number up top to mute that voice.
+duration: hold
+draw:
+  # one circle: each voice's hits as dots joined as its shape, the hand, the outline the sound pushes out
+  - wave_ring: { radius: 0.5 }
+  # playing: the rim is the pitch, a click every 12 degrees, a semitone a click (fast: the chosen note's next octave)
+  - wheel: { id: pitch, sets: pitch, step: 12 }
+  # stopped: the rim chooses the chord kind (one level up, the note), one bead every 30 degrees, each previewed
+  - wheel: { id: chord, sets: pick, step: 30, face: 1 }
+  # the centre: the notes, the chords, playing, and back
+  - centre_tap: { radius: 0.26 }

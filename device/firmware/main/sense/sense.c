@@ -23,8 +23,8 @@
  * event; the centre and a dot buzz as a tap that does something, the wheel ticks once a click with its own firmer
  * tick (mole_fluid_take_ticks, haptic_wheel: at most one every HAPTIC_WHEEL_GAP_MS, so a fast turn feels fewer ticks
  * than it makes). It sends a `ring` event once it settles. While a skill's scene shows the reject button closes it
- * (mole_fluid_scene_close), whatever it is bound to; with a rhythm on it the accept button plays and stops it (as the
- * centre does). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
+ * (mole_fluid_scene_close), whatever it is bound to; with a rhythm or a chord on it the accept button is its centre
+ * (plays and stops it; a chord's goes down a level). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
  * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
  * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
  * tap, a drag), never a physical button (it clicks by itself).
@@ -50,6 +50,7 @@
 #include "screen_nap.h"
 #include "haptic.h"
 #include "rhythm.h"
+#include "wave.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -218,12 +219,12 @@ static void sense_task(void *arg)
         }
 
         /* a skill's scene shows: the reject button closes it (the creature comes back), whatever it is bound to; with a
-         * rhythm on it the accept button plays and stops it (as the centre does). Never a buzz: a button clicks by itself */
-        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && rhythm_active();
+         * rhythm or a chord on it the accept button does what its centre does. Never a buzz: a button clicks by itself */
+        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active());
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
             if (up && (b == MOLTY_BTN_REJECT || beat)) {
-                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
+                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else wave_local_centre(); } else mole_fluid_scene_close(); }
                 presser[b].pending = false; gesture_switch_reset(&sw[b]); sw[b].down = on;
                 prev[b] = on;
                 continue;
@@ -273,6 +274,8 @@ static void sense_task(void *arg)
         if (mole_fluid_ring_event(&re)) emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
         rhythm_ev_t rv;                                 /* the beat player's own: a mute, a pause, a stop */
         while (rhythm_take_event(&rv)) emit(rhythm_event_frame(&rv));
+        wave_ev_t wv;                                   /* the tone player's own: a mute, a play, a stop */
+        while (wave_take_event(&wv)) emit(wave_event_frame(&wv));
         xTaskDelayUntil(&wake, period);
     }
 }

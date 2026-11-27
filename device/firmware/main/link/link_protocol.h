@@ -185,6 +185,9 @@ cJSON *link_evt_ring_frame(const char *spot, double value, int index, const char
 /* evt `rhythm`: the beat player's state changed on the device (a button, the clock leaving the screen). data
  * {state: "playing" | "paused" | "stopped", rhythm, bpm} */
 cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm);
+/* evt `wave`: the tone player's state changed on the device (the centre, a button, the scope leaving the screen). data
+ * {state: "playing" | "paused" | "stopped", chord, note, hz} */
+cJSON *link_evt_wave_frame(const char *state, const char *chord, const char *note, double hz);
 /* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
 cJSON *link_evt_dnd_frame(bool on);
 cJSON *link_evt_double_tap_frame(double x, double y);

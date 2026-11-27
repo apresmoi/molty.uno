@@ -95,6 +95,9 @@ void rhythm_unlock(void);
 uint64_t rhythm_heard(int32_t ahead_us);
 void rhythm_sync_saved(int ms);
 
+/** (Locked) the sample the speaker plays when this frame is seen: the picture's delay and the trim (the tone player's
+ *  picture reads it too, wave.h). */
+uint64_t rhythm_heard_seen(void);
 /** The picture's own delay (mole_fluid.c, each frame): from reading the player to the light, centred on the frame.
  *  rhythm_now shows the sound at that moment, plus the human's sync trim. */
 void rhythm_view_ahead(int32_t us);

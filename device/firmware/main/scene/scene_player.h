@@ -45,6 +45,7 @@ extern "C" {
 #define SCENE_GROUPS      32            /* highlight groups a scene names                  */
 #define SCENE_LIGHTS      4             /* the groups one spot lights                      */
 #define SCENE_PTS_MAX     512           /* resolved line / curve points, all items         */
+#define SCENE_LIVE_PTS    384           /* points a wave (scene_wave) draws after them     */
 #define SCENE_LETTERS     40            /* a scene's own text, letters (the overlay holds FLUID_MAX_LETTERS) */
 #define SCENE_SAY_CHARS   4096          /* its spots' readings and ids, characters          */
 #define SCENE_QUEUE_MAX   8
@@ -78,7 +79,7 @@ typedef struct {
     int8_t layer;                       /* a beat's hit: its layer (a tap mutes it), else -1                      */
     /* a dial: a click every step degrees adds by (fast turning fast) to val, vmin..vmax; or steps through its labels
      * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1;
-     * each click a tick of the motor, tick_ms at tick percent (0: haptic_plan.h HAPTIC_WHEEL_*) */
+     * each click a tick of the motor, tick_ms at tick percent (0: haptic_plan.h HAPTIC_WHEEL_*); 3 a wave's pitch */
     float step, by, fast, vmin, vmax, val;
     uint8_t face, sets, nlab, tick_ms, tick;
     uint16_t lab;
@@ -92,6 +93,8 @@ typedef struct scene {
     int nitems, npts, nchars, nsay;
     int nfixed, nchars_fixed;           /* what the layout built; a beat's items follow (scene_beat)          */
     int beat;                           /* the layout's beat item, -1 none                                      */
+    int wave;                           /* the layout's wave item, -1 none                                      */
+    int npts_fixed;                     /* the layout's points; a wave's follow (scene_wave)                    */
     uint32_t beat_key;                  /* what its kept part was drawn from                                    */
     unsigned serial;                    /* which drawing it is (scene_fill keeps it): a build, or a beat's kept part
                                          * drawn again in place                                                 */
@@ -102,7 +105,7 @@ typedef struct scene {
     int ngroups;
     char groups[SCENE_GROUPS][PKG_KEY_MAX + 1];
     scene_item_t items[SCENE_ITEMS_MAX + SCENE_LIVE_MAX];
-    float pts[SCENE_PTS_MAX][2];
+    float pts[SCENE_PTS_MAX + SCENE_LIVE_PTS][2];
     cJSON *params;                      /* its params, kept when a spot of it opens a layout (they feed that one) */
     char chars[SCENE_LETTERS];
     char say[SCENE_SAY_CHARS];
@@ -172,6 +175,8 @@ typedef struct {
     const char *above, *below;          /* small words over the name (the region, a tap goes up) and under it (a
                                          * region's size), NULL: none                         */
     uint32_t above_rgb;
+    bool quiet;                         /* no words in the middle: a wave draws its own      */
+    float land;                         /* the notch longer on a landing (a wave's octave), 1 down to 0 */
 } scene_wheel_t;
 /** The dial on face f, the centre: item indices, -1 none. */
 int scene_dial(const scene_t *sc, int face);
@@ -182,6 +187,43 @@ int scene_dial_labels(const scene_t *sc, int n, char (*out)[PKG_KEY_MAX + 1], in
 void scene_wheel(scene_t *sc, const scene_wheel_t *w);
 /** The words a wheel shows in the middle now (the beat's name gives way to them). */
 bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w);
+
+/* A wave (pkg item `wave`, docs/PACKAGES.md): the tone player's chord on one circle (wave.h), drawn from the speaker's
+ * own clock like a beat, all of it live: the circle at r, its outline pushed out by the sound the hand drew there (the
+ * trace: SCENE_WAVE_PTS + 1 radii on the design's 0.5 circle, wave_player.h wav_trace), each voice's hits a dot on it,
+ * joined as its shape (two a line, three a triangle ...), the hand (crisp, then a blur of what it sweeps a frame, gone
+ * once the beats are a note), the readouts (a count a second or hertz and the note; the chord's name; the whole
+ * numbers up top, a tap on one mutes its voice, as a tap on a voice's dots does while they show). At most `budget`
+ * shapes: the outline takes what the rest leaves, simplified to fit (never under SCENE_WAVE_MIN_SEGS strokes), and
+ * the dots of the densest voices give way first. Sizes are the design's on its 0.5 circle, times r / 0.5. */
+#define SCENE_WAVE_PTS      720
+#define SCENE_WAVE_REACH    0.14f       /* the outline's reach out from the circle at a hit, on the 0.5 circle  */
+#define SCENE_WAVE_AFTERGLOW 0.12f      /* s: the outline keeps what the hand drew this long, while slow        */
+#define SCENE_WAVE_MIN_SEGS 48
+#define SCENE_WAVE_TOP_Y    0.73f       /* the note (chords) or the whole numbers (playing) up top              */
+enum { SCENE_WAVE_NOTES, SCENE_WAVE_CHORDS, SCENE_WAVE_PLAYING };
+typedef struct {
+    bool on;
+    int level;                          /* SCENE_WAVE_*                                                          */
+    int nv;
+    uint8_t count[5];                   /* each voice's whole number: its dots a turn                            */
+    uint32_t rgb[5], muted;
+    float H, fc;                        /* the clock: turns (0..1), turns a second                                */
+    float ph[5], f[5], env[5];          /* each voice: its phase from its hit, its rate (Hz), its level           */
+    bool pluck[5];                      /* ... ringing as a preview (stopped)                                    */
+    const float *trace;                 /* SCENE_WAVE_PTS + 1 radii, NULL: the plain circle                      */
+    const char *name, *top, *big, *unit;   /* a lowercase b in them is a flat                                    */
+    uint32_t name_rgb, top_rgb, unit_rgb;
+    float tone;                         /* 0 a beat .. 1 a note: the note in the unit fades in                    */
+    float land;                         /* the number a little bigger on a landing, 1 down to 0                   */
+    bool mark;                          /* the centre's mark shows (playing: not while the rim turns)            */
+    int budget;                         /* shapes it may make                                                    */
+} scene_wave_t;
+/** The wave's items after the layout's own (a no-op without a wave item). Each frame, after scene_beat. */
+void scene_wave(scene_t *sc, const scene_wave_t *w);
+/** How far a voice at hz hits a second has gone from beat to note: 0 to 12, 1 from 32 (its dots hand over to the
+ *  outline, the afterglow holds whole). */
+float scene_wave_fuse(float hz);
 
 /** Build a scene from layout `layout` of p with `params` (an object, or NULL for none) and
  *  ttl_s (≤ 0 = SCENE_TTL_DEFAULT). NULL with *err = "no_layout" | "bad_params" | "oom". */

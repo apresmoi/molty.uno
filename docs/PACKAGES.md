@@ -133,6 +133,7 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `beat` | `r`, `size`, `color` | the rhythm the beat player holds, as a clock (below); one a layout |
 | `dial` | `id`, `r`, `r0`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a wheel round the edge the finger turns (below); one a face |
 | `centre` | `r` | nothing: a tap in the middle plays and stops the beat (below) |
+| `wave` | `r` | the chord the tone player holds, on one circle (below); in a beat's place, one a layout |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
@@ -202,6 +203,16 @@ frame, with no round trip.
 - A **`centre`** is a disc of radius `r` round the centre: a tap there plays the beat (after a count-in) or stops it
   at rest, back at the phrase's start (a `rhythm` event, `playing` or `paused`); at the regions it opens the one chosen
   (its mark a ring of dots). A layout with a centre has a beat. A beat's dots take a tap only while it plays.
+
+- A **`wave`** draws the chord Molty's tone player holds (`wave.play`, [AGENT-LINK.md](AGENT-LINK.md#waves)) on one
+  circle of radius `r` (the design's 0.5; everything scales with it), from the speaker's own clock: each voice's hits as
+  dots on the circle joined as its shape (two a line, three a triangle ...), the hand, and the circle's outline pushed
+  out by the sound the hand drew there (each voice's real cycle, fading behind the hand while slow, still once the beats
+  are a note). The dots and the hand give way to the outline from 12 to 32 hits a second. The middle reads hits a
+  second, then hertz and the note with its octave; a chord's name under it, its whole numbers up top (a tap on one mutes
+  its voice). With a wave, `sets: "pitch"` is the tone player's pitch (face 0) and `sets: "pick"` its chord kinds, one
+  level up its twelve notes (face 1, each bead in its note's colour); a centre plays and stops it. All of it is live
+  shapes, at most what a frame holds with the hold ring; a still outline redraws nothing.
 
 The rhythm package's clock is all three: `{ "k": "beat", "r": 0.672 }`, a tempo dial (`step` 12, `by` 2, `fast` 4, 40 to
 220, `sets: "tempo"`), a pick dial on face 1 (`step` 30, `sets: "pick"`), both ticking `$tick_ms` at `$tick`, and a

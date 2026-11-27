@@ -38,6 +38,7 @@ static void web_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
 #include "creature_dots.h"             /* CD_VIEW_SIZE: the world a panel is wide (wm_pan) */
 #include "creature_clip.h"             /* a creature's habits by name (wm_habit) */
 #include "web_default_molty.h"
+#include <stdarg.h>
 const uint8_t *web_default_molty_end[] = { _binary_default_molty_start + sizeof(_binary_default_molty_start) };
 
 #ifdef __EMSCRIPTEN__
@@ -137,8 +138,18 @@ char *pkgc_bytes(const char *id, size_t *len) {
     return c;
 }
 
-/* the log and the timing histograms go nowhere */
-void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (void)fmt; }
+/* the log and the timing histograms go nowhere (the host tests may read the log's lines: s_diag_tap) */
+static void (*s_diag_tap)(const char *line);
+void mole_diag_event(bool important, const char *fmt, ...) {
+    (void)important;
+    if (!s_diag_tap) return;
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    s_diag_tap(line);
+}
 void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { (void)calm_ms; }   /* (no flash here: nothing to hold) */
 void mole_flash_motion(void) {}
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us) { (void)interval_us; (void)work_us; }
@@ -535,13 +546,14 @@ WM_API int wm_scene(const char *layout, const char *params, float ttl_s) {
     wm_ask_end();                      /* it took the screen (pkg_cmd.c) */
     return 0;
 }
-/** The beat player's commands (docs/AGENT-LINK.md "Rhythm"): name "rhythm.play", "rhythm.set" or "rhythm.stop", args
- *  its JSON. 0, or -1 (its error: bad args, not playing). */
+/** The speaker's players' commands (docs/AGENT-LINK.md "Rhythm", "Waves"): name "rhythm.play", "rhythm.set",
+ *  "rhythm.stop", "wave.play", "wave.set" or "wave.stop", args its JSON. 0, or -1 (its error: bad args, not playing). */
 WM_API int wm_rhythm(const char *name, const char *args) {
     if (!s_up || !name) return -1;
     cJSON *a = args ? cJSON_Parse(args) : NULL, *out = NULL;
     const char *err = !strcmp(name, "rhythm.play") ? rhythm_play(a, &out) : !strcmp(name, "rhythm.set") ? rhythm_set(a, &out)
-                    : !strcmp(name, "rhythm.stop") ? rhythm_stop() : "unknown_command";
+                    : !strcmp(name, "rhythm.stop") ? rhythm_stop() : !strcmp(name, "wave.play") ? wave_play(a, &out)
+                    : !strcmp(name, "wave.set") ? wave_set(a, &out) : !strcmp(name, "wave.stop") ? wave_stop() : "unknown_command";
     cJSON_Delete(a); cJSON_Delete(out);
     return err ? -1 : 0;
 }

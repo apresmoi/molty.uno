@@ -18,7 +18,7 @@ export const PROGRESS_CAP = "progress";
 export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop", "front"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop", "wave.play", "wave.set", "wave.stop", "front"] as const;
 /** `buzz {pattern | ms, strength?}`: the vibration motor (firmware cap `haptic`, only on boards that have one). A pattern is
  *  a name the device knows (tick, tap, double, nudge: unknown_pattern otherwise) or [on, off, on, ...] ms. */
 export const HAPTIC_CAP = "haptic";
@@ -76,6 +76,29 @@ function muteArg(v: unknown): string[] {
   if (!Array.isArray(v) || v.length > 4 || !v.every((x) => typeof x === "string" && RHYTHM_LAYER_RE.test(x))) throw invalid("mute must be a list of up to 4 layer ids");
   return v as string[];
 }
+// ---- the tone player (docs/AGENT-LINK.md "Waves"): chord kinds, a note and a pitch, sent once; Molty holds it. It shares
+// the beat player's speaker and its cap (`rhythm`): firmware without it answers unknown_command ----
+
+/** wave.play's chord kinds as JSON: up to 32 of about 90 bytes (the device checks each strictly). */
+export const MAX_WAVE_KINDS = 32;
+export const MAX_WAVE_BYTES = 8192;
+export const WAVE_MIDI = [-36, 127] as const;
+export const WAVE_HZ = [1, 5760] as const;
+function waveArgs(args: Record<string, unknown>, out: JsonObject, kinds: number) {
+  if (args.note !== undefined) out.note = int(args.note, "note", 0, 11);
+  if (args.pick !== undefined) out.pick = int(args.pick, "pick", 0, kinds - 1);
+  const pitch = ["midi", "hz", "octave", "count"].filter((k) => args[k] !== undefined);
+  if (pitch.length > 1) throw invalid("one of midi, hz, octave or count");
+  if (args.midi !== undefined) { if (typeof args.midi !== "number" || !(args.midi >= WAVE_MIDI[0] && args.midi <= WAVE_MIDI[1])) throw invalid(`midi must be a number ${WAVE_MIDI[0]}..${WAVE_MIDI[1]}`); out.midi = args.midi; }
+  if (args.hz !== undefined) { if (typeof args.hz !== "number" || !(args.hz >= WAVE_HZ[0] && args.hz <= WAVE_HZ[1])) throw invalid(`hz must be a number ${WAVE_HZ[0]}..${WAVE_HZ[1]}`); out.hz = args.hz; }
+  if (args.tuning !== undefined) { if (args.tuning !== "just" && args.tuning !== "equal") throw invalid("tuning must be just or equal"); out.tuning = args.tuning; }
+  if (args.mute !== undefined) {
+    if (!Array.isArray(args.mute) || args.mute.length > 5 || !args.mute.every((x) => Number.isInteger(x) && x >= 1 && x <= 5)) throw invalid("mute must be a list of voices 1..5 (1 the root)");
+    out.mute = args.mute as number[];
+  }
+  if (args.paused !== undefined) out.paused = boolArg(args.paused, "paused");
+}
+
 function boolArg(v: unknown, name: string): boolean {
   if (typeof v !== "boolean") throw invalid(`${name} must be a boolean`);
   return v;
@@ -481,8 +504,28 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: out, job: false };
     }
     case "rhythm.stop":
+    case "wave.stop":
       only(args, []);
       return { name: n, args: {}, job: false };
+    case "wave.play": {
+      // the shape only: the device checks every chord kind strictly (wave_core.c) and answers invalid_args
+      only(args, ["chords", "pick", "note", "midi", "hz", "tuning", "paused", "mute"]);
+      const c = args.chords;
+      if (!Array.isArray(c) || c.length < 1 || c.length > MAX_WAVE_KINDS || !c.every(isRecord)) throw invalid(`chords must be a list of 1..${MAX_WAVE_KINDS} kinds (the molty-waves skill's)`);
+      if (new TextEncoder().encode(JSON.stringify(c)).byteLength > MAX_WAVE_BYTES) throw invalid(`chords exceed ${MAX_WAVE_BYTES} bytes`);
+      const out: JsonObject = { chords: c as JsonObject[], pick: int(args.pick, "pick", 0, c.length - 1) };
+      waveArgs(args, out, c.length);
+      return { name: n, args: out, job: false };
+    }
+    case "wave.set": {
+      only(args, ["midi", "hz", "octave", "count", "note", "pick", "tuning", "mute", "paused"]);
+      if (!Object.keys(args).length) throw invalid("wave.set needs midi, hz, octave, count, note, pick, tuning, mute or paused");
+      const out: JsonObject = {};
+      waveArgs(args, out, MAX_WAVE_KINDS);
+      if (args.octave !== undefined) out.octave = int(args.octave, "octave", -3, 8);
+      if (args.count !== undefined) { if (args.count !== true) throw invalid("count must be true"); out.count = true; }
+      return { name: n, args: out, job: false };
+    }
     case "progress": {
       // relay-checked; step is the agent's words for the activity log (the device draws no text)
       only(args, ["pct", "step", "done"]);

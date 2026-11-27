@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT, see rhythm.h */
 #include "rhythm.h"
 #include "rhythm_wire.h"
+#include "wave.h"
 #include "link_protocol.h"
 #include <math.h>
 #include <stdlib.h>
@@ -107,6 +108,7 @@ const char *rhythm_play(const cJSON *args, cJSON **out) {
     static const char *const KEYS[] = { "rhythms", "regions", "pick", "bpm", "mute", "buzz", "paused", "sync" };
     const char *e = only(args, KEYS, 8), *why = NULL;
     if (e || !args) return "invalid_args";
+    wave_stop();                                       /* (one player on the speaker) */
     static rhy_pattern_t *lib;
     if (!lib && !(lib = RHY_CALLOC(sizeof(rhy_pattern_t) * RHY_LIB))) return "oom";
     static rhy_region_t regions[RHY_REGIONS];          /* (a static: the link task's stack stays small) */
@@ -172,12 +174,13 @@ const char *rhythm_stop(void) {
     return NULL;
 }
 
+uint64_t rhythm_heard_seen(void) { return rhythm_heard((int32_t)((int64_t)s_ahead_us + (int64_t)s_sync_ms * 1000)); }
+
 bool rhythm_now(rhy_view_t *v, rhy_pattern_t *pt) {
     rhythm_lock();
     const bool have = s_p && s_p->nlib && s_p->on;
     if (have) {
-        const int64_t ahead = (int64_t)s_ahead_us + (int64_t)s_sync_ms * 1000;
-        rhy_view(s_p, rhythm_heard((int32_t)ahead), v);
+        rhy_view(s_p, rhythm_heard_seen(), v);
         v->rest = s_p->paused && !s_yielded;
         if (pt) *pt = s_p->lib[s_p->cur];
     } else memset(v, 0, sizeof(*v));
@@ -270,10 +273,12 @@ cJSON *rhythm_event_frame(const rhythm_ev_t *e) {
     return link_evt_rhythm_frame(e->state, e->id, e->bpm);
 }
 
+/* the speaker's: the beat player while it sounds, else the tone player (wave.h) */
+static bool beats(void) { return s_p && rhy_sounding(s_p); }
 size_t rhythm_fill(int16_t *out, size_t n) {
     rhythm_lock();
-    const size_t got = s_p ? rhy_fill(s_p, out, n) : 0;
-    if (!s_p) memset(out, 0, n * sizeof(int16_t));
+    const size_t got = beats() ? rhy_fill(s_p, out, n) : wave_fill_locked(out, n);
+    if (!got) memset(out, 0, n * sizeof(int16_t));
     rhythm_unlock();
     return got;
 }
@@ -281,15 +286,16 @@ void rhythm_yield(bool yield) {
     rhythm_lock();
     if (yield && s_p && rhy_sounding(s_p) && !s_p->paused) { rhy_pause(s_p, true); s_yielded = true; }
     else if (!yield && s_yielded) { s_yielded = false; if (on() && s_p->paused) rhy_pause(s_p, false); }
+    wave_yield_locked(yield);
     rhythm_unlock();
 }
 bool rhythm_wants_speaker(void) {
     rhythm_lock();
-    const bool w = s_p && (rhy_sounding(s_p) || (s_yielded && on()));
+    const bool w = (s_p && (rhy_sounding(s_p) || (s_yielded && on()))) || wave_wants_locked();
     rhythm_unlock();
     return w;
 }
-bool rhythm_sounding(void) { rhythm_lock(); const bool s = s_p && rhy_sounding(s_p); rhythm_unlock(); return s; }
+bool rhythm_sounding(void) { rhythm_lock(); const bool s = beats() || wave_sounding_locked(); rhythm_unlock(); return s; }
 bool rhythm_take_buzz(uint64_t upto, bool *first) {
     rhythm_lock();
     bool got = false;
@@ -297,4 +303,4 @@ bool rhythm_take_buzz(uint64_t upto, bool *first) {
     rhythm_unlock();
     return got;
 }
-uint64_t rhythm_made(void) { rhythm_lock(); const uint64_t n = s_p ? s_p->n : 0; rhythm_unlock(); return n; }
+uint64_t rhythm_made(void) { rhythm_lock(); const uint64_t n = !beats() && wave_sounding_locked() ? wave_made_locked() : s_p ? s_p->n : 0; rhythm_unlock(); return n; }

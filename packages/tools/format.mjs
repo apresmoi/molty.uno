@@ -37,14 +37,16 @@ export const ITEMS = {
   // ring, size: its dots); a wheel round the edge, grabbed from r0 out, turned in clicks of `step` degrees adding `by`
   // (`fast` turning fast) to its value, min..max from `value`, or stepping through its `labels` (a list param, each
   // element's `label`); `sets` the beat player's tempo or pick; on face 0 (playing) or 1 (stopped); each click a tick
-  // of the motor, `tick_ms` at `tick` percent (0: the device's own); a centre that plays and stops the beat
+  // of the motor, `tick_ms` at `tick` percent (0: the device's own); a centre that plays and stops the beat; the tone
+  // player's chord on one circle (r: the circle), in a beat's place, its wheels setting the `pitch` and its `pick`
   beat: { r: 'num', size: 'num' },
+  wave: { r: 'num' },
   dial: { r: 'num', r0: 'num', id: 'text', step: 'num', by: 'num', fast: 'num', min: 'num', max: 'num', value: 'num', face: 'num', sets: 'sets', labels: 'labels', tick_ms: 'num', tick: 'num' },
   centre: { r: 'num' },
 };
-const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'], beat: ['r'], dial: ['id'], centre: ['r'] };
+const REQUIRED = { ring: ['r'], arc: ['r'], ticks: ['r'], line: ['pts'], curve: ['pts'], disc: ['r'], ball: ['r'], glyph: ['asset'], text: ['str'], spot: ['r', 'say'], beat: ['r'], dial: ['id'], centre: ['r'], wave: ['r'] };
 /** The device's own pieces: in no group, never repeated. */
-const OWN = ['beat', 'dial', 'centre'];
+const OWN = ['beat', 'dial', 'centre', 'wave'];
 /** Defaults a missing field takes (the firmware's, docs/PACKAGES.md). A ball without img is shaded in its colour. */
 export const DEFAULTS = { color: '#ffffff', x: 0, y: 0, on: 0, a0: 0, a1: 360, n: 12, len: 0.1, size: 0.12, w: 0.03, lit: 1, side: 1, spin: 0, rot: 0, grow: 1.25 };
 // which param type a field of each value type may bind to
@@ -71,7 +73,7 @@ function literal(type, v, assets, f, layouts) {
     case 'group': return typeof v === 'string' && NAME_RE.test(v) ? '' : 'must be a name [A-Za-z0-9_-]{1,24}';
     case 'lights': { const g = typeof v === 'string' ? v.split(' ').filter(Boolean) : []; return g.length && g.length <= LIMITS.lights && g.every((n) => NAME_RE.test(n)) ? '' : `must be 1..${LIMITS.lights} names, spaces between`; }
     case 'when': return v === 'lit' ? '' : 'must be "lit"';
-    case 'sets': return v === 'tempo' || v === 'pick' ? '' : 'must be "tempo" or "pick"';
+    case 'sets': return v === 'tempo' || v === 'pick' || v === 'pitch' ? '' : 'must be "tempo", "pick" or "pitch"';
     case 'labels': return Array.isArray(v) && v.length <= LIMITS.list && v.every((e) => isText(e?.label, 24) && e.label) ? '' : 'must be a list param whose elements each have a label (1..24 characters)';
     default: return 'cannot be a literal';
   }
@@ -184,8 +186,8 @@ export function checkPackage(pkg, id) {
       if (pkg.layouts?.[it.open]) for (const p of Object.keys(pkg.layouts[it.open].params ?? {})) used.add(p);
     });
     const own = (k, f = () => true) => l.items.filter((it) => it.k === k && f(it)).length;
-    if (own('beat') > 1 || own('centre') > 1 || own('dial', (it) => !it.face) > 1 || own('dial', (it) => it.face === 1) > 1) bad.push(`${at}: one beat, one centre and one dial a face`);
-    if (own('centre') > own('beat')) bad.push(`${at}: a centre plays and stops a beat: the layout has none`);
+    if (own('beat') + own('wave') > 1 || own('centre') > 1 || own('dial', (it) => !it.face) > 1 || own('dial', (it) => it.face === 1) > 1) bad.push(`${at}: one beat, one centre and one dial a face`);
+    if (own('centre') > own('beat') + own('wave')) bad.push(`${at}: a centre plays and stops a beat: the layout has none`);
     for (const p of Object.keys(params)) if (!used.has(p)) bad.push(`${at}: param ${p} is never read`);
   }
   return bad;

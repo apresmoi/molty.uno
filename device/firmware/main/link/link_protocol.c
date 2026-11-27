@@ -332,6 +332,18 @@ cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm)
     return j;
 }
 
+cJSON *link_evt_wave_frame(const char *state, const char *chord, const char *note, double hz)
+{
+    cJSON *data, *j = evt("wave", &data);
+    if (j) {
+        cJSON_AddStringToObject(data, "state", state);
+        if (chord && chord[0]) cJSON_AddStringToObject(data, "chord", chord);
+        if (note && note[0]) cJSON_AddStringToObject(data, "note", note);
+        cJSON_AddNumberToObject(data, "hz", round(hz * 100) / 100);
+    }
+    return j;
+}
+
 cJSON *link_evt_tap_frame(double x, double y)
 {
     cJSON *data, *j = evt("tap", &data);

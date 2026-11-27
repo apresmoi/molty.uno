@@ -44,29 +44,31 @@ static inline float sine(float ph) {
     const int i = (int)x;
     return s_sine[i] + (s_sine[i + 1] - s_sine[i]) * (x - (float)i);
 }
-static inline float noise(rhy_player_t *p) {
-    uint32_t x = p->noise;
+static inline float noise(uint32_t *seed) {
+    uint32_t x = *seed;
     x ^= x << 13; x ^= x >> 17; x ^= x << 5;
-    p->noise = x;
+    *seed = x;
     return (float)(int32_t)x * (1.f / 2147483648.f);
 }
 
+static void voice_init(rhy_voice_t *v, int sound, int layer, float gain, float up) {
+    const snd_t *s = &SND[sound];
+    const float sr = (float)RHY_RATE / 1000.f;
+    *v = (rhy_voice_t){ .sound = (uint8_t)sound, .layer = (uint8_t)(layer < 0 ? 0xff : layer), .len = (uint32_t)(s->len_ms * sr),
+                        .gain = gain, .fade = 1.f,
+                        .f = s->f0 * up, .f1 = s->f1 * up, .ksw = expf(-1.f / (s->sweep_ms * sr)),
+                        .env = 1.f, .kenv = expf(-1.f / (s->tau_ms * sr)), .nenv = 1.f, .knenv = expf(-1.f / (s->ntau_ms * sr)) };
+}
 static void voice_start(rhy_player_t *p, int sound, int layer, bool accent) {
     int k = 0;
     for (int i = 0; i < RHY_VOICES; i++) {
         if (!p->v[i].len) { k = i; break; }
         if (p->v[i].t > p->v[k].t) k = i;     /* none free: the oldest (by now the quietest) gives way */
     }
-    const snd_t *s = &SND[sound];
-    rhy_voice_t *v = &p->v[k];
-    const float sr = (float)RHY_RATE / 1000.f, up = sound == RHY_CLICK && accent ? 1.333f : 1.f;
-    *v = (rhy_voice_t){ .sound = (uint8_t)sound, .layer = (uint8_t)(layer < 0 ? 0xff : layer), .len = (uint32_t)(s->len_ms * sr),
-                        .gain = s->gain * MASTER * (accent ? 1.f : RHY_SOFT), .fade = 1.f,
-                        .f = s->f0 * up, .f1 = s->f1 * up, .ksw = expf(-1.f / (s->sweep_ms * sr)),
-                        .env = 1.f, .kenv = expf(-1.f / (s->tau_ms * sr)), .nenv = 1.f, .knenv = expf(-1.f / (s->ntau_ms * sr)) };
+    voice_init(&p->v[k], sound, layer, SND[sound].gain * MASTER * (accent ? 1.f : RHY_SOFT), sound == RHY_CLICK && accent ? 1.333f : 1.f);
 }
 
-static float voice_sample(rhy_player_t *p, rhy_voice_t *v) {
+static float voice_sample(rhy_voice_t *v, uint32_t *seed) {
     const snd_t *s = &SND[v->sound];
     float x = 0.f;
     if (s->f0 > 0.f) {
@@ -78,7 +80,7 @@ static float voice_sample(rhy_player_t *p, rhy_voice_t *v) {
         v->f = v->f1 + (v->f - v->f1) * v->ksw;
     }
     if (s->noise > 0.f) {
-        v->lp += s->lp * (noise(p) - v->lp);
+        v->lp += s->lp * (noise(seed) - v->lp);
         float y = v->lp;
         if (s->hp > 0.f) { const float h = s->hp * (v->hp + y - v->hpx); v->hpx = y; v->hp = h; y = h; }
         x += s->noise * y * v->nenv;
@@ -256,7 +258,7 @@ size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n) {
             for (int guard = 0; p->n >= p->n_ev && guard < RHY_STEPS * 2; guard++) { place(p); sched(p); }
         float s = 0.f;
         bool any = false;
-        for (int k = 0; k < RHY_VOICES; k++) if (p->v[k].len) { s += voice_sample(p, &p->v[k]); any = true; }
+        for (int k = 0; k < RHY_VOICES; k++) if (p->v[k].len) { s += voice_sample(&p->v[k], &p->noise); any = true; }
         const float a = fabsf(s);
         if (a > KNEE) s = copysignf(KNEE + (1.f - KNEE) * tanhf((a - KNEE) / (1.f - KNEE)), s);
         out[i] = (int16_t)lrintf(s * FULL);
@@ -269,6 +271,17 @@ size_t rhy_fill(rhy_player_t *p, int16_t *out, size_t n) {
         }
     }
     return n;
+}
+
+size_t rhy_sound(int sound, float *out, size_t n) {
+    if (sound < 0 || sound >= RHY_SOUNDS) return 0;
+    sine_init();
+    rhy_voice_t v;
+    uint32_t seed = 0x9e3779b9u;                      /* (rhy_init's: the same breath of noise) */
+    voice_init(&v, sound, 0, SND[sound].gain, 1.f);
+    size_t i = 0;
+    for (; i < n && v.len; i++) out[i] = voice_sample(&v, &seed);
+    return i;
 }
 
 bool rhy_take_beat(rhy_player_t *p, uint64_t upto, bool *first) {
