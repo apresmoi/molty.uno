@@ -29,8 +29,10 @@ export const SHAPES = {
   // a new way to shape a zone or a new thing a tap does is one more row here, or one more case in shape() when it is
   // not a plain field (sector, opens), and its property in schema/display-2.json's tap_zone
   tap_zone: ['spot', { radius: ['r', 'distance'], reads: ['say', 'reading'], id: ['id', 'id'], highlights: ['lights', 'groups'], grow: ['grow', 'number'] }],
-  // the device's own pieces: the beat player's clock, a wheel round the edge, the centre that plays and stops it
+  // the device's own pieces: the beat player's clock (the tone player's ring), a wheel round the edge, the centre that
+  // plays and stops it
   beat_clock: ['beat', { radius: ['r', 'distance'], dot: ['size', 'distance'] }],
+  wave_ring: ['wave', { radius: ['r', 'distance'] }],
   wheel: ['dial', { id: ['id', 'id'], radius: ['r', 'distance'], grab_from: ['r0', 'distance'], step: ['step', 'angle'], by: ['by', 'number'], fast: ['fast', 'number'],
     min: ['min', 'number'], max: ['max', 'number'], value: ['value', 'number'], face: ['face', 'count'], sets: ['sets', 'sets'], labels: ['labels', 'list'],
     tick_ms: ['tick_ms', 'number'], tick: ['tick', 'number'] }],
@@ -87,7 +89,7 @@ export function compile(skill, files, bad, warn) {
         case 'map': return !files[v] ? fail(at, `${what}: no asset named ${JSON.stringify(v)} (maps: ${list(Object.keys(files).filter((n) => files[n].as === 'map'))})`) : files[v].as === 'symbol' ? fail(at, `${what}: ${v} is a symbol, and a globe wears a map (as: map)`) : v;
         case 'side': return v === 'right' ? 1 : v === 'left' ? -1 : fail(at, `${what} must be right or left`);
         case 'screen': return skill.screens[v] ? v : fail(at, `${what}: no screen named ${JSON.stringify(v)} (screens: ${list(Object.keys(skill.screens))})`);
-        case 'sets': return v === 'tempo' || v === 'pick' ? v : fail(at, `${what} must be tempo or pick`);
+        case 'sets': return v === 'tempo' || v === 'pick' || v === 'pitch' ? v : fail(at, `${what} must be tempo, pick or pitch`);
         case 'list': return fail(at, `${what} must be a list input: "{{ name }}"`);
         case 'text': case 'reading': case 'id': case 'group': case 'groups':
           return typeof v !== 'string' ? fail(at, `${what} must be text: put it in quotes`) : /^[$@]/.test(v) ? fail(at, `${what} ${JSON.stringify(v)} starts with ${v[0]}, which the device reads as a binding: start the text with something else`) : v;
