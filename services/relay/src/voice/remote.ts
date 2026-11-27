@@ -25,8 +25,8 @@
 //                "still waiting"), {"t":"front.context","text","persona"?}, {"t":"front.end","reason"}
 //   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
 //                {"t":"front.reply","id","stt","ms"?} then frames s=id, tts.word, {"t":"tts.text","id","text","final"?},
-//                {"t":"tts.end","id","wait"?,"absorbed"?,"ms"?} (as a tts; wait: the front handed the turn to the
-//                agent; absorbed: it kept the agent's thought and said nothing)
+//                {"t":"tts.end","id","wait"?,"absorbed"?,"faithful"?,"ms"?} (as a tts; wait: the front handed the turn
+//                to the agent; absorbed: the agent's line is context only; faithful:false: what it read aloud lost facts)
 //                {"t":"front.session","state","reason"?,"s"?,"usage"?,"today_s"?} (the box's session, for the log)
 //
 // Every request is bound to the socket it went out on: when that socket closes
@@ -60,8 +60,10 @@ export interface FrontSpeech {
   final: boolean;
   /** The front handed the person's turn to the agent (its reply was a holding line). */
   wait: boolean;
-  /** inner: the front kept the thought and said nothing (it repeated what was said). */
+  /** inner: the line is context only, nothing said. */
   absorbed?: boolean;
+  /** inner: the box found what was said missing the line's facts (tts.end faithful:false). */
+  unfaithful?: boolean;
   /** The box's timings ({created} on a front.reply, {first_audio, total} at the end). */
   boxMs: JsonObject;
   /** Resolves when the box ended the stream (all of it generated: said and wait are final). */
@@ -89,7 +91,7 @@ interface FrontOp {
   ch: BoxChannel;
   sp: FrontSpeech;
   /** The box ended it (error = failed). */
-  end(error?: Error, wait?: boolean, ms?: JsonObject, absorbed?: boolean): void;
+  end(error?: Error, wait?: boolean, ms?: JsonObject, absorbed?: boolean, unfaithful?: boolean): void;
   text(said: string, final: boolean): void;
 }
 interface SttOp {
@@ -291,10 +293,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
         sp.final ||= final;
         poke();
       },
-      end: (error, wait, ms, absorbed) => {
+      end: (error, wait, ms, absorbed, unfaithful) => {
         this.frontOps.delete(id);
         sp.wait = !!wait;
         sp.absorbed = !!absorbed;
+        sp.unfaithful = !!unfaithful;
         sp.final = true;
         if (ms) Object.assign(sp.boxMs, ms);
         feed.end(error);
@@ -419,7 +422,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     } else if (frame.t === "tts.end") {
       const err = typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined;
       const fop = this.frontOps.get(id);
-      if (fop && fop.ch.same(from)) return fop.end(err, frame.wait === true, isRecord(frame.ms) ? cleanMs(frame.ms) : undefined, frame.absorbed === true);
+      if (fop && fop.ch.same(from)) return fop.end(err, frame.wait === true, isRecord(frame.ms) ? cleanMs(frame.ms) : undefined, frame.absorbed === true, frame.faithful === false);
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
       op.feed.end(err);

@@ -109,7 +109,7 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, type FrontSpeech, RemoteVoiceProvider } from "../voice/remote.js";
-import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, innerResult, absorbedOr, frontFollow } from "./front.js";
+import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, voiced, absorbedOr, frontFollow } from "./front.js";
 import {
   type AgentPhrases,
   BUILTIN_PHRASES,
@@ -2151,7 +2151,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
     if (isRecord(args.client_timing)) timings.client = args.client_timing;
     this.logTimings(id, "say", timings);
-    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && !replyOf ? innerResult("said", said) : {}), timings } });
+    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && !replyOf ? voiced(sp, said) : {}), timings } });
     await this.replyTrace(id, "say", args, timings);
     if (fronted) {
       if (isRecord(args.turn) && typeof args.turn.id === "string") this.ft.answered(args.turn.id, args.called as number, r.start + ((r.timings.first_audio as number) ?? 0));
@@ -2250,7 +2250,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         return front && this.ft.spoke(undefined, front.front);
       }
       result.said = s.said ?? args.say;
-      if (front) Object.assign(result, innerResult("said", s.said));
+      if (front) Object.assign(result, voiced(front.front, s.said));
       await this.noteSaid(s.said ?? args.say);
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
       ms.speech = (s.timings.play as number) ?? 0;
