@@ -183,8 +183,8 @@ export class FrontTalk {
   private readonly waiting = new Map<string, () => void>();
   /** The last turns the person spoke in, oldest first: when each ended, whether the front answered it / handed it to the agent. */
   private readonly past = new Map<string, { at: number }>();
-  /** Each agent's first answer to a turn (`<agent> <turn>` -> its job). */
-  private readonly answers = new Map<string, string>();
+  /** Each agent's answer to a turn (`<agent> <turn>` -> its job, once known: a call in flight claims it first). */
+  private readonly answers = new Map<string, { job: Promise<string | undefined>; settle: (job?: string) => void }>();
 
   constructor(private readonly h: FrontHost) {}
 
@@ -354,10 +354,17 @@ export class FrontTalk {
       this.answerOf(hash, turn, job);
       return { ok: true as const, result: { job } };
     };
+    let settle: ((job?: string) => void) | undefined;
     if (turn !== undefined) {
-      const first = this.answerOf(hash, turn);
-      const was = first && (await this.h.jobStatus(first));
-      if (was && was !== "failed") return { ok: true, result: { job: first!, repeated: true } };
+      // the repeat rule holds for calls in flight too: the first claims the turn before anything is awaited,
+      // a second waits for its job (live and in tests, a retry 5 ms later was voiced or absorbed on its own)
+      for (let first = this.answerOf(hash, turn); first; first = this.answerOf(hash, turn)) {
+        const job = await first;
+        const was = job && (await this.h.jobStatus(job));
+        if (was && was !== "failed") return { ok: true, result: { job: job!, repeated: true } };
+        if (this.answerOf(hash, turn) === first) break; // that one came to nothing: this call answers
+      }
+      settle = this.claim(hash, turn);
       if (!this.fate(turn, await this.h.latestTurn()).speak) {
         this.h.box.frontContext(`Your inner voice's late answer to something the person said earlier (not said aloud): ${text}`);
         return done(innerResult("absorbed", undefined, "old_turn"));
@@ -366,22 +373,34 @@ export class FrontTalk {
     // the box's listen id of that turn ("-": not one the front heard: the box keeps it as context)
     const sid = turn === undefined ? undefined : ([...this.listens].find(([, j]) => j === turn)?.[0] ?? "-");
     const prepared = await this.h.prepare(text, exact, sid).catch(() => undefined);
-    if (!prepared?.front) return undefined;
+    if (!prepared?.front) return settle?.(), undefined;
     const sp = prepared.front;
+    void sp.ended.then(() => sp.feed.error !== undefined && settle?.()); // cancelled (the job was refused): the claim comes to nothing
     await Promise.race([sp.ended, sleep(this.h.clock, FRONT.verdictMs)]);
     if (sp.absorbed) return done(innerResult("absorbed"));
     this.agentAnswering();
     return { ok: true, result: innerResult("queued"), prepared };
   }
 
-  /** The answer of agent `hash` to `turn` (its job), or records `job` as it (a retry of a failed one replaces it). */
-  answerOf(hash: string, turn: string | undefined, job?: string): string | undefined {
+  /** The answer of agent `hash` to `turn` (its job, maybe still in flight), or records `job` as it (a retry of a failed one replaces it). */
+  answerOf(hash: string, turn: string | undefined, job?: string): Promise<string | undefined> | undefined {
+    if (turn === undefined) return undefined;
+    const a = this.answers.get(`${hash} ${turn}`);
+    if (job === undefined) return a?.job;
+    a?.settle(job);
+    this.claim(hash, turn)(job);
+    return a?.job;
+  }
+
+  /** Agent `hash` is answering `turn` now: a second call for it waits for this one's job (settle it). */
+  private claim(hash: string, turn: string): (job?: string) => void {
     const k = `${hash} ${turn}`;
-    if (job === undefined || turn === undefined) return this.answers.get(k);
+    let settle!: (job?: string) => void;
+    const job = new Promise<string | undefined>((r) => (settle = r));
     this.answers.delete(k);
-    this.answers.set(k, job);
+    this.answers.set(k, { job, settle });
     while (this.answers.size > 16) this.answers.delete(this.answers.keys().next().value!);
-    return job;
+    return settle;
   }
 
   /** The agent is answering: no "still waiting". */
@@ -480,8 +499,10 @@ export function frontWhyNot(front: string | undefined, mode: string, box: { fron
  * The text a front say shows (the device takes it once, with `cmd say`): what the front said by its
  * first audio, waiting FRONT.textHoldMs at most from `from` for the sentence (or the transcript) to end.
  */
-export async function frontText(sp: FrontSpeech, clock: Clock, from: number): Promise<string> {
-  while (!sp.final && !sp.feed.done && clock.now() - from < FRONT.textHoldMs && !/[.!?…]$/.test(sp.said)) {
+export async function frontText(sp: FrontSpeech, clock: Clock, from: number, caps?: string[]): Promise<string> {
+  // the device takes the rest as it comes (cap say_text): the first word is enough, the voice never waits for more
+  const enough = caps?.includes(SAY_TEXT_CAP) ? () => sp.said.trim() !== "" : () => /[.!?…]$/.test(sp.said);
+  while (!sp.final && !sp.feed.done && clock.now() - from < FRONT.textHoldMs && !enough()) {
     await Promise.race([sp.changed(), sleep(clock, Math.max(1, FRONT.textHoldMs - (clock.now() - from)))]);
   }
   return sp.said.trim();
