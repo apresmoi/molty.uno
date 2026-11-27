@@ -7,7 +7,7 @@
     "sha256": "06c76116aa011d0b0e8b0cb866835ab273e2461c7a3e1ba55ac624f01dd1ddb3"
   },
   "sources": {
-    "sha256": "289f90df663be548b73c3397f0170c6837a599ae71968b6a4e2f0ace074f68b0",
+    "sha256": "8efe93ed2873df4b4246c3e7190b4fae5532693be2d1831478745611e83c06fd",
     "outside": "1a96ea17622a98ddaa7e9c53030c8fd80920565bc4782ac179cf2001735b9d53",
     "files": [
       "device/firmware/main/board/molty_board.h",
@@ -60,6 +60,7 @@
       "device/firmware/main/fluid/glyph_rsvp.h",
       "device/firmware/main/fluid/mole_fluid.c",
       "device/firmware/main/fluid/mole_fluid.h",
+      "device/firmware/main/fluid/scene_wheel.c",
       "device/firmware/main/fluid/screen_nap.c",
       "device/firmware/main/fluid/screen_nap.h",
       "device/firmware/main/haptic/haptic_plan.c",
