@@ -109,6 +109,7 @@ Settings (config file or `run` flags):
 | `realtime_voice` | `marin` | `--realtime-voice`; the provider's voices: marin, cedar, alloy, ash, ballad, coral, echo, sage, shimmer, verse |
 | `realtime_turn` | `semantic` | `--realtime-turn`: `semantic` ends your turn by meaning (`realtime_eagerness`, default `high`), `server` by silence (`realtime_silence_ms`, 500) |
 | `realtime_transcribe` | `gpt-4o-mini-transcribe` | the transcript your agent gets (a separate model on the same audio) |
+| `realtime_inner` | `verbatim` | how the front says your agent's answers: `verbatim` (its words, word for word, natural delivery) or `own` (the front's own words, keeping the facts); `exact: true` is always word for word; inline `[cues]` are never spoken |
 | `realtime_idle_s` | 45 | a session with nothing going on closes |
 | `realtime_max_session_s` | 600 | a session closes after this long, whatever happens |
 | `realtime_daily_minutes` | 30 | `--daily-minutes`: no session opens once today's minutes are used (0 = no cap); the box then stops offering the front and Molty falls back to the relay's voice |
@@ -129,6 +130,13 @@ estimates: the provider's usage page is the bill. Every session's tokens and its
 price are in the bridge's log when it closes (`realtime: session closed …`), and in the relay's
 activity log (`front.session`). The day's minutes are kept in `realtime-usage.json` next to the
 config.
+
+**The log file.** Every `run` also appends its log lines to `molty-voice.log` next to the config
+(`~/.config/molty-voice/molty-voice.log`, mode 0600), capped at 1 MB plus one older file
+(`molty-voice.log.1`). Per turn: the listen's start, who ended the turn (the model, Molty, nobody),
+the provider's events that matter (speech started, committed, response created and done, errors),
+each reply's first audio, the inner voice received (mode, length) and what Molty said. Never a key,
+a token, a link code or audio (the token and key are also masked if a line ever carried one).
 
 How it works: one provider WebSocket per conversation, kept across turns (the model remembers
 the conversation). Molty's 16 kHz audio is resampled to the 24 kHz PCM the API takes, chunk by

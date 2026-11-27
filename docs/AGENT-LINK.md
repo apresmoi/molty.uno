@@ -1891,7 +1891,8 @@ and then the box is a plain STT / TTS box):
 | Direction | Message |
 |---|---|
 | box → relay | `voice.hello` adds `"front": 1` (the version) and `"engine": "realtime"`. A box that stops offering it (its daily limit) sends a new hello without it (`stt`/`tts` false): the relay falls back |
-| relay → box | `stt.start` adds `"front": true`: a front listen; answer it yourself at the turn's end |
+| relay → box | `stt.start` adds `"front": true`: a front listen; answer it yourself at the turn's end, whoever ends it (your model, or Molty: `stt.end` first) |
+| relay → box | `stt.start` adds `"hold": true` on a front listen held to talk (the button): the release ends it, never your turn detection |
 | box → relay | `{"t":"stt.hint","id","k":"speech"}`: the person started speaking |
 | box → relay | `{"t":"front.reply","id","stt","ms"?:{created}}`: the front answers listen `stt`; audio frames `s=id`, `tts.word`, `tts.text`, `tts.end` follow as for a `tts` |
 | relay → box | `{"t":"tts",…,"front":"own"\|"exact"\|"wait"}`: the agent's answer, in the front's words / word for word / "still waiting" (no text needed). A plain `tts` is word for word |
@@ -1916,8 +1917,9 @@ each word's text arrived). No auto filler, no first words: the front answered.
   true`, the person is waiting for the answer). It waits at most 1.5 s for the reply to be known
   (`partial: true` when it was not complete). A `talk`'s result carries the same `front`.
 - The agent's `say` / `talk` is not run through text to speech: its text goes to the box as inner
-  voice and the front says it in its own words, keeping the facts; `exact: true` says it word for
-  word (inline `[cues]` apply only then). If the front is still speaking, the answer queues behind
+  voice and the front says it word for word in a natural delivery (the box's `realtime_inner: "own"`:
+  in its own words, keeping the facts); `exact: true` is always word for word (inline `[cues]` apply
+  only then, and are never spoken). If the front is still speaking, the answer queues behind
   it: never cut off, never `audio_busy`. The job's `text` is what was said (`asked`: the agent's text).
 - `front {context?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` = facts the
   front may use if the person asks (nothing is said now); `end: true` ends the conversation.

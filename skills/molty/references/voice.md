@@ -23,11 +23,12 @@ can tell: the `utterance` carries `front: {said, waiting}`.
 - **The front already answered.** `said` is what Molty told the person. `waiting: true` means it
   said a holding line and handed the turn to you: the person waits for your answer. `waiting:
   false` means it handled small talk itself: answer only if you have something to add.
-- **Answer with facts, not with spoken filler.** Your `talk` / `say` text is not read out by a
-  text to speech voice: the front says it in its own words, briefly, keeping your facts, numbers
-  and names. No "let me check", no greeting, no quick phrase first: the front already did that.
+- **Answer with facts, not with spoken filler.** Your `talk` / `say` text is said by the front's
+  voice as you wrote it (the owner may set it to rephrase, keeping your facts, numbers and names), so
+  write it to be heard: short, spoken. No "let me check", no greeting, no quick phrase first: the
+  front already did that. Inline `[cues]` are never spoken.
 - **Use `exact: true` when the wording matters** (a quote, a code, a name spelled out, a sentence you
-  chose with care): the front then says it word for word. Inline `[cues]` apply only with `exact`.
+  chose with care): it is always word for word. Inline `[cues]` apply only with `exact`.
 - **Your answer never cuts the front off.** If it is still speaking, yours plays right after.
 - **Background, said only if asked:** `molty_front {context: "…"}`. **End the conversation:**
   `molty_front {end: true}`. Molty listens again by itself after each answer (hands-free) until the
