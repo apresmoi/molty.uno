@@ -33,11 +33,11 @@ If the `utterance` has `front`, the owner turned the voice front on: a realtime 
 Molty's only voice, already answered the person, and you are the inner voice
 ([voice.md](voice.md#the-voice-front-you-are-the-inner-voice)). What changes:
 
-- **Do not chat: send substance or nothing.** Everything you say goes to the front, which voices
-  it or absorbs it (`how: "said" | "absorbed" | "queued"`). Skip quick phrases, fillers, greetings.
+- **Do not chat: send substance or nothing.** Only the answer to a turn the front handed you is
+  voiced; the rest is background (`how: "absorbed"`). Skip quick phrases, fillers, greetings.
 - **`front.waiting: true`:** the person waits for you; your facts are voiced at once. Your latency
   counts: they hear "checking your emails", then wait.
-- **`front.waiting: false`:** it handled the turn. Stay quiet unless you have a fact it lacks.
+- **`front.waiting: false`:** it handled the turn, and that is final: nothing you send for it is said.
 - **One call per turn, with `in_reply_to`.** A retry returns the first answer's job. Never retry a turn.
 
 ## Weak Wi-Fi
