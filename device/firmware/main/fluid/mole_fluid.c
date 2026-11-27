@@ -73,6 +73,7 @@
 #include "wave.h"         /* the tone player a scene's wave draws (scene_wave) */
 #include "ring_input.h"   /* a scene's wheel turned by the finger */
 #include "weather.h"      /* the weather on the glass behind the creature */
+#include "fps_lab.h"      /* the frame rate lab's records (FPS-LAB.md) */
 
 static const char *TAG = "mole_fluid";
 
@@ -1572,6 +1573,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
                 cpk_set_work(s_cpk, fd_working(&s_dir));
                 cpk_set_idle(s_cpk, s_dir.quiet, s_dir.idle_life == FD_IDLE_LIVELY ? 1.f : s_dir.idle_life == FD_IDLE_CALM ? 0.5f : 0.f);
                 cpk_frame(s_cpk, s, rdt, swell);
+                fps_lab_cpk(s_cpk);                        /* (the lab: its pose; its knobs for the next) */
             }
             else cute_rt_update(s_cute, rdt);              /* mood engine + kit + behaviours */
             {   /* paddle's strokes splash the real water, either side of the creature */
@@ -2302,6 +2304,8 @@ static void draw_task(void *arg) {
             }
         }
         if (touch_t) mole_diag_touch_latency((uint32_t)(t2 - touch_t));
+        fps_lab_drawn(&(fl_drawn_t){ (uint32_t)(t1 - t0), (uint32_t)(t2 - t1), s_last_wait_us, (uint32_t)s_send_n, (uint32_t)s_send_px, (uint32_t)nc,
+                                     s_draw ? (uint32_t)s_draw->nowed : 0, atomic_load(&s_pres_te), atomic_load(&s_pres_t) != 0, s_full_flush });   /* (the lab) */
         dms = dms * 0.9f + (t1 - t0) / 1000.f * 0.1f;
         lms = lms * 0.9f + (t2 - t1) / 1000.f * 0.1f;
         pema[0] = pema[0] * 0.9f + (float)fluid_prof[FP_DSAMPLE] / (float)s_cpu_mhz / 1000.f * 0.1f;
@@ -2943,6 +2947,7 @@ static void fluid_task(void *arg) {
             s_fine_go = go;
         }
         s_gate_at = te_at && fluid_draw_morphing(s_draw) ? te_at + te_per - FLUID_SEND_EARLY_US : 0;   /* (gate_wait) */
+        fps_lab_handoff(c1, (int)(tw - tj0) - c1[3], idle_us, te_n, &s_dopts, s_sim->N, s_crisp);   /* (the lab: rec on) */
         xSemaphoreGive(s_go);
         int64_t t3 = esp_timer_get_time();
 

@@ -54,6 +54,7 @@
 #include "pkg_cmd.h"
 #include "power.h"
 #include "haptic.h"
+#include "fps_lab_dev.h"
 
 static const char *TAG = "http";
 
@@ -1436,7 +1437,7 @@ esp_err_t http_server_start(void)
     cfg.max_open_sockets = 7;      // headroom for WS + concurrent tabs
     cfg.lru_purge_enable = true;
     cfg.server_port      = 80;
-    cfg.max_uri_handlers = 56;     // 49 routes today (50 with DIAG_RING); headroom so new routes always fit
+    cfg.max_uri_handlers = 56;     // 51 routes today (52 with DIAG_RING); headroom so new routes always fit
 
     httpd_handle_t server = NULL;
     ESP_RETURN_ON_ERROR(httpd_start(&server, &cfg), TAG, "httpd_start failed");
@@ -1481,6 +1482,7 @@ esp_err_t http_server_start(void)
     ESP_RETURN_ON_ERROR(mole_diag_http_register(server), TAG, "diag routes");
     ESP_RETURN_ON_ERROR(power_http_register(server), TAG, "power routes");
     ESP_RETURN_ON_ERROR(haptic_http_register(server), TAG, "haptic route");
+    ESP_RETURN_ON_ERROR(fps_lab_http_register(server), TAG, "lab routes");
     httpd_register_err_handler(server, HTTPD_404_NOT_FOUND, handler_404);
 
     ESP_LOGI(TAG, "HTTP server started");
