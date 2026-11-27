@@ -77,6 +77,11 @@ esp_err_t mole_fluid_set_text(const char *text, int len);
 /** Append streamed words (POST /api/reader/append): the text state keeps its place and
  *  resumes if it was holding the last word. Excess beyond 4 KB is dropped. */
 esp_err_t mole_fluid_append_text(const char *chunk, int len);
+/** A say's text, further (link_audio.c, cmd say_text): text is the whole text so far of the say whose words are text_ver
+ *  (mole_fluid_text_ver after its set), beginning with what the reader has. The same say goes on (no new version): its
+ *  words keep their place and type, the new ones come as the speaker reaches them. ESP_OK: taken (a piece it has already:
+ *  nothing changes); ESP_ERR_INVALID_STATE: another text since; ESP_ERR_INVALID_ARG: not that text's beginning or more. */
+esp_err_t mole_fluid_say_text(unsigned text_ver, const char *text, int len);
 
 /**
  * The creature (.molty, device/creatures/MOLTY-FORMAT.md) the "creature" state renders.

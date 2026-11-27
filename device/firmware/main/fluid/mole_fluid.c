@@ -148,6 +148,7 @@ static char   *s_text     = NULL;               /* PSRAM, FLUID_TEXT_MAX+1      
 static int     s_text_len = 0;
 static int     s_text_ver = 0;
 static bool    s_text_appended = false;         /* last change(s) only appended     */
+static unsigned s_text_grew = 0;                /* a say's text further (mole_fluid_say_text): same version */
 static int     s_req_state = -1;                /* pending explicit state           */
 static bool    s_req_implied = false;          /* ...or the creature a mood alone implies */
 static bool    s_req_text_hold = false;         /* …"text" holding its last word    */
@@ -304,6 +305,8 @@ static uint32_t s_frame_no = 0;
 static char   *s_ttext  = NULL;                 /* task copy of the text (PSRAM)    */
 static ftok_t *s_toks   = NULL;                 /* PSRAM, FLUID_MAX_TOKENS           */
 static int     s_ntok   = 0, s_seen_ver = -1;
+static unsigned s_seen_grew = 0;                /* (s_text_grew as the task last took it) */
+static float   s_text_ext = 1.f;                /* the text state's type size, as fluid_text_set_sentence was given it */
 
 /* the question on screen, over whatever the director shows (its transitions wait while the question stands) */
 static struct {
@@ -625,6 +628,17 @@ static cJSON *gestures_json(uint32_t packed) {
 
 /* ── State machine (task) ───────────────────────────────────────────────────── */
 
+/* the text's type size: the widest pivot half of its words (fluid_text_set_sentence) */
+static float words_ext(void) {
+    float ext = 1.f;
+    for (int i = 0; i < s_ntok; i++) {
+        float a = s_toks[i].orp < 0 ? s_toks[i].len / 2.f : s_toks[i].orp + 0.5f, b = s_toks[i].len - a;
+        if (a > ext) ext = a;
+        if (b > ext) ext = b;
+    }
+    return ext;
+}
+
 /* the screen starts to move (a ripple, a change of picture): from rest, a flash op in flight ends first, none starts
  * meanwhile (mole_flash_motion: a few ms, only when one is in flight); then it counts as moving (fluid_calm_ms) */
 static void motion(void) {
@@ -638,16 +652,19 @@ static void ripple(float x, float y, float strength, float radius) {
 }
 
 /* following a say: each word when the speaker reaches it (link_audio's cues), never on the reader's own clock; once the
- * say is over, the clock takes the rest. True: a word came (its letters are the reader's now) */
+ * say is over, the clock takes the rest. One word a frame (s_stepped: one came since the last frame went to the drawer):
+ * two reached at once, or words whose text came after their voice (mole_fluid_say_text), each on the glass, none skipped.
+ * True: a word came (its letters are the reader's now) */
+static bool s_stepped;
 static bool reader_follow(const fluid_cfg_t *cfg) {
     const int t = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1;
     bool came = false;
-    if (t >= 0 && (t > s_word || s_text_hidden)) {
-        if (t > s_word) s_word = t;
+    if (t >= 0 && (t > s_word || s_text_hidden) && !s_stepped) {
+        if (!s_text_hidden) s_word++;
         s_text_hidden = false;
         show_word(s_word);
         ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
-        came = true;
+        s_stepped = came = true;
     }
     s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
     return came;
@@ -671,13 +688,7 @@ static void enter_state(int st, const fluid_cfg_t *cfg) {
         s_word = 0; s_word_until = 1e9f; s_text_hidden = false;
     } else if (st == ST_TEXT) {
         if (s_ntok == 0) { strcpy(s_ttext, "..."); tokenize(); }
-        float ext = 1.f;
-        for (int i = 0; i < s_ntok; i++) {
-            float a = s_toks[i].orp < 0 ? s_toks[i].len / 2.f : s_toks[i].orp + 0.5f, b = s_toks[i].len - a;
-            if (a > ext) ext = a;
-            if (b > ext) ext = b;
-        }
-        fluid_text_set_sentence(s_tx, ext);
+        fluid_text_set_sentence(s_tx, s_text_ext = words_ext());
         s_word = 0;
         if (s_say_log.ver != (unsigned)s_seen_ver || !s_say_log.on) s_say_log = (say_log_t){ (unsigned)s_seen_ver, s_ntok, 0, 0, true, false };
         /* following a say whose voice has not reached word 0 yet: blank until it does (the
@@ -2407,7 +2418,7 @@ static void fluid_task(void *arg) {
         fluid_cfg_t cfg;
         int req = -1; bool req_hold = false;
         float rip[FLUID_RIPPLE_Q][3]; int nrip = 0;
-        bool text_changed = false, text_append = false;
+        bool text_changed = false, text_append = false, text_grew = false;
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         cfg = s_cfg;
         req = s_req_state; req_hold = s_req_text_hold; s_req_state = -1;
@@ -2452,7 +2463,11 @@ static void fluid_task(void *arg) {
             memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
             s_seen_ver = s_text_ver; text_changed = true;
             text_append = s_text_appended; s_text_appended = false;
+        } else if (s_text_grew != s_seen_grew) {        /* the say's words further: the same say, its words in place */
+            memcpy(s_ttext, s_text, (size_t)s_text_len + 1);
+            text_changed = text_append = text_grew = true;
         }
+        s_seen_grew = s_text_grew;
         xSemaphoreGive(s_mutex);
 
         /* hot fields moved: the same grid again, rebuilt into PSRAM (the heap guard: internal
@@ -2482,6 +2497,12 @@ static void fluid_task(void *arg) {
         }
         if (text_changed) {
             tokenize();
+            if (text_grew && s_cur == ST_TEXT) {        /* (its type smaller for a longer word to come, never larger: the
+                                                         * words shown stay as they are) */
+                const float ext = words_ext();
+                if (ext > s_text_ext) fluid_text_set_sentence(s_tx, s_text_ext = ext);
+            }
+            if (text_grew && s_say_log.ver == (unsigned)s_seen_ver && !s_say_log.logged) s_say_log.words = s_ntok;
             if (s_cur == ST_TEXT && req < 0) {
                 if (!text_append) { req = ST_TEXT; req_hold = s_dir.text_hold; }   /* new text: start over */
                 else if (s_word_until > 1e8f && s_word + 1 < s_ntok)    /* streamed words arrived */
@@ -2644,6 +2665,7 @@ static void fluid_task(void *arg) {
                 s_noverlay = s_tx->nletters;
                 memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
             }
+            s_stepped = false;                          /* (this frame's word goes to the drawer: the next may come) */
         }
         {   /* the picture's delay (s_view_ahead_us): the frame the drawer just finished, from its sim to its first window */
             const uint32_t pres = atomic_load(&s_pres_t);
@@ -3546,6 +3568,23 @@ esp_err_t mole_fluid_append_text(const char *chunk, int len) {
     }
     xSemaphoreGive(s_mutex);
     return ESP_OK;
+}
+
+esp_err_t mole_fluid_say_text(unsigned text_ver, const char *text, int len) {
+    if (!text || len < 0 || len > FLUID_TEXT_MAX) return ESP_ERR_INVALID_ARG;
+    esp_err_t e = alloc_bufs();
+    if (e != ESP_OK) return e;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const int have = len < s_text_len ? len : s_text_len;
+    if ((unsigned)s_text_ver != text_ver) e = ESP_ERR_INVALID_STATE;
+    else if (memcmp(text, s_text, (size_t)have)) e = ESP_ERR_INVALID_ARG;
+    else if (len > s_text_len) {                       /* (shorter or the same: a piece it has already) */
+        memcpy(s_text + s_text_len, text + s_text_len, (size_t)(len - s_text_len));
+        s_text_len = len; s_text[len] = '\0';
+        s_text_grew++;
+    }
+    xSemaphoreGive(s_mutex);
+    return e;
 }
 
 esp_err_t mole_fluid_set_text(const char *text, int len) {
