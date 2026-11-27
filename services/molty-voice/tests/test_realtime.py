@@ -121,6 +121,7 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     # create_response off: the box asks for the one reply itself, on the commit (rule 1)
     assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is False and tds[0]["interrupt_response"] is False
     assert len(s["creates"]) == 1
+    assert s["creates"][0]["max_output_tokens"] == brief.REPLY_MAX_TOKENS  # a plain reply cannot ramble
     assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
@@ -152,14 +153,16 @@ def test_the_agent_speaking_up_between_conversations_is_voiced_exact_and_the_que
 
     relay, fake, _ = asyncio.run(run(scenario))
     s = fake.sessions[0]
-    ins = [c["instructions"] for c in s["creates"]]
-    assert ins[0].endswith("\n\n" + brief.inner("Your next meeting is at 3 pm.")) and ins[0].startswith(brief.BRIEF)
-    assert ins[1].endswith("\n\n" + brief.inner("Build 42 passed.", exact=True))
-    assert ins[2] == brief.exactly("hi")
-    assert all(c["tool_choice"] == "none" and "tools" not in c for c in s["creates"])
+    c0, c1, c2 = s["creates"]
+    # the agent speaking up: read aloud out of band, exactly its words (no bridge: nobody was waiting)
+    assert c0 == {"conversation": "none", "output_modalities": ["audio"], "instructions": brief.READ_ALOUD, "tool_choice": "none",
+                  "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Your next meeting is at 3 pm."}]}],
+                  "metadata": {"molty": "t1"}}
+    assert c1["input"][0]["content"][0]["text"] == "Build 42 passed."
+    assert c2["instructions"] == brief.exactly("hi") and "conversation" not in c2
     assert "- The build log is 200 lines long." in s["updates"][-1]["instructions"]  # background in the instructions...
     assert not any("build log" in str(i) for i in s["items"])  # ...never an item a model may recite
-    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Your next meeting is at 3 pm."
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "Your next meeting is at 3 pm."
     assert relay.of("tts.text", id="t2")[-1]["text"] == "Build 42 passed."  # exact: its wording kept
     assert [m["id"] for m in relay.of("tts.end")] == ["t1", "t2", "t3"]
     assert all("error" not in m and "absorbed" not in m for m in relay.of("tts.end"))
@@ -337,11 +340,11 @@ def test_the_agents_line_is_said_as_its_own_cues_never_spoken():
 
     relay, fake, _ = asyncio.run(run(scenario))
     c = fake.sessions[0]["creates"][0]
-    assert "[happy]" not in c["instructions"] and c["tool_choice"] == "none"
-    for rule in ("not something to comment on, translate, answer", "nothing from your background", "Keep every fact, number and name exactly"):
+    assert c["input"][0]["content"][0]["text"] == "Hey Juan! All good here, and yeah, pretty fast today." and c["tool_choice"] == "none"
+    for rule in ("exactly as written, word for word", "Say nothing before it and nothing after it", "never answer it"):
         assert rule in c["instructions"]
     assert not any(str(i).startswith("Inner voice") for i in fake.sessions[0]["items"])
-    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Hey Juan! All good here, and yeah, pretty fast today."
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "Hey Juan! All good here, and yeah, pretty fast today."
 
 
 async def _turn(relay, sid: str, ms: int = 500):
@@ -383,8 +386,9 @@ def test_a_question_it_cannot_answer_is_a_filler_naming_it_then_the_agents_answe
     assert "new emails" in relay.of("tts.text", id=reply)[-1]["text"]  # the holding line names the task
     creates = fake.sessions[0]["creates"]
     assert "naming the task" in creates[1]["instructions"]  # the "still on it" filler, once
-    assert creates[2]["instructions"].endswith(brief.inner("You have two new emails, both from Ana.", waiting=True))
-    assert relay.of("tts.text", id="t1")[-1]["text"].startswith("Ok, got it: You have two new emails")
+    said = creates[2]["input"][0]["content"][0]["text"]
+    assert said.endswith(" You have two new emails, both from Ana.") and said.split(" You have")[0] in brief.BRIDGES  # the box's own bridge
+    assert relay.of("tts.text", id="t1")[-1]["text"] == said
     assert relay.of("tts.end", id="t2")[0].get("absorbed") is True and len(creates) == 3  # no longer waiting: context
 
 
@@ -402,7 +406,9 @@ def test_a_new_turn_wins_the_answer_to_the_turn_before_is_context():
 
 def test_the_brief_sets_filler_by_default_and_hand_off_for_real_questions():
     for rule in ("Answer yourself ONLY when you already have what it takes", "When unsure, hand off", "echoes a few of the person's own words",
-                 "Never a bare \"one moment\"", "address the agent by name", "speak as it"):
+                 "Never a bare \"one moment\"", "agent by name", "speak as it", "ONE short spoken sentence, at most 12 words",
+                 "You are not an assistant", "never offer help", "Never explain a cause", "any complaint about how Molty behaves",
+                 "Without one, be neutral and brief"):
         assert rule in brief.BRIEF
     assert brief.TOOLS[0]["parameters"]["required"] == ["request"]
 
@@ -424,7 +430,7 @@ def test_the_agents_lines_and_persona_outlive_the_session_as_background_never_sa
     assert "\nPersona: Dude is a cat who lounges on the desk; dry humour." in ins
     assert "never say it again, never recite it):\n- Your inner voice said: Just lounging on your desk." in ins
     assert not any("lounging" in str(i) for i in second["items"])
-    assert relay.of("tts.text", id="t2")[-1]["text"] == "So, Your build passed."  # said once, nothing replayed
+    assert relay.of("tts.text", id="t2")[-1]["text"] == "Your build passed."  # said once, nothing replayed
 
 
 def test_a_reply_that_waited_in_the_queue_counts_its_first_audio_from_its_creation():
@@ -460,7 +466,7 @@ def test_context_with_no_session_opens_none_and_reaches_the_next_one():
     relay, fake, _ = asyncio.run(run(scenario))
     assert relay.sessions_then == 0 and relay.of("tts.end", id="t0")[0].get("absorbed") is True
     assert "- The agent said: purring along nicely." in fake.sessions[0]["updates"][0]["instructions"]
-    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, hi"
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "hi"
 
 
 def test_word_cues_and_texts_line_up_with_the_whole_line():
@@ -496,3 +502,60 @@ def test_every_turn_end_gets_its_one_reply_even_when_the_listen_ends_at_once():
 
     relay, fake, _ = asyncio.run(run(scenario, fake_kw={"auto_create_ms": 300}))
     assert len(relay.of("front.reply", stt="s1")) == 1 and len(fake.sessions[0]["creates"]) == 1
+
+
+def _ends(order: str):
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
+        if order == "model_first":
+            await relay.mic("s1", speech(500) + silence(700))
+            await relay.until(lambda: relay.of("stt.turn_end", id="s1"))
+        else:
+            await relay.mic("s1", speech(600))  # still speaking when Molty's end comes
+        await relay.send({"t": "stt.end", "id": "s1"})  # the device's end of the same turn, at once
+        await relay.until(lambda: relay.of("front.reply", stt="s1") and relay.of("tts.end", id=relay.of("front.reply", stt="s1")[0]["id"]), timeout=3)
+        await asyncio.sleep(0.3)
+
+    return scenario
+
+
+def test_the_models_end_and_the_devices_end_of_one_turn_give_one_commit_and_one_reply_either_order():
+    # live 2026-11-27 (rig run, turn 3 "Hmm"): the model ended the turn and 2 ms later Molty's end came; the box
+    # committed again (empty: an error), that error failed the reply, and the reply was then cancelled: no answer
+    for order, kw in (("model_first", {"commit_event_ms": 60}), ("device_first", {"ends_together": True})):
+        relay, fake, _ = asyncio.run(run(_ends(order), fake_kw={"transcript": "hmm", **kw}))
+        s = fake.sessions[0]
+        replies = relay.of("front.reply", stt="s1")
+        assert len(replies) == 1, order
+        end = relay.of("tts.end", id=replies[0]["id"])[0]
+        assert "error" not in end and replies[0]["id"] in relay.audio, order  # it was said
+        assert s["commits"] == 1 and len(s["creates"]) == 1 and s["cancels"] == 0, order
+
+
+def test_a_waiting_answer_is_read_aloud_and_checked_a_deviation_is_reported():
+    # live 2026-11-27 (rig run 2, turn 4): the agent said "You have the team standup at ten and the dentist at three."
+    # and the front said "I can't see your calendar. Sorry."
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")
+        await relay.send({"t": "tts", "id": "t1", "text": "You have the team standup at ten and the dentist at three.", "front": "inner", "turn": "s1"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+
+    for misread, faithful in ((None, True), (lambda t: "I can't see your calendar. Sorry.", False)):
+        relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "what is on my calendar?", **({"misread": misread} if misread else {})}))
+        end = relay.of("tts.end", id="t1")[0]
+        assert end.get("faithful", True) is faithful and "error" not in end
+        s = fake.sessions[0]
+        assert s["creates"][-1]["conversation"] == "none"
+        # what was said joins the conversation as the front's own message, so later turns know it
+        assert s["items"][-1] == relay.of("tts.text", id="t1")[-1]["text"]
+
+
+def test_faithful_holds_every_number_name_and_content_word():
+    ok = brief.faithful
+    asked = "You have the team standup at ten and the dentist at three."
+    assert ok(asked, "Ok, got it: You have the team standup at 10 and the dentist at 3.")[0]
+    assert not ok(asked, "I can't see your calendar. Sorry.")[0]
+    assert not ok(asked, "Ok, got it: You have the team standup at ten and the dentist at four.")[0]
+    juan = "That was me answering a turn twice, Juan. Sorry, it should be fixed now."
+    assert not ok(juan, "Thanks for pointing it out; it's being handled now.")[0]
+    assert ok("You asked me to remember to buy oat milk on the way home.", "You asked me: remember to buy oat milk on the way home.")[0]

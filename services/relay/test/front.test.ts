@@ -63,6 +63,8 @@ interface BoxOpts {
   reply?: (heard: string) => { said: string; wait: boolean };
   /** turn end after this many mic chunks */
   turnEndAfter?: number;
+  /** the box found its read-aloud missing the agent's facts: tts.end faithful false */
+  unfaithful?: boolean;
   /** speak as a model does: the transcript one word at a time with each word's audio (and cue), the final text at the end */
   pieces?: boolean;
 }
@@ -123,7 +125,7 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     if (f.t === "tts" && f.front === "inner" && !voiced) setTimeout(() => say({ t: "tts.end", id: f.id, absorbed: true }), 5);
     else if (f.t === "tts") {
       const words = f.front === "inner" && !f.exact ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
-      speak(f.id, words);
+      speak(f.id, words, f.front === "inner" && o.unfaithful ? { faithful: false } : {});
     }
   };
   sock.sendBinary = (b: Uint8Array) => {
@@ -565,6 +567,19 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     expect(ends.length === 0 || ctx.box.of("stt.start").length >= 2).toBe(true); // not ended under the reply: it listened again
     await until(() => ctx.box.of("front.end").length > 0, 3000);
     expect(ctx.box.of("stt.start").length).toBe(2);
+  });
+
+  it("an answer the front read aloud without its facts is reported to the agent and in the activity log", async () => {
+    // live 2026-11-27 (rig run 2): the front said "I can't see your calendar. Sorry." over the agent's answer
+    const ctx = await setup({ box: { unfaithful: true } });
+    await ctx.shake();
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id;
+    const r = (await ctx.room.talk(ctx.token, { say: "Standup at ten.", in_reply_to: t1 })) as any;
+    expect(r.result).toMatchObject({ spoken: true, how: "said", faithful: false });
+    expect(r.result.hint).toMatch(/did NOT say your line/);
+    const act = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries;
+    expect(act.find((e: any) => e.kind === "job" && e.job === r.result.job).data).toMatchObject({ how: "said", faithful: false });
   });
 
   it("an answer to a turn over a minute old is never sent to be said", () => {

@@ -1935,9 +1935,19 @@ line), IDLE (no session).
    holding line that echoes the person's words ("ok, let me see... checking your emails") and a
    hand-off (then WAITING for that turn). Never none, never two. The box asks for that reply
    itself on the turn's commit (`create_response` is off: live, an auto response was lost when
-   turn detection went off right after the turn's end).
+   turn detection went off right after the turn's end). A turn has one end: the model's and
+   Molty's may arrive in either order or together, the first wins and the second is a no-op (no
+   second, empty commit); a provider error fails only the request it names (`event_id`). A plain
+   reply is one short sentence (at most about 12 words; `max_output_tokens` caps it).
 2. **An agent line that replies to turn T** (`in_reply_to`) is voiced only when the front is
-   WAITING for T: at once, "ok, got it:" and the facts, then LISTENING. In every other case (the
+   WAITING for T: at once, a short bridge ("Ok, got it:", the box's own) and the agent's words,
+   then LISTENING. A voiced agent line is a read-aloud job out of band (`response.create` with
+   `conversation: "none"`, its own `input`, read-aloud instructions, no tools): the model has no
+   conversation to answer from, so it cannot override the agent (live, it said "I can't see your
+   calendar" over the agent's answer). The box checks what was said against what it asked for
+   (every number, name and nearly every content word, `molty_voice/brief.py` `faithful`) and adds it
+   to the conversation as the front's own message; a deviation is reported, never hidden
+   (`tts.end faithful: false`, the agent's result `faithful: false` with a hint, the activity log). In every other case (the
    front answered T itself, T is not the latest turn, the person is speaking, a newer turn began)
    it is context only: kept as background, never voiced, no response, no session opened, and the
    agent's result says so at once (`how: "absorbed"`).

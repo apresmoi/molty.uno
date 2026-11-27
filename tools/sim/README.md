@@ -63,8 +63,14 @@ cd tools/sim && .venv/bin/molty-sim front --script scenarios/front-run5.yaml
 .venv/bin/molty-sim front --script scenarios/front-run5.yaml --live --wav /tmp/t1.wav --wav /tmp/t2.wav --wav /tmp/t3.wav --wav /tmp/t4.wav
 ```
 
-It prints one row per turn (heard, answered / handed off / NO REPLY, what Molty said, first audio,
-hand-off) and the checks, and exits 1 when one fails: `one_reply` (exactly one front response per
+It prints one row per turn (heard, answered / handed off / NO REPLY / MISSING, first audio,
+hand-off) with every line Molty said for it in full (who, seconds, words), then the checks, and
+exits 1 when one fails: `all_turns` (every scripted turn happened, the conversation ended with a
+reason, and a last turn marked `ends` ended it by its goodbye; a run is given 2 minutes at most),
+`short` (the front's own replies at most 14 words), `handoff` (a turn marked `front: handoff`, a
+question only the agent can answer, was handed off), `faithful` (every voiced agent answer holds
+all the numbers, names and content words of what the agent said; printed "agent said" / "front
+voiced"), `one_reply` (exactly one front response per
 turn), `agent_waiting` (an agent line is voiced only for a turn the front handed off), `never_twice`
 (no agent line spoken twice), `not_over_them` (no response created while the person speaks; fake
 provider only), `not_cut` (no end while a reply is made or the front waits for an answer that comes),

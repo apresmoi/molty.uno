@@ -199,6 +199,7 @@ async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Pat
     pump = EventPump(rest)
     pump.start()
     lines: list[asyncio.Task] = []
+    n = [0]  # utterances so far
 
     async def line(after_s: float, say: str, turn_id: str) -> None:
         await asyncio.sleep(after_s)
@@ -219,7 +220,9 @@ async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Pat
             d = e["data"]
             f = d.get("front") or {}
             print(f"  utterance {d.get('text')!r} (front said {f.get('said')!r}, waiting={f.get('waiting')})", flush=True)
-            t = next((t for t in script.turns if t.heard == d.get("text")), None)
+            # the fake provider's transcript is the script's; live, the k-th utterance is the k-th turn
+            t = next((t for t in script.turns if t.heard == d.get("text")), None) or (script.turns[n[0]] if n[0] < len(script.turns) else None)
+            n[0] += 1
             for after_s, say in (t.agent if t else []):
                 lines.append(asyncio.create_task(line(after_s, say, d["turn_id"])))
 
@@ -227,7 +230,7 @@ async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Pat
     t0 = time.monotonic()
     await dev.shake()
     ended = None
-    for _ in range(400):
+    for _ in range(240):  # 2 minutes at most: a run that hangs fails (all_turns), it never waits forever
         await asyncio.sleep(0.5)
         entries = await activity(rest, dev.link_code)
         ended = next((e for e in entries if e.get("ev") == "front.end"), None)
@@ -237,7 +240,8 @@ async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Pat
     agent_task.cancel()
     await pump.stop()
     entries = await activity(rest, dev.link_code)
-    rows, bad = front_script.check(script, entries, fake.log if fake is not None else None)
+    ended = next((e for e in entries if e.get("ev") == "front.end"), None)
+    rows, bad = front_script.check(script, entries, fake.log if fake is not None else None, ended)
     print(f"\nscript {script.name}: conversation ended {json.dumps((ended or {}).get('data'))} after {time.monotonic() - t0:.1f} s\n")
     print(front_script.table(rows))
     print("\nchecks: " + ("all passed" if not bad else f"{len(bad)} failed"))

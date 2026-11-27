@@ -87,6 +87,11 @@ export interface FrontPrepared {
   front?: FrontSpeech;
 }
 
+/** What a say / talk the front voiced got: `said`, and `faithful: false` when the box found facts of the line missing. */
+export function voiced(sp: FrontSpeech | undefined, said?: string): JsonObject {
+  return { ...innerResult("said", said), ...(sp?.unfaithful ? { faithful: false, hint: "the voice front did NOT say your line as given (see said): tell the person another way if it matters" } : {}) };
+}
+
 /** A say / talk the front did not voice: done (it absorbed the thought), else failed. */
 export function absorbedOr(sp: FrontSpeech | undefined, error: string) {
   return sp?.absorbed ? { status: "done" as const, result: innerResult("absorbed") } : { status: "failed" as const, error };

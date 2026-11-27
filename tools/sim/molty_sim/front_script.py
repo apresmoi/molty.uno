@@ -15,6 +15,12 @@ device (both live and fake) and, with the fake provider, its own log:
                  answer that comes
   first_audio    Molty's first sound after each turn within the bound
   no_session     no session is opened for a line that is only context (the fake agent always replies to a turn)
+  all_turns      every scripted turn is in the record (a missing one is a MISSING row), the conversation ended
+                 (a reason, not none), and a last turn marked `ends` ended it with the stop phrase
+  short          the front's own replies are at most MAX_REPLY_WORDS words (the agent's voiced answers may be longer)
+  handoff        a turn marked `front: handoff` (a factual question) was handed to the agent
+  faithful       every voiced agent answer holds all the numbers, names and content words of the agent's text
+                 (molty_voice.brief.faithful, the box's own rule), and the box did not report it unfaithful
 """
 
 from __future__ import annotations
@@ -29,6 +35,7 @@ import yaml
 from .voice import Clip, read_wav, resample
 
 RATE = 16000
+MAX_REPLY_WORDS = 14
 
 
 @dataclass
@@ -42,6 +49,7 @@ class Turn:
     wav: str | None = None  # --live: the recording
     auto_create_ms: int | None = None  # the fake provider: its own auto response this late (the run 5 race)
     agent: list[tuple[float, str]] = field(default_factory=list)  # (seconds after the utterance, line), in_reply_to this turn
+    ends: bool = False  # a stop phrase: the conversation must end after the front's goodbye
 
 
 @dataclass
@@ -59,7 +67,7 @@ def load(path: str | Path) -> Script:
         agent = [agent] if isinstance(agent, dict) else agent
         turns.append(Turn(heard=t["heard"], front=t.get("front", "answer"), said=t.get("said", ""), pause_s=float(t.get("pause_s", 0.6)),
                           speech_s=t.get("speech_s"), voiced=bool(t.get("voiced", True)), wav=t.get("wav"), auto_create_ms=t.get("auto_create_ms"),
-                          agent=[(float(a["after_s"]), str(a["say"])) for a in agent]))
+                          agent=[(float(a["after_s"]), str(a["say"])) for a in agent], ends=bool(t.get("ends", False))))
     return Script(name=d.get("name", Path(path).stem), turns=turns, first_audio_ms=int(d.get("first_audio_ms", 2500)))
 
 
@@ -90,11 +98,16 @@ def clip(t: Turn, seed: int) -> Clip:
     return Clip(pcm=pcm, text=t.heard, speech=[(t.pause_s, t.pause_s + sec)], seed=seed)
 
 
+def _play(t: dict) -> float:
+    """A say's playback (ms): a say's own, or a talk's say."""
+    return t.get("play") or (t.get("say") or {}).get("play") or 0
+
+
 def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", "", re.sub(r"\s+", " ", s.lower().replace("’", "'"))).strip()
 
 
-def check(script: Script, entries: list[dict], fake_log: list[dict] | None = None) -> tuple[list[dict], list[str]]:
+def check(script: Script, entries: list[dict], fake_log: list[dict] | None = None, ended: dict | None = None) -> tuple[list[dict], list[str]]:
     """The per-turn rows and the violations, from the relay's activity log (any order) and, with the fake provider, its log."""
     entries = sorted(entries, key=lambda e: e.get("ts", 0))
     turns = [e for e in entries if e.get("kind") == "trace" and e.get("ev") == "front"]
@@ -105,6 +118,11 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
     calls = [e for e in entries if e.get("kind") == "call" and e.get("op") in ("say", "talk")]
     bad: list[str] = []
     rows: list[dict] = []
+
+    def asked_of(job: dict) -> str | None:
+        c = next((c for c in calls if c.get("job") == job.get("job")), None)
+        a = (c or {}).get("args") or {}
+        return a.get("say") or a.get("text")
 
     def turn_of(ts: float) -> int | None:
         k = None
@@ -123,15 +141,40 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
         waiting = bool(t["data"].get("waiting"))
         fa = t["data"].get("reply_first_audio")
         agents = [v for v in voiced if turn_of(v["ts"]) == i]
+        lines = [("front", r) for r in rs] + [("agent", v) for v in agents]
         rows.append({"turn": i + 1, "heard": utter.get(t.get("job"), ""), "state": ("handed off" if waiting else "answered") if rs else "NO REPLY",
-                     "said": " / ".join([r["data"].get("said", "") for r in rs] + [v["data"].get("said", "") for v in agents]),
+                     "lines": [{"who": who, "text": e["data"].get("said", ""), "words": len(e["data"].get("said", "").split()),
+                                "s": round(_play(e["data"].get("timings") or {}) / 1000, 1), "asked": asked_of(e) if who == "agent" else None}
+                               for who, e in lines],
                      "first_audio_ms": fa, "handoff": waiting})
         if len(rs) != 1:
             bad.append(f"one_reply: turn {i + 1} got {len(rs)} front responses")
         if fa is None or fa > script.first_audio_ms:
             bad.append(f"first_audio: turn {i + 1}: {fa} ms (bound {script.first_audio_ms})")
+        for r in rs:
+            n = len(r["data"].get("said", "").split())
+            if n > MAX_REPLY_WORDS:
+                bad.append(f"short: turn {i + 1}'s reply has {n} words (at most {MAX_REPLY_WORDS})")
+        if i < len(script.turns) and script.turns[i].front == "handoff" and not waiting:
+            bad.append(f"handoff: turn {i + 1} ({script.turns[i].heard!r}) asks what only the agent knows and was not handed off")
+    for i in range(len(turns), len(script.turns)):
+        rows.append({"turn": i + 1, "heard": script.turns[i].heard, "state": "MISSING", "lines": [], "first_audio_ms": None, "handoff": False})
+        bad.append(f"all_turns: turn {i + 1} ({script.turns[i].heard!r}) never happened")
+    if not ended or not (ended.get("data") or {}).get("reason"):
+        bad.append("all_turns: the conversation never ended (no front.end with a reason)")
+    elif script.turns and script.turns[-1].ends and ended["data"].get("reason") != "stop_phrase":
+        bad.append(f"all_turns: the conversation ended by {ended['data'].get('reason')!r}, not by the last turn's goodbye")
+    from molty_voice.brief import faithful
+
     seen_waiting: set[int] = set()
     for v in voiced:
+        asked, said = asked_of(v), v["data"].get("said", "")
+        if asked:
+            ok, missing = faithful(asked, said)
+            if not ok:
+                bad.append(f"faithful: the agent said {asked[:60]!r}, the front voiced {said[:60]!r} (missing {' '.join(missing[:8])})")
+        if v["data"].get("faithful") is False:
+            bad.append(f"faithful: the box reports it did not voice {said[:50]!r} as asked")
         k = turn_of(v["ts"])
         if k is None or not turns[k]["data"].get("waiting") or k in seen_waiting:
             bad.append(f"agent_waiting: the agent's line {v['data'].get('said', '')[:50]!r} was voiced for turn {None if k is None else k + 1}, which the front did not hand off (or had answered already)")
@@ -166,8 +209,15 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
 
 
 def table(rows: list[dict]) -> str:
-    out = [f"{'#':>2}  {'heard':28}  {'state':10}  {'first audio':>11}  {'hand-off':8}  said"]
+    """One row per turn, then every line Molty said for it, in full, with its length."""
+    out = [f"{'#':>2}  {'heard':40}  {'state':10}  {'first audio':>11}  hand-off"]
     for r in rows:
         fa = f"{r['first_audio_ms']} ms" if r["first_audio_ms"] is not None else "-"
-        out.append(f"{r['turn']:>2}  {r['heard'][:28]:28}  {r['state']:10}  {fa:>11}  {'yes' if r['handoff'] else 'no':8}  {r['said'][:90]}")
+        out.append(f"{r['turn']:>2}  {r['heard'][:40]:40}  {r['state']:10}  {fa:>11}  {'yes' if r['handoff'] else 'no'}")
+        for ln in r["lines"]:
+            if ln.get("asked"):
+                out.append(f"      agent said:   {ln['asked']}")
+                out.append(f"      front voiced: {ln['text']}  ({ln['s']} s, {ln['words']} words)")
+            else:
+                out.append(f"      {ln['who']:5} ({ln['s']} s, {ln['words']} words): {ln['text']}")
     return "\n".join(out)
