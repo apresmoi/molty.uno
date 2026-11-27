@@ -9,15 +9,18 @@
 //     answered, and whether it handed the turn to the agent with a holding line);
 //   - the agent's say / talk is not run through text to speech: its text goes to the box as inner voice
 //     (tts front:"own", or "exact" with exact:true), the front says it, queued behind whatever it is saying;
+//   - an agent's answer is said only while it belongs to the moment (FrontTalk.fate): a late one is
+//     silent context, a stale one dropped, a repeat gets the first one's job;
 //   - hands-free: after Molty speaks, it listens again, until nobody speaks, a stop phrase, a tap, the
 //     agent's `front {end}`, the owner's switch, or the limits below.
 //
 // Host-neutral: the room (core/room.ts "Voice front") plugs FrontTalk into its device and jobs.
 
-import type { Outcome } from "./api.js";
-import type { ActivityDraft } from "./activity.js";
+import type { JobStatus, Outcome } from "./api.js";
+import type { ActivityDraft, Who } from "./activity.js";
 import { isRecord, type JsonObject } from "./protocol.js";
 import { type Clock, sleep } from "./store.js";
+import { TURN_HOLD_MS } from "./turns.js";
 import type { FrontSpeech, RemoteVoiceProvider } from "../voice/remote.js";
 
 /** Limits on one conversation (the box has its own cost limits: session length, idle, daily minutes). */
@@ -47,6 +50,27 @@ const STOP_RE = /^(?:ok(?:ay)?[,.!\s]*)?(?:that'?s all|that is all|stop|bye|good
 export function stopPhrase(text: string): boolean {
   return STOP_RE.test(text.trim());
 }
+
+/**
+ * What becomes of an agent's answer to a turn (its in_reply_to) with the front on: spoken, or not
+ * (`as`): given to the front as silent context (the person has spoken since), or dropped (the turn
+ * is over TURN_HOLD_MS old, or its conversation ended and the front had answered it).
+ */
+export type FrontFate = { speak: true } | { speak: false; as: "context" | "dropped"; reason: "newer_turn" | "old_turn" | "conversation_over" };
+
+const FATE_HINT = {
+  newer_turn: "the person has spoken again since this turn: not said aloud, the voice front has it as context. Answer their newer utterance",
+  old_turn: "this turn is over a minute old: not said aloud",
+  conversation_over: "this conversation is over and the voice front already answered this turn: not said aloud",
+} as const;
+
+/** The result of an answer that was not spoken (its job is done with it). */
+export function lateResult(f: Extract<FrontFate, { speak: false }>): JsonObject {
+  return { spoken: false, as: f.as, reason: f.reason, hint: FATE_HINT[f.reason] };
+}
+
+/** A talk's hint when the front does its listen. */
+export const FRONT_LISTENS = "the voice front listens now: what the person says comes as an utterance";
 
 /** One turn's times (relay clock, ms), for its activity line. */
 export interface FrontTurn {
@@ -82,7 +106,7 @@ export function frontTurnSummary(t: FrontTurn): { ms: Record<string, number>; li
   const line =
     `front turn: Molty answered ${s(ms.reply_first_audio)} after the person stopped` +
     (ms.box !== undefined ? ` (model ${s(ms.box)})` : "") +
-    `, utterance ${s(ms.utterance)}` +
+    (ms.utterance !== undefined ? `, utterance ${s(ms.utterance)}` : "") +
     (t.waiting ? ", handed to the agent" : "") +
     (ms.agent_answer !== undefined ? `, agent answered ${s(ms.agent_answer)}, spoken ${s(ms.agent_first_audio)}` : t.waiting ? ", no agent answer" : "");
   return { ms, line };
@@ -101,6 +125,13 @@ export interface FrontHost {
   play(sp: FrontSpeech, args: JsonObject, takeover?: string): Promise<Outcome>;
   /** A relay-owned hands-free listen. */
   listen(): Promise<Outcome>;
+  /** The relay's latest human turn (KV `turn`). */
+  latestTurn(): Promise<{ id: string; at: number } | undefined>;
+  jobStatus(job: string): Promise<JobStatus | undefined>;
+  /** A job that is done already (an answer not spoken): its id. */
+  doneJob(kind: "say" | "talk", by: Who | undefined, result: JsonObject): Promise<string>;
+  /** The human turn Molty is listening to now (a shake's, before its utterance). */
+  openTurn(): string | undefined;
   /** Something holds or waits for the speaker. */
   busy(): boolean;
   online(): boolean;
@@ -121,8 +152,16 @@ export class FrontTalk {
   private readonly replies = new Map<string, FrontSpeech>();
   private readonly turns = new Map<string, FrontTurn>();
   private readonly waiting = new Map<string, () => void>();
+  /** The last turns the person spoke in, oldest first: when each ended, whether the front answered it / handed it to the agent. */
+  private readonly past = new Map<string, { at: number; answered?: boolean; held?: boolean }>();
+  /** Each agent's first answer to a turn (`<agent> <turn>` -> its job). */
+  private readonly answers = new Map<string, string>();
 
   constructor(private readonly h: FrontHost) {}
+
+  async serving(): Promise<boolean> {
+    return (await this.h.whyNot()) === null;
+  }
 
   get live(): boolean {
     return this.c !== undefined;
@@ -144,9 +183,18 @@ export class FrontTalk {
 
   /** The person's turn in a front listen ended (the model's turn detection, or the device's own end). */
   turnEnded(job: string, at: number) {
+    this.spoken(job).at = at;
     if (this.turns.has(job)) return;
     this.turns.set(job, { endAt: at });
     while (this.turns.size > 8) this.flush(this.turns.keys().next().value!);
+  }
+
+  /** The person speaks in listen `job` (the box's speech hint, or the end of their turn): the latest turn now. */
+  spoken(job: string) {
+    let p = this.past.get(job);
+    if (!p) this.past.set(job, (p = { at: this.h.clock.now() }));
+    while (this.past.size > 16) this.past.delete(this.past.keys().next().value!);
+    return p;
   }
 
   /** The turn's utterance reached the agents. */
@@ -156,7 +204,8 @@ export class FrontTalk {
   }
 
   /** A listen is over: a front listen nobody spoke into (that did not yield to an answer) ends the conversation, a failed hands-free one too. */
-  listened(r: { ok: true; front?: boolean; text: string; yielded?: boolean } | { ok: false } | undefined, handsFree = false) {
+  listened(r: { ok: true; front?: boolean; text: string; yielded?: boolean } | { ok: false } | undefined, handsFree = false, job?: string) {
+    if (job && !(r?.ok && r.text.trim())) this.past.delete(job); // no words: not a turn after all
     if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.live && handsFree) void this.end(r?.ok ? "idle" : "listen_failed");
   }
 
@@ -171,6 +220,7 @@ export class FrontTalk {
     if (!job || !this.c || (await this.h.whyNot()) !== null) return sp.cancel();
     const t = this.turns.get(job);
     if (t) t.replyAt = this.h.clock.now();
+    this.spoken(job).answered = true;
     this.replies.set(job, sp);
     while (this.replies.size > 4) this.replies.delete(this.replies.keys().next().value!);
     this.waiting.get(job)?.();
@@ -201,30 +251,32 @@ export class FrontTalk {
   }
 
   /** A job the front spoke has ended (`replyOf`: it was the reply to that turn): Molty listens again, or waits for the agent. */
-  spoke(replyOf: string | undefined, sp: FrontSpeech | undefined, firstOut?: number) {
+  spoke(replyOf: string | undefined, sp: FrontSpeech | undefined, firstOut?: number, listen = false) {
     const t = replyOf ? this.turns.get(replyOf) : undefined;
     if (t) {
       if (firstOut !== undefined) t.replyOut = firstOut;
       t.waiting = !!sp?.wait;
+      if (t.waiting) this.spoken(replyOf!).held = true;
       // the model's own time, as the box measured it: its end of turn -> the reply's start -> its first audio
       const b = sp?.boxMs ?? {};
       if (typeof b.created === "number" || typeof b.first_audio === "number") t.boxMs = ((b.created as number) ?? 0) + ((b.first_audio as number) ?? 0);
     }
-    if (!this.c) return;
+    if (!this.c && !listen) return;
     const wait = !!replyOf && !!sp?.wait;
     // once the job's audio lock is released: whatever queued behind it goes first
-    this.h.clock.setTimeout(() => void this.next(wait), 0);
+    this.h.clock.setTimeout(() => void this.next(wait, listen), 0);
   }
 
-  private async next(wait: boolean) {
+  /** `listen`: an agent's talk asked to listen after its answer: the front does (and starts the conversation). */
+  private async next(wait: boolean, listen: boolean) {
     const c = this.c;
-    if (!c) return;
-    if (c.ending) return this.end(c.ending);
-    if (c.turns >= FRONT.maxTurns || this.h.clock.now() - c.started >= FRONT.maxMs) return this.end("limit");
+    if (!c && !listen) return;
+    if (c?.ending) return this.end(c.ending);
+    if (c && (c.turns >= FRONT.maxTurns || this.h.clock.now() - c.started >= FRONT.maxMs)) return this.end("limit");
     if (this.h.busy()) return; // something else speaks or listens: its end brings Molty back here
     if (!this.h.online()) return this.end("device_offline");
     if ((await this.h.whyNot()) !== null) return this.end("front_off");
-    if (wait) {
+    if (wait && c) {
       // the front handed the turn to the agent: Molty thinks until its answer; none in time -> "still waiting", once
       this.h.thinking();
       this.agentAnswering();
@@ -248,6 +300,53 @@ export class FrontTalk {
     }
     const started = await this.h.play(sp, { front_wait: true });
     if (!started.ok) sp.cancel();
+  }
+
+  /**
+   * An agent's answer to `turn` (in_reply_to), now (`latest`: the relay's latest turn record). Spoken
+   * when it still belongs to the moment; the answer the front is waiting for always is (but a minute
+   * on); the others are context or dropped (FrontFate).
+   */
+  fate(turn: string, latest: { id: string; at: number } | undefined): FrontFate {
+    const p = this.past.get(turn);
+    const at = p?.at ?? (latest?.id === turn ? latest.at : undefined);
+    if (at !== undefined && this.h.clock.now() - at > TURN_HOLD_MS) return { speak: false, as: "dropped", reason: "old_turn" };
+    if (p?.held) return { speak: true };
+    let last: string | undefined;
+    for (const k of this.past.keys()) last = k;
+    const open = this.h.openTurn();
+    if ((latest && latest.id !== turn) || (last !== undefined && last !== turn) || (open !== undefined && open !== turn)) {
+      return this.live ? { speak: false, as: "context", reason: "newer_turn" } : { speak: false, as: "dropped", reason: "conversation_over" };
+    }
+    if (!this.live && p?.answered) return { speak: false, as: "dropped", reason: "conversation_over" };
+    return { speak: true };
+  }
+
+  /**
+   * The front on, agent `hash`'s say / talk answering `turn` (in_reply_to): its answer to that turn
+   * again gets the first one's job (unless that failed); one that no longer belongs to the moment
+   * (fate) is not spoken: the front has it as context, its job is done at once saying so.
+   * undefined: speak it.
+   */
+  async lateAnswer(kind: "say" | "talk", hash: string, by: Who | undefined, turn: string | undefined, text: string | undefined): Promise<{ ok: true; result: JsonObject } | undefined> {
+    if (turn === undefined || text === undefined || !(await this.serving())) return undefined;
+    const first = this.answerOf(hash, turn);
+    const was = first && (await this.h.jobStatus(first));
+    if (was && was !== "failed") return { ok: true, result: { job: first!, repeated: true } };
+    const f = this.fate(turn, await this.h.latestTurn());
+    if (f.speak) return undefined;
+    if (f.as === "context") this.h.box.frontContext(`Your agent's late answer to something the person said earlier (not said aloud): ${text}`);
+    return { ok: true, result: { job: this.answerOf(hash, turn, await this.h.doneJob(kind, by, lateResult(f)))! } };
+  }
+
+  /** The answer of agent `hash` to `turn` (its job), or records `job` as it (a retry of a failed one replaces it). */
+  answerOf(hash: string, turn: string | undefined, job?: string): string | undefined {
+    const k = `${hash} ${turn}`;
+    if (job === undefined || turn === undefined) return this.answers.get(k);
+    this.answers.delete(k);
+    this.answers.set(k, job);
+    while (this.answers.size > 16) this.answers.delete(this.answers.keys().next().value!);
+    return job;
   }
 
   /** The agent is answering: no "still waiting". */
@@ -303,6 +402,12 @@ export class FrontTalk {
     await this.h.record({ ts: this.h.clock.now(), kind: "voice_box", ev: "front.session", data });
     // the box closed its session by itself at a hard limit: the conversation cannot go on
     if (f.state === "closed" && typeof f.reason === "string" && ["daily_cap", "max_session"].includes(f.reason)) await this.end(`box_${f.reason}`);
+  }
+
+  /** The owner's view (GET …/voice `front`): the switch, whether it serves and why not, the conversation. */
+  view(front: string | undefined, mode: string, box: { front?: boolean } | undefined, engine: string | null): JsonObject {
+    const why = frontWhyNot(front, mode, box);
+    return { mode: front ?? "off", available: !!box?.front, serving: !why, ...(why && front === "on" ? { reason: why } : {}), conversation: this.live, engine };
   }
 
   /** The agent's `front {context?, end?}`: silent background for the front, or the conversation's end. */
