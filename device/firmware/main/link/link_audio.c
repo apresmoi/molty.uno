@@ -143,9 +143,10 @@ static void drain(void)
 /* A word is revealed this much before the speaker's estimated position reaches its cue: what
  * happens between that decision and the glass, so the word lands with its voice. The estimate
  * lags the DAC by ~7.5 ms on average (the writer blocks with 1200..1440 samples queued, not the
- * full 1440 it assumes), the reader picks the cue up on its next 30 ms frame (~15 ms), and the
- * check runs once per 15 ms write (~7.5 ms). */
-#define CUE_LEAD_SAMPLES (16 * 30)
+ * full 1440 it assumes), the check runs once per 15 ms write (~7.5 ms), the frame it goes with
+ * is handed to the drawer at the next pulse pair (0 to 33 ms: mole_fluid.c takes a word up to
+ * the handoff) and sent in ~20 ms: on the glass from ~35 ms before its sound to ~20 ms after. */
+#define CUE_LEAD_SAMPLES (16 * 50)
 /* PCM per speaker write in play(): one DMA descriptor (240 samples, 15 ms), so the cue check
  * runs every 15 ms rather than every 32 ms */
 #define PLAY_WRITE_BYTES 480
@@ -162,10 +163,27 @@ static void cue_follow(bool all)
     marks_follow(all);
 }
 
+/* Nothing is spoken before the screen can show it: with its first sound in hand, the words it starts with are shown (their
+ * cues reached) and that sound waits for the first of them on the glass (the frame it goes with is on the panel a pulse
+ * and a send later: 35 to 60 ms), SAY_GATE_MS at most, a tick at a time: never longer, the voice matters more. */
+#define SAY_GATE_MS 70
+static void say_gate(void)
+{
+    if (s_cued && s_cue[0] == UINT32_MAX) s_cue[0] = 0;   /* (its cue not in yet, as the cloud's come: the first word starts the stream) */
+    cue_follow(false);
+    const int64_t t0 = esp_timer_get_time();
+    /* (a say whose voice starts with a silence reveals its first word at its cue, as the speaker reaches it: no wait) */
+    while ((!s_cued || s_cue_next > 0) && !mole_fluid_text_shown(s_say_text_ver, 0) &&
+           esp_timer_get_time() - t0 + pdTICKS_TO_MS(1) * 1000LL <= SAY_GATE_MS * 1000LL)
+        vTaskDelay(1);
+    mole_fluid_say_sound(s_say_text_ver, (int)((esp_timer_get_time() - t0) / 1000));
+}
+
 static esp_err_t play(void)
 {
     esp_err_t e = molty_speaker_stream_begin(16000);
     if (e != ESP_OK) { if (s_cued) mole_fluid_text_cue_end(); return e; }
+    bool first = true;
     while (!atomic_load(&s_cancel)) {
         size_t n;
         void *pcm = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(50), PLAY_WRITE_BYTES);
@@ -175,6 +193,7 @@ static esp_err_t play(void)
             pcm = xRingbufferReceiveUpTo(s_ring, &n, 0, PLAY_WRITE_BYTES);
             if (!pcm) break;
         }
+        if (pcm && first) { first = false; say_gate(); }
         if (pcm) {
             e = molty_speaker_stream_write(pcm, n / 2);
             vRingbufferReturnItem(s_ring, pcm);
@@ -187,6 +206,7 @@ static esp_err_t play(void)
     if (e == ESP_OK && !atomic_load(&s_cancel)) e = molty_speaker_stream_drain();
     molty_speaker_stream_end();
     if (s_cued) {                        /* played out: the last words, then the reader's own pace */
+        mole_fluid_say_spoken(s_say_text_ver, s_cue_next);   /* (the words the speaker reached: the say's log line) */
         if (e == ESP_OK && !atomic_load(&s_cancel)) cue_follow(true);
         mole_fluid_text_cue_end();
     }

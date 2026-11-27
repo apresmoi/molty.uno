@@ -115,6 +115,14 @@ void mole_fluid_text_cue(int w) {
     assert(w>cue_last && cue_n<64); cue_w[cue_n]=w; cue_at[cue_n++]=molty_speaker_stream_played(); cue_last=w;
 }
 void mole_fluid_text_cue_end(void) { cue_ends++; }
+/* the screen's side of a say's gate (mole_fluid.c): its first word whole on the glass from glass_at (us; < 0: never), the
+ * first sound's report (when, what was revealed before it, its wait) and the words the speaker reached */
+static int64_t glass_at=0; static unsigned shown_ver; static int sound_n, sound_cues=-1, sound_gate=-1, spoken_n=-9; static size_t sound_written;
+static int64_t first_write=-1;
+bool mole_fluid_text_shown(unsigned v, int w) { shown_ver=v; return w==0 && glass_at>=0 && sdk_now>=glass_at; }
+void mole_fluid_say_sound(unsigned v, int gate_ms) { (void)v; sound_n++; sound_cues=cue_n; sound_gate=gate_ms; sound_written=sdk_written; }
+void mole_fluid_say_spoken(unsigned v, int n) { (void)v; spoken_n=n; }
+static void first_write_at(const int16_t *pcm, size_t n) { (void)pcm; (void)n; if (first_write<0) first_write=sdk_now; }
 /* a say's marks (mole_fluid.c): what fired, at which playback position, after which word */
 static int mark_n; static char mark_what[32][16]; static uint32_t mark_at[32]; static int mark_word[32]; static unsigned spoke;
 static void mark_log(const char *w) { assert(mark_n<32); strcpy(mark_what[mark_n],w); mark_at[mark_n]=molty_speaker_stream_played(); mark_word[mark_n++]=cue_last; }
@@ -632,7 +640,7 @@ static void test_say_cues(void) {
     for (int i=0;i<cue_n;i++) {
         const uint32_t due=at[cue_w[i]];
         if (i==cue_n-1 && cue_w[i]==3) continue;          /* 9000 > the 8800 played before the drain: shown at the end */
-        const uint32_t lead=16*30;
+        const uint32_t lead=16*50;
         assert(cue_at[i]+lead>=due);                       /* never more than the lead ahead of the voice */
         assert(due<=lead || cue_at[i]+lead-due<=240 || (i>0 && cue_at[i-1]+lead<at[cue_w[i]-1]));   /* within one 15 ms write (a cue under the lead: the first one) */
     }
@@ -648,6 +656,40 @@ static void test_say_cues(void) {
     complete(play()); assert(cue_ends==1 && !link_audio_busy());
 }
 
+/* nothing is spoken before the screen can show it: with the first sound in hand the words it starts with are revealed,
+ * and that sound waits for the first of them on the glass, 70 ms at most; a say whose first cue is past the reveal lead
+ * (silence first) reveals nothing early and never waits; a plain say waits for its word 0 too */
+static void test_say_gate(void) {
+    sdk_on_speaker_write=first_write_at;
+    static const int64_t when[3]={0,30000,-1};             /* the glass shows it at once, 30 ms later, never */
+    for (int c=0;c<3;c++) {
+        cue_n=0; cue_ends=cue_hold=0; cue_last=-9; sound_n=0; sdk_written=0; first_write=-1;
+        assert(say_with(",\"cues\":true"));
+        assert(receive_cued(0,true,"[[0,0],[1,3000]]")==ESP_OK);
+        const int64_t t0=sdk_now;
+        glass_at=when[c]<0 ? -1 : t0+when[c];
+        complete(play());
+        const int waited=(int)((first_write-t0)/1000);
+        assert(sound_n==1 && sound_cues==1 && cue_w[0]==0 && sound_written==0);   /* word 0 shown before any sound */
+        assert(shown_ver==text_ver && sound_gate==waited);
+        if (c==0) assert(waited==0);
+        if (c==1) assert(waited>=30 && waited<=31);
+        if (c==2) assert(waited>=60 && waited<=70);            /* never past 70 ms */
+        assert(spoken_n>=1);
+    }
+    /* the first word's cue past the lead (silence first): nothing revealed early, no wait */
+    cue_n=0; cue_last=-9; sound_n=0; sdk_written=0; first_write=-1; glass_at=-1;
+    assert(say_with(",\"cues\":true")); assert(receive_cued(0,true,"[[0,2000],[1,3000]]")==ESP_OK);
+    int64_t t0=sdk_now; complete(play());
+    assert(sound_n==1 && sound_cues==0 && first_write==t0);
+    /* a plain say: no cue, its word 0 (the reader's own) awaited all the same */
+    cue_n=0; sound_n=0; sdk_written=0; first_write=-1; glass_at=-1;
+    assert(say_with("")); assert(receive_cued(0,true,NULL)==ESP_OK);
+    t0=sdk_now; complete(play());
+    assert(sound_n==1 && cue_n==0 && first_write-t0>=60000 && first_write-t0<=70000);
+    glass_at=0; sdk_on_speaker_write=NULL;
+}
+
 /* say marks (cap say_marks): each fires when its word is shown — right after that word's cue,
  * at the same playback position — a mark past the last cued word when playback ends; the say
  * ends in its last mood mark (not idle) unless an explicit mood came meanwhile; never while a
@@ -661,10 +703,10 @@ static void test_say_marks(void) {
     assert(receive_cued(1,true,"[[2,6000],[3,9000]]")==ESP_OK);
     esp_err_t e=play();
     assert(mark_n==4);
-    assert(!strcmp(mark_what[0],"happy") && mark_word[0]==0 && mark_at[0]+16*30>=at[0]);
+    assert(!strcmp(mark_what[0],"happy") && mark_word[0]==0 && mark_at[0]+16*50>=at[0]);
     assert(mark_ver==say_ver && mark_ver!=text_ver);             /* the say's own words' version: mole_fluid tints nothing newer */
     assert(!strcmp(mark_what[1],"thinking") && !strcmp(mark_what[2],"nod"));
-    assert(mark_word[1]==2 && mark_word[2]==2 && mark_at[1]+16*30>=at[2] && mark_at[1]+16*30-at[2]<=240);   /* with word 2's reveal */
+    assert(mark_word[1]==2 && mark_word[2]==2 && mark_at[1]+16*50>=at[2] && mark_at[1]+16*50-at[2]<=240);   /* with word 2's reveal */
     assert(!strcmp(mark_what[3],"wiggle") && mark_word[3]==3);   /* trailing: at the end */
     complete(e);
     assert(!strcmp(sdk_mood,"thinking") && sdk_hold_s==8 && spoke==1);   /* ends in its last mood, not idle */
@@ -1151,7 +1193,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);
