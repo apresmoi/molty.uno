@@ -20,11 +20,12 @@
 // The voice front (docs/AGENT-LINK.md "Voice front"; a box whose hello says "front": 1, core/front.ts):
 //   relay → box  stt.start adds "front": true (answer this listen yourself at the turn's end; "hold": true,
 //                held to talk: the release ends it, never your turn detection)
-//   relay → box  {"t":"tts",…,"front":"own"|"exact"|"wait"} (the agent's answer: in the front's words / verbatim /
-//                "still waiting"), {"t":"front.context","text"}, {"t":"front.end","reason"}
+//   relay → box  {"t":"tts",…,"front":"inner"|"wait","exact"?} (the agent's thought: voiced or absorbed by the front /
+//                "still waiting"), {"t":"front.context","text","persona"?}, {"t":"front.end","reason"}
 //   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
 //                {"t":"front.reply","id","stt","ms"?} then frames s=id, tts.word, {"t":"tts.text","id","text","final"?},
-//                {"t":"tts.end","id","wait"?,"ms"?} (as a tts; wait: the front handed the turn to the agent)
+//                {"t":"tts.end","id","wait"?,"absorbed"?,"ms"?} (as a tts; wait: the front handed the turn to the
+//                agent; absorbed: it kept the agent's thought and said nothing)
 //                {"t":"front.session","state","reason"?,"s"?,"usage"?,"today_s"?} (the box's session, for the log)
 //
 // Every request is bound to the socket it went out on: when that socket closes
@@ -51,13 +52,15 @@ export interface BoxChannel {
 export interface FrontSpeech {
   readonly id: string;
   readonly feed: PcmFeed;
-  /** own / exact / wait (an agent's answer, the relay's "still waiting"), reply (the front's own answer to a turn). */
-  readonly mode: "own" | "exact" | "wait" | "reply";
+  /** inner (an agent's thought: the front voices or absorbs it), wait (the relay's "still waiting"), reply (the front's own answer to a turn). */
+  readonly mode: "inner" | "wait" | "reply";
   /** What is being said so far; `final` once the box says it is complete. */
   said: string;
   final: boolean;
   /** The front handed the person's turn to the agent (its reply was a holding line). */
   wait: boolean;
+  /** inner: the front kept the thought and said nothing (it repeated what was said). */
+  absorbed?: boolean;
   /** The box's timings ({created} on a front.reply, {first_audio, total} at the end). */
   boxMs: JsonObject;
   /** Resolves when the box ended the stream (all of it generated: said and wait are final). */
@@ -85,7 +88,7 @@ interface FrontOp {
   ch: BoxChannel;
   sp: FrontSpeech;
   /** The box ended it (error = failed). */
-  end(error?: Error, wait?: boolean, ms?: JsonObject): void;
+  end(error?: Error, wait?: boolean, ms?: JsonObject, absorbed?: boolean): void;
   text(said: string, final: boolean): void;
 }
 interface SttOp {
@@ -223,24 +226,24 @@ export class RemoteVoiceProvider implements VoiceProvider {
 
   // ---------------- the voice front ----------------
 
-  /** The agent's answer (or "still waiting") spoken by the box's front: tts {front: mode}. Throws when no box. */
-  frontSpeak(text: string, mode: "own" | "exact" | "wait"): FrontSpeech {
+  /** The agent's thought (or "still waiting") for the box's front: tts {front: mode, exact?}. Throws when no box. */
+  frontSpeak(text: string, mode: "inner" | "wait", exact = false): FrontSpeech {
     const ch = this.channel();
     const id = this.newId("t");
     const sp = this.frontOp(ch, id, mode);
     try {
-      ch.sendText(JSON.stringify({ t: "tts", id, text, front: mode }));
+      ch.sendText(JSON.stringify({ t: "tts", id, text, front: mode, ...(exact ? { exact } : {}) }));
     } catch {
       this.frontOps.get(id)?.end(new Error(BOX_OFFLINE));
     }
     return sp;
   }
 
-  /** Silent context for the front (the agent's `front {context}`); false: no box. */
-  frontContext(text: string): boolean {
+  /** Silent context for the front (kept across its sessions; `persona`: the agent's standing persona line); false: no box. */
+  frontContext(text: string, persona = false): boolean {
     const ch = this.link();
     if (!ch) return false;
-    this.sendQuiet(ch, { t: "front.context", text });
+    this.sendQuiet(ch, { t: "front.context", text, ...(persona ? { persona } : {}) });
     return true;
   }
 
@@ -287,9 +290,10 @@ export class RemoteVoiceProvider implements VoiceProvider {
         sp.final ||= final;
         poke();
       },
-      end: (error, wait, ms) => {
+      end: (error, wait, ms, absorbed) => {
         this.frontOps.delete(id);
         sp.wait = !!wait;
+        sp.absorbed = !!absorbed;
         sp.final = true;
         if (ms) Object.assign(sp.boxMs, ms);
         feed.end(error);
@@ -414,7 +418,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     } else if (frame.t === "tts.end") {
       const err = typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined;
       const fop = this.frontOps.get(id);
-      if (fop && fop.ch.same(from)) return fop.end(err, frame.wait === true, isRecord(frame.ms) ? cleanMs(frame.ms) : undefined);
+      if (fop && fop.ch.same(from)) return fop.end(err, frame.wait === true, isRecord(frame.ms) ? cleanMs(frame.ms) : undefined, frame.absorbed === true);
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
       op.feed.end(err);

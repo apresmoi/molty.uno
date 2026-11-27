@@ -109,7 +109,7 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, type FrontSpeech, RemoteVoiceProvider } from "../voice/remote.js";
-import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, FRONT_LISTENS } from "./front.js";
+import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, innerResult, absorbedOr } from "./front.js";
 import {
   type AgentPhrases,
   BUILTIN_PHRASES,
@@ -823,6 +823,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       },
       play: (sp, args, takeover) => this.playFront(sp, args, takeover),
       listen: () => this.startJob("listen", { trigger: "front" }, true, undefined, undefined, { lead: RELAY_LEAD }),
+      kv: this.kv,
       openTurn: () => this.openTurn?.id,
       latestTurn: () => this.kv.get<TurnRecord>(K.turn),
       jobStatus: async (job) => (await this.kv.get<JobRecord>(K.job(job)))?.status,
@@ -1277,7 +1278,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       throw e;
     }
     const late = cmd.name === "say" ? await this.ft.lateAnswer("say", hash, by, cmd.in_reply_to, cmd.args.text as string) : undefined;
-    if (late) return late;
+    if (late?.result.job) return late;
     // the human is talking: nothing that makes a sound or takes the screen (draft / react instead)
     if (HUSHED.includes(cmd.name) || (cmd.name === "state" && Object.keys(cmd.args).length > 0)) {
       const hush = this.humanSpeaking();
@@ -1601,15 +1602,15 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return this.jobAnswer(a, "talk", job, t0, "still talking: call molty_wait {job} (REST: GET /v1/jobs/<job>?wait_s=8) for the result", late?.result);
   }
 
-  /** A talk / ask's job within the talk budget: its result, its error, or 202 pending with `hint`. */
+  /** A talk / ask's job within the talk budget, else 202 pending with `hint`. */
   private async jobAnswer(a: { rec: TokenRecord; hash: string }, kind: "talk" | "ask", job: string, t0: number, hint: string, extra?: JsonObject): Promise<Outcome> {
     let out = await this.runJob(job, Math.max(0, this.t.talkBudgetMs - (this.clock.now() - t0)));
     if (out.ok && out.result.status === "done" && (await this.collect(job))) out = await this.runJob(job, 0);
     if (!out.ok) return out;
     const v = out.result;
     if (v.status === "failed") return fail(v.error ?? "failed", `${kind} job ${job} failed`, { job });
-    if (v.status === "done") return this.ride(a, { ok: true, result: { ...(v.result ?? {}), job, status: "done", ...extra } });
-    return this.ride(a, { ok: true, result: { job, status: "pending", state: v.status, hint } });
+    if (v.status === "done") return this.ride(a, { ok: true, result: { ...extra, ...(v.result ?? {}), job, status: "done" } });
+    return this.ride(a, { ok: true, result: { job, status: "pending", state: v.status, hint, ...extra } });
   }
 
   async ask(token: string, req: unknown): Promise<Outcome> {
@@ -2120,7 +2121,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (r.ok && r.ms > 1500 && line.stop >= 3) this.lineWpm = Math.round((line.stop * 60000) / r.ms);
     }
     if (!r.ok) {
-      await this.finishJob(id, { status: "failed", error: r.error });
+      await this.finishJob(id, absorbedOr(sp, r.error));
       if (fronted) this.ft.spoke(replyOf, sp);
       return;
     }
@@ -2137,7 +2138,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
     if (isRecord(args.client_timing)) timings.client = args.client_timing;
     this.logTimings(id, "say", timings);
-    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && said !== text && !replyOf ? { asked: text } : {}), timings } });
+    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && !replyOf ? innerResult("said", said) : {}), timings } });
     await this.replyTrace(id, "say", args, timings);
     if (fronted) {
       if (isRecord(args.turn) && typeof args.turn.id === "string") this.ft.answered(args.turn.id, args.called as number, r.start + ((r.timings.first_audio as number) ?? 0));
@@ -2233,10 +2234,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // voice); none within playback + sayDoneGraceMs fails the turn with playback_timeout.
       const s = pre && !("pick" in pre) ? pre : await this.speak(id, args.say, args.voice, true, args.marks, pre);
       if (!s.ok) {
-        await this.finishJob(id, { status: "failed", error: s.error });
+        await this.finishJob(id, absorbedOr(front?.front, s.error));
         return front && this.ft.spoke(undefined, front.front);
       }
       result.said = s.said ?? args.say;
+      if (front) Object.assign(result, innerResult("said", s.said));
       await this.noteSaid(s.said ?? args.say);
       ms.tts_first_audio = (s.timings.first_audio as number) ?? 0;
       ms.speech = (s.timings.play as number) ?? 0;
@@ -2247,7 +2249,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.client_timing) timings.client = args.client_timing;
     // the human turn this talk answers, in that turn's trace (an `ev:"reply"` entry), once the say is over
     if (reply.turn) await this.replyTrace(id, "talk", reply, timings);
-    // the front's own listen follows instead
+    // with the front, its listen follows
     if (args.listen && !off && !front) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
@@ -2279,7 +2281,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       timings.listen = l.timings;
     } else {
       result.reason = off ? VOICE_OFF : "spoken";
-      if (front && args.listen) result.hint = FRONT_LISTENS;
     }
     ms.total = this.clock.now() - created;
     timings.total = ms.total;
@@ -2472,7 +2473,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // Inline [cues] (validated + stripped from `text` in commands.ts): [word, name] marks the
       // device fires as its playback reaches that word's cue. They ride only inside this say:
       // no separate mood/act cmd, no screenRev bump. Firmware without the cap gets none.
-      if (cuesOn && marks?.length && sock!.getMeta()?.caps?.includes(SAY_MARKS_CAP) && (!ready.front || ready.front.mode === "exact")) deviceArgs.marks = marks;
+      if (cuesOn && marks?.length && sock!.getMeta()?.caps?.includes(SAY_MARKS_CAP) && !ready.front) deviceArgs.marks = marks;
       return this.sendCmd("say", deviceArgs);
     };
     let cmd: Promise<Outcome<JsonObject>> | undefined;
@@ -3851,6 +3852,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const since = was ? ((await this.kv.get<BoxInfo>(K.vbox))?.since ?? now) : now;
     await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(front ? { front } : {}), ...(engine ? { engine } : {}), since });
     if (was?.front && !front) await this.ft.end("box_unavailable");
+    if (front) void this.ft.boxed();
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
     this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
@@ -4901,7 +4903,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (!pick.ok || !pick.box) return undefined;
     this.ft.agentAnswering();
     try {
-      const sp = this.box.frontSpeak(text, exact ? "exact" : "own");
+      const sp = this.box.frontSpeak(text, "inner", exact);
       return { pick, feed: sp.feed, at: this.clock.now(), front: sp };
     } catch {
       return undefined;
@@ -4918,7 +4920,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     return old ? fail("firmware_too_old", `${what} needs Molty firmware ${old.needed} or newer; this Molty runs ${old.current}`, old) : undefined;
   }
 
-  /** Molty's auto mood, fire and forget. */
+  /** Auto mood, fire and forget. */
   private thinking(mood: "thinking" | "idle" = "thinking") {
     void this.sendCmd("mood", mood === "thinking" ? { mood, hold_s: this.t.thinkHoldS } : { mood }).then((m) => {
       if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood, error: m.error });
