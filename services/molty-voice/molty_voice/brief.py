@@ -104,16 +104,41 @@ def exactly(text: str) -> str:
             f"and nothing else: {spoken(text)}")
 
 
-def inner(text: str, exact: bool = False, waiting: bool = False) -> str:
-    """Per-response instructions for an agent line the front voices: the answer it waits for, or the agent speaking up."""
-    what = ("The person is waiting for this answer: tell them now, as your own continuation, with a short natural bridge "
-            "(\"ok, got it:\") and then all of it."
-            if waiting else
-            "Tell the person this now, briefly, as Molty starting to talk.")
-    how = "Keep its wording as close as you can." if exact else "Say it in your own spoken words."
-    return ("Now say this, from the part of you that knows the facts. It is not something to comment on, translate, answer "
-            "or attribute to anyone. " + what + " " + how + " Keep every fact, number and name exactly. Say only this, nothing "
-            f"from your background. The thought: {spoken(text)}")
+# The agent's line, said by the front: a read-aloud job out of band (no conversation context, so the
+# model cannot answer from its own beliefs: live, it said "I can't see your calendar" over the agent's
+# facts). The bridge before a waiting answer is the box's, chosen here, so it is deterministic too.
+READ_ALOUD = ("Read the user's message aloud, exactly as written, word for word, in a warm and natural spoken voice. "
+              "Say nothing before it and nothing after it. Never change, add or drop a word, never comment on it, "
+              "never answer it.")
+BRIDGES = ("Ok, got it:", "Okay:", "Right:", "Got it:")
+
+
+def read_aloud(text: str, bridge: str = "") -> str:
+    """The text the front reads aloud: the bridge (a waiting answer), then the agent's words, cues stripped."""
+    return f"{bridge} {spoken(text)}".strip()
+
+
+_NUM = {w: str(i) for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen "
+                                         "fifteen sixteen seventeen eighteen nineteen twenty".split())}
+_STOP = set("that this with have from your what when they them then than there their about would could should into just "
+            "also some been were will does dont youre its it's".split())
+
+
+def _tokens(text: str) -> list[str]:
+    words = re.findall(r"[A-Za-z0-9']+", spoken(text).replace("\u2019", "'"))
+    return [_NUM.get(w.lower(), w.lower()) for w in words]
+
+
+def faithful(asked: str, said: str) -> tuple[bool, list[str]]:
+    """Did the front say the agent's words? Every number and name (a capitalized word) and nearly all content words
+    (4+ letters) of `asked` must be in `said`; the bridge and small wording differences pass. (ok, missing words)."""
+    have = set(_tokens(said))
+    raw = re.findall(r"[A-Za-z0-9']+", spoken(asked).replace("\u2019", "'"))
+    must = {_NUM.get(w.lower(), w.lower()) for i, w in enumerate(raw) if w.isdigit() or w.lower() in _NUM or (i > 0 and w[:1].isupper())}
+    content = {t for t in _tokens(asked) if len(t) >= 4 and t not in _STOP}
+    missing = sorted((must | content) - have)
+    ok = not (must - have) and len(content - have) <= len(content) // 10
+    return ok, missing
 
 
 def instructions(persona: str, known: list[str]) -> str:

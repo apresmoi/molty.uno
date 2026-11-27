@@ -65,8 +65,9 @@ _ws_log = logging.getLogger("molty_voice.realtime.socket")
 _ws_log.setLevel(logging.WARNING)
 
 PROVIDER_RATE = 24000
-# The model ended a turn: its own commit comes at once (2 ms live); without it this long, the box commits.
-COMMIT_WAIT_S = 1.0
+# The model ended a turn: its own commit comes at once (within 2 ms in every live turn); without it this long,
+# the box commits itself. A fallback only: no live turn has waited on it.
+COMMIT_WAIT_S = 0.3
 # What the front keeps of the agent across sessions: its last lines, each and in all at most this long.
 # Lines older than the relay's longest conversation (15 min) are dropped.
 MEMORY_LINES, MEMORY_LINE, MEMORY_CHARS, MEMORY_MAX_AGE_S = 8, 500, 2000, 900.0
@@ -115,6 +116,8 @@ class _Speech:
     cancelled: bool = False
     exact: bool = False  # inner: keep the agent's wording as close as it can
     awaited: bool = False  # inner: the answer the front waits for (WAITING)
+    asked: str = ""  # inner: the exact text it was told to read aloud
+    faithful: bool = True  # inner: what it said holds every number, name and content word of `asked`
 
 
 def realtime_url(base: str, model: str) -> str:
@@ -154,6 +157,7 @@ class RealtimeFront:
         self._persona = ""  # the agent's standing persona line (front {context, persona}), in every session's brief
         self._waiting_for: str | None = None  # WAITING: the listen whose turn the front handed to the agent
         self._talking = False  # a conversation is going on: a front listen ran in this session
+        self._bridge = 0  # which of brief.BRIDGES came last
         self.capped = False
         self.close_reason = ""
 
@@ -481,9 +485,13 @@ class RealtimeFront:
         meta = {"molty": s.sid}
         eid = {"event_id": f"rc_{s.sid}"}  # an error for this request names it (error.event_id)
         if s.kind == "inner":
-            # the agent's answer it waited for, or the agent speaking up (per-response instructions: a bare system message gets reacted to)
-            say = self._instructions() + "\n\n" + brief.inner(s.text, s.exact, s.awaited)
-            await self._send({"type": "response.create", **eid, "response": {"instructions": say, "tool_choice": "none", "metadata": meta}})
+            # the agent's line, read aloud out of band: its own input, no conversation context, no tools (live, a
+            # model in the conversation contradicted the agent's facts); the bridge before a waiting answer is ours
+            self._bridge = (self._bridge + 1) % len(brief.BRIDGES)
+            s.asked = brief.read_aloud(s.text, brief.BRIDGES[self._bridge] if s.awaited else "")
+            await self._send({"type": "response.create", **eid, "response": {
+                "conversation": "none", "output_modalities": ["audio"], "instructions": brief.READ_ALOUD, "tool_choice": "none",
+                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": s.asked}]}], "metadata": meta}})
         elif s.kind == "plain":
             await self._send({"type": "response.create", **eid, "response": {"instructions": brief.exactly(s.text), "tool_choice": "none", "metadata": meta}})
         elif s.kind == "wait":
@@ -575,6 +583,14 @@ class RealtimeFront:
                 await self._send({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": item.get("call_id"),
                                                                              "output": json.dumps({"ok": True, "note": "Your inner voice is on it: you will be told its answer."})}})
         status = resp.get("status")
+        if s.kind == "inner" and s.samples:
+            # verified, never assumed: a deviation is reported (tts.end faithful false), and what was said joins the conversation
+            ok, missing = brief.faithful(s.asked, s.said)
+            s.faithful = ok
+            log.log(logging.INFO if ok else logging.WARNING, "front %s: read aloud %s%s", s.sid, "as asked" if ok else "NOT as asked",
+                    "" if ok else f", missing {' '.join(missing[:12])}")
+            await self._send({"type": "conversation.item.create", "event_id": f"ci_{s.sid}",
+                              "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": s.said.strip()[:4000]}]}})
         if s.kind == "reply" and s.wait and not (self._listen and self._listen.mid != s.listen and self._listen.speech):
             self._waiting_for = s.listen  # WAITING for this turn (unless the person has already spoken again)
         log.info("front %s (%s): response %s, said %r", s.sid, s.kind, status, s.said.strip()[:300])
@@ -593,6 +609,8 @@ class RealtimeFront:
             end["error"] = error[:200]
         if s.wait:
             end["wait"] = True
+        if not s.faithful:
+            end["faithful"] = False
         if s.first is not None:
             end["ms"] = {"first_audio": round((s.first - s.t0) * 1000), "total": round((time.monotonic() - s.t0) * 1000)}
         await self._send_json(end)

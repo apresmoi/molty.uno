@@ -26,7 +26,7 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
                  reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True,
-                 commit_event_ms: int = 0, ends_together: bool = False):
+                 commit_event_ms: int = 0, ends_together: bool = False, misread=None):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -48,6 +48,8 @@ class FakeRealtime:
         # the device's end and the model's own end of one turn together: when turn detection is switched off
         # mid speech, the model has just ended the turn itself (speech_stopped, its commit) before that
         self.ends_together = ends_together
+        # a read-aloud request (out of band, its own input): what the model says for the text (live: it changed facts)
+        self.misread = misread or (lambda text: text)
         self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
         self.threshold = threshold
         self.sessions: list[dict] = []
@@ -131,13 +133,16 @@ class FakeRealtime:
             st["active"] = rid
             await send({"type": "response.created", "response": {"id": rid, "status": "in_progress", "metadata": meta}})
             instr = (req or {}).get("instructions") or ""
-            kind = ("auto" if req is None else "reply" if not instr else "inner" if "The thought:" in instr
+            given = [c.get("text", "") for i in (req or {}).get("input") or [] for c in i.get("content") or [] if c.get("type") == "input_text"]
+            kind = ("auto" if req is None else "inner" if given else "reply" if not instr
                     else "wait" if "still working" in instr else "plain")
             self.log.append({"t": time.monotonic(), "ev": "create", "kind": kind, "speaking": st["speech"]})
-            m = re.search(r"(?:word for word, and nothing else|The thought): (.*)$", instr, re.S)
+            m = re.search(r"word for word, and nothing else: (.*)$", instr, re.S)
             tool = False
-            if m:
-                words = ("Ok, got it: " if "waiting for this" in instr else "So, " if "own spoken words" in instr else "") + m.group(1).strip()
+            if given:
+                words = self.misread(" ".join(given).strip())
+            elif m:
+                words = m.group(1).strip()
             elif "still working on the person's request" in instr:
                 words = "Still on it, one moment."
             elif req is not None and sess["items"] and sess["items"][-1].startswith("Inner voice: "):
@@ -146,7 +151,7 @@ class FakeRealtime:
                 heard = heard or st["heard"]
                 turn = next((t for t in self.script if t["heard"] == heard), None)
                 words, tool = (turn["said"], bool(turn.get("handoff"))) if turn else self.reply(heard)
-            if self.recite and instr:
+            if self.recite and instr and not given:
                 pending = [i[len("Inner voice context: "):] for i in sess["items"][st["recited"]:] if isinstance(i, str) and i.startswith("Inner voice context: ")]
                 st["recited"] = len(sess["items"])
                 words = " ".join(pending + [words]).strip()
