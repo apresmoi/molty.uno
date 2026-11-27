@@ -16,6 +16,9 @@ DEFAULT_VOICES = [
     "unmute-prod-website/default_voice.wav",
 ]
 
+# The provider's voices (developers.openai.com realtime guide; marin and cedar are its recommended ones).
+REALTIME_VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"]
+
 
 def default_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
@@ -63,11 +66,41 @@ class Config:
     opener: bool = False
     opener_url: str = "http://127.0.0.1:11434"
     opener_model: str = "gemma3:4b"
+    # The engine behind this box: "kyutai" (the local GPU stack above) or "realtime" (a realtime
+    # speech-to-speech model reached with the owner's own key: Molty's conversational front,
+    # molty_voice/realtime.py; no GPU, none of the kyutai settings are used).
+    engine: str = "kyutai"
+    # The owner's provider key. Prefer the environment (MOLTY_REALTIME_KEY, else OPENAI_API_KEY) or
+    # put it here: this file is 0600. Never logged, never printed, never sent to the relay.
+    realtime_key: str = ""
+    realtime_url: str = "wss://api.openai.com/v1/realtime"
+    realtime_model: str = "gpt-realtime-2.1-mini"
+    realtime_voice: str = "marin"
+    realtime_voices: list[str] = field(default_factory=lambda: list(REALTIME_VOICES))
+    # Transcript of what the person said (the agent's utterance). The realtime model hears the audio
+    # itself; this is a separate transcription model the provider runs on the same turn.
+    realtime_transcribe: str = "gpt-4o-mini-transcribe"
+    # End of the person's turn: "semantic" (semantic_vad, by meaning; eagerness low | medium | high | auto)
+    # or "server" (server_vad, by silence: realtime_silence_ms).
+    realtime_turn: str = "semantic"
+    realtime_eagerness: str = "high"
+    realtime_silence_ms: int = 500
+    realtime_max_output_tokens: int = 800
+    # Cost guards (the key is the owner's): a session closes after this long without anything
+    # happening, after this long in all, and no session opens once today's minutes are used (0 = no cap).
+    realtime_idle_s: float = 45.0
+    realtime_max_session_s: float = 600.0
+    realtime_daily_minutes: float = 30.0
 
-    def __repr__(self) -> str:  # never show the token
+    def __repr__(self) -> str:  # never show the token or the key
         d = asdict(self)
         d["token"] = "<set>" if self.token else ""
+        d["realtime_key"] = "<set>" if self.realtime_key else ""
         return f"Config({d})"
+
+    def front_key(self) -> str:
+        """The realtime key: the config's, else the environment's (never written back to the file)."""
+        return self.realtime_key or os.environ.get("MOLTY_REALTIME_KEY", "") or os.environ.get("OPENAI_API_KEY", "")
 
 
 def load(path: Path | None = None) -> Config:

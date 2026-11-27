@@ -20,6 +20,18 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  stt.start said "reflex": true and this box offers it (voice.hello "reflex": true; molty_voice/reflex.py)
                  {"t":"opener.result","id","text","ms","model"} answers {"t":"opener","id","text","history"}, only
                  on a box that offers it (voice.hello "opener": true; molty_voice/opener.py); no "text": no line
+
+  The conversational front (engine "realtime", molty_voice/front.py, docs/AGENT-LINK.md "Voice front"):
+  box -> relay   voice.hello adds "front": 1 (the front protocol's version) and "engine": "realtime"
+  relay -> box   stt.start adds "front": true: answer this listen yourself when the person's turn ends
+                 {"t":"tts",...,"front":"own"|"exact"|"wait"}: the agent's answer in the front's words / verbatim /
+                 "still waiting" (a plain tts is verbatim); {"t":"front.context","text"}; {"t":"front.end","reason"}
+  box -> relay   {"t":"stt.hint","id","k":"speech"} the person started speaking
+                 {"t":"front.reply","id","stt","ms"?} the front answers listen `stt` itself: frames s=id, tts.word,
+                 tts.text, tts.end follow as for a tts
+                 {"t":"tts.text","id","text","final"?} what is being said (the model's output transcript)
+                 {"t":"tts.end","id","wait"?:true,"ms"?} wait: the front handed the turn to the agent (a holding line)
+                 {"t":"front.session","state":"open"|"closed","reason"?,"s"?,"usage"?,"today_s"?}
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
 
@@ -41,7 +53,9 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from . import __version__, framing, opener
 from .audio import DEVICE_RATE, MODEL_RATE, Resampler, fade_in, float_to_pcm16, quiet_lead
 from .config import Config
+from .front import UsageBook
 from .kyutai import SttSession, synthesize
+from .realtime import RealtimeFront
 from .reflex import ReflexTracker
 from .trace import SttTrace
 
@@ -63,8 +77,12 @@ def voice_url(relay: str, device_id: str) -> str:
 
 
 class Bridge:
-    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect, reflex_model=None):
+    def __init__(self, cfg: Config, *, connect=ws_connect, kyutai_connect=ws_connect, reflex_model=None, realtime_connect=ws_connect,
+                 usage_path=None):
         self.cfg = cfg
+        # engine "realtime": the conversational front serves this box's STT and TTS (no Kyutai at all)
+        self.front = (RealtimeFront(cfg, self._send_json, self._send, connect=realtime_connect, book=UsageBook.load(usage_path),
+                                    on_available=self._hello) if cfg.engine == "realtime" else None)
         # the reflex classifier (molty_voice/reflex.py), loaded on the first connect when cfg.reflex; tests inject one
         self.reflex = reflex_model
         self._reflex_tried = reflex_model is not None
@@ -111,26 +129,25 @@ class Bridge:
                 raise Fatal(f"the relay refused this voice box (HTTP {e.response.status_code}): it was unpaired or the token is wrong — run `molty-voice pair` again") from e
             raise
         self._ws = ws
-        if self.cfg.reflex and self.cfg.stt and not self._reflex_tried:
+        if self.front is not None:
+            pass  # no reflex, no first words, no STT anchor: the realtime model is the whole voice
+        elif self.cfg.reflex and self.cfg.stt and not self._reflex_tried:
             self._reflex_tried = True
             from .reflex import load
             self.reflex = await asyncio.to_thread(load, self.cfg.reflex_model, self.cfg.reflex_threads)
-        if self.cfg.opener and not self.opener_ready:
+        if self.front is None and self.cfg.opener and not self.opener_ready:
             self.opener_ready = await asyncio.to_thread(opener.warm, self.cfg.opener_url, self.cfg.opener_model)
         try:
-            hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts}
-            if self.reflex is not None and self.cfg.stt:
-                hello["reflex"] = True
-            if self.opener_ready:
-                hello["opener"] = True
-            await self._send_json(hello)
+            await self._hello()
             self._ensure_prompt()
             last_rx = time.monotonic()
             keepalive = asyncio.create_task(self._keepalive(lambda: last_rx))
             try:
                 async for msg in ws:
                     last_rx = time.monotonic()
-                    if isinstance(msg, bytes):
+                    if isinstance(msg, bytes) and self.front is not None:
+                        await self._on_front_audio(msg)
+                    elif isinstance(msg, bytes):
                         self._on_audio(msg)
                     else:
                         await self._on_text(msg)
@@ -144,9 +161,25 @@ class Bridge:
             self._ws = None
             await self._cancel_all()
 
+    async def _hello(self) -> None:
+        """voice.hello: what this box offers now (sent again when that changes: a realtime box at its daily cap offers nothing)."""
+        if self.front is not None:
+            up = self.front.available()
+            hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.realtime_voices, "stt": up, "tts": up,
+                     "engine": "realtime", **({"front": 1} if up else {})}
+        else:
+            hello = {"t": "voice.hello", "name": self.cfg.name, "version": __version__, "voices": self.cfg.voices, "stt": self.cfg.stt, "tts": self.cfg.tts}
+            if self.reflex is not None and self.cfg.stt:
+                hello["reflex"] = True
+            if self.opener_ready:
+                hello["opener"] = True
+        await self._send_json(hello)
+
     async def _keepalive(self, last_rx) -> None:
         while True:
             await asyncio.sleep(PING_S)
+            if self.front is not None:
+                await self.front.tick_day()
             if time.monotonic() - last_rx() > DEAD_S:
                 log.warning("no answer from the relay for %.0f s: reconnecting", DEAD_S)
                 await self._ws.close(1001, "keepalive timeout")
@@ -177,6 +210,8 @@ class Bridge:
         if t == "voice.welcome":
             log.info("connected to the relay for %s (mode %s)", m.get("device_id"), m.get("mode"))
             self.connected.set()
+        elif self.front is not None:
+            await self._on_front_text(t, mid, m)
         elif t == "opener" and isinstance(mid, str) and isinstance(m.get("text"), str):
             if self.opener_ready:
                 task = asyncio.create_task(self._run_opener(mid, m["text"], m.get("history")))
@@ -207,6 +242,35 @@ class Bridge:
             if task:
                 task.cancel()
 
+    async def _on_front_text(self, t, mid, m: dict) -> None:
+        """The relay's messages, to the front engine (molty_voice/front.py)."""
+        f = self.front
+        text = m.get("text") if isinstance(m.get("text"), str) else None
+        if t == "stt.start" and isinstance(mid, str):
+            ns = m.get("no_speech_ms")
+            no_speech_s = ns / 1000 if isinstance(ns, int) and not isinstance(ns, bool) and 1000 <= ns <= 10000 else None
+            await f.listen_start(mid, m.get("front") is True, no_speech_s)
+        elif t == "stt.end" and isinstance(mid, str):
+            await f.listen_end(mid)
+        elif t == "stt.cancel" and isinstance(mid, str):
+            await f.listen_cancel(mid)
+        elif t == "tts" and isinstance(mid, str) and text is not None:
+            mode = m.get("front") if m.get("front") in ("own", "exact", "wait") else "exact"
+            await f.speak(mid, text[:4000], mode)
+        elif t == "tts.cancel" and isinstance(mid, str):
+            await f.speak_cancel(mid)
+        elif t == "front.context" and text:
+            await f.context(text[:4000])
+        elif t == "front.end":
+            await f.end(str(m.get("reason") or "ended")[:40])
+
+    async def _on_front_audio(self, data: bytes) -> None:
+        try:
+            fr = framing.decode(data)
+        except framing.FrameError:
+            return
+        await self.front.listen_audio(fr.s, fr.payload)
+
     def _on_audio(self, data: bytes) -> None:
         try:
             f = framing.decode(data)
@@ -221,6 +285,8 @@ class Bridge:
     def _ensure_prompt(self) -> None:
         """Starts making the STT language anchor when it is wanted, missing and not being made
         (again at most every PROMPT_RETRY_S: Kyutai TTS may come up after the bridge)."""
+        if self.front is not None:
+            return
         if not (self.cfg.stt and self.cfg.stt_prompt.strip()) or self.stt_prompt is not None:
             return
         if (self._prompt_task and not self._prompt_task.done()) or time.monotonic() - self._prompt_tried < self.PROMPT_RETRY_S:
@@ -266,6 +332,8 @@ class Bridge:
             await s.close()
 
     async def _cancel_all(self) -> None:
+        if self.front is not None:
+            await self.front.close()
         tasks = list(self._tts.values()) + list(self._stt_tasks.values())
         if self._prompt_task is not None and not self._prompt_task.done():
             tasks.append(self._prompt_task)  # cut short by the disconnect: made again on the next connect

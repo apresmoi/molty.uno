@@ -69,7 +69,7 @@ def test_run_passes_the_end_of_turn_flags_to_the_bridge(tmp_path, monkeypatch):
     seen = []
 
     class FakeBridge:
-        def __init__(self, cfg):
+        def __init__(self, cfg, **_kw):
             seen.append(cfg)
 
         async def run_forever(self):

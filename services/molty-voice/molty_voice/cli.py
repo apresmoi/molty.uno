@@ -91,7 +91,7 @@ def cmd_unpair(a: argparse.Namespace) -> int:
 def cmd_run(a: argparse.Namespace) -> int:
     path = Path(a.config) if a.config else default_path()
     cfg = load(path)
-    for k in ("stt_url", "tts_url", "api_key", "default_voice", "name"):
+    for k in ("stt_url", "tts_url", "api_key", "default_voice", "name", "engine", "realtime_url", "realtime_model", "realtime_voice", "realtime_turn"):
         v = getattr(a, k, None)
         if v:
             setattr(cfg, k, v)
@@ -116,11 +116,20 @@ def cmd_run(a: argparse.Namespace) -> int:
     if not (cfg.relay and cfg.device_id and cfg.token):
         print(f"not paired: run `molty-voice pair` first (config: {path})", file=sys.stderr)
         return 2
+    if a.daily_minutes is not None:
+        cfg.realtime_daily_minutes = max(0.0, a.daily_minutes)
+    if cfg.engine not in ("kyutai", "realtime"):
+        print("--engine is kyutai or realtime", file=sys.stderr)
+        return 2
+    if cfg.engine == "realtime" and not cfg.front_key():
+        print("the realtime engine needs your provider key: set MOLTY_REALTIME_KEY (or OPENAI_API_KEY) in this shell, "
+              f"or put \"realtime_key\" in {path} (mode 0600)", file=sys.stderr)
+        return 2
     if cfg.default_voice not in cfg.voices:
         cfg.voices.insert(0, cfg.default_voice)
-    logging.getLogger("molty_voice").info("molty-voice %s for %s via %s", __version__, cfg.device_id, cfg.relay)
+    logging.getLogger("molty_voice").info("molty-voice %s (%s engine) for %s via %s", __version__, cfg.engine, cfg.device_id, cfg.relay)
     try:
-        asyncio.run(Bridge(cfg).run_forever())
+        asyncio.run(Bridge(cfg, usage_path=path.parent / "realtime-usage.json").run_forever())
     except Fatal as e:
         print(str(e), file=sys.stderr)
         return 3
@@ -132,6 +141,10 @@ def cmd_run(a: argparse.Namespace) -> int:
 def cmd_check(a: argparse.Namespace) -> int:
     """Speaks a line through TTS and hears it back through STT: no relay, no pairing needed."""
     cfg = load(Path(a.config) if a.config else None)
+    if a.engine:
+        cfg.engine = a.engine
+    if cfg.engine == "realtime":
+        return check_realtime(cfg)
     b = Bridge(cfg)
     for _ in range(3):  # the TTS now and then clips a line; the check is strict about the words
         asyncio.run(b._make_prompt())
@@ -139,6 +152,41 @@ def cmd_check(a: argparse.Namespace) -> int:
             print(f"ok: STT heard TTS say {cfg.stt_prompt!r}")
             return 0
     print(f"failed: is STT at {cfg.stt_url} and TTS at {cfg.tts_url} up? See the logs above.", file=sys.stderr)
+    return 1
+
+
+def check_realtime(cfg: Config) -> int:
+    """Opens one realtime session, has it say a line, counts the audio: proves the key, the model and the voice."""
+    from .realtime import RealtimeFront
+
+    got = {"bytes": 0, "end": None, "text": ""}
+
+    async def js(m: dict) -> None:
+        if m.get("t") == "tts.end":
+            got["end"] = m
+        if m.get("t") == "tts.text":
+            got["text"] = m.get("text", "")
+
+    async def bn(b: bytes) -> None:
+        got["bytes"] += len(b)
+
+    async def go() -> None:
+        f = RealtimeFront(cfg, js, bn)
+        if not f.key:
+            raise SystemExit("no key: set MOLTY_REALTIME_KEY (or OPENAI_API_KEY), or realtime_key in the config")
+        await f.speak("check", "Hello, I am Molty.", "exact")
+        for _ in range(200):
+            if got["end"]:
+                break
+            await asyncio.sleep(0.1)
+        await f.end("check")
+
+    asyncio.run(go())
+    end = got["end"] or {}
+    if got["bytes"] and not end.get("error"):
+        print(f"ok: the realtime model said {got['text']!r} ({got['bytes'] // 32} ms of audio; first audio {end.get('ms', {}).get('first_audio')} ms)")
+        return 0
+    print(f"failed: {end.get('error') or 'no audio'}; see the log lines above", file=sys.stderr)
     return 1
 
 
@@ -170,11 +218,18 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"offer first words: a small Ollama model starts Molty's reply (default {d.opener})")
     pr.add_argument("--reflex", action=argparse.BooleanOptionalAction, default=None,
                     help=f"run Molty's reflex classifier on the CPU (needs molty-voice[reflex]; default {d.reflex})")
+    pr.add_argument("--engine", choices=["kyutai", "realtime"], help=f"kyutai (local GPU STT + TTS) or realtime (a realtime voice model with your own key, no GPU; default {d.engine})")
+    pr.add_argument("--realtime-model", help=f"realtime model (default {d.realtime_model})")
+    pr.add_argument("--realtime-voice", help=f"realtime voice (default {d.realtime_voice})")
+    pr.add_argument("--realtime-turn", choices=["semantic", "server"], help=f"how the model ends the person's turn (default {d.realtime_turn})")
+    pr.add_argument("--realtime-url", help="realtime websocket (default the provider's; a local fake for tests)")
+    pr.add_argument("--daily-minutes", type=float, help=f"realtime minutes a day at most, 0 = no cap (default {d.realtime_daily_minutes})")
     pr.add_argument("--no-stt", action="store_true", help="serve TTS only")
     pr.add_argument("--no-tts", action="store_true", help="serve STT only")
 
     sub.add_parser("unpair", help="revoke this box's token and forget it")
-    sub.add_parser("check", help="test STT and TTS with a round trip, without the relay")
+    pc = sub.add_parser("check", help="test STT and TTS with a round trip (realtime: one spoken line), without the relay")
+    pc.add_argument("--engine", choices=["kyutai", "realtime"], help="check this engine (default: the config's)")
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if a.verbose else logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     logging.getLogger("websockets").setLevel(logging.WARNING)
