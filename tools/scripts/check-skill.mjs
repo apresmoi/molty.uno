@@ -60,6 +60,8 @@ function checkSkill(name) {
   else {
     if (fm[1] !== name) bad(`skills/${name}/SKILL.md name is ${fm[1]}, expected ${name}`);
     if (fm[2].length > 1024) bad(`skills/${name}/SKILL.md description is ${fm[2].length} chars (max 1024)`);
+    // a plain YAML value: ": " or " #" inside it breaks the frontmatter (GitHub shows an error instead of the table)
+    if (/: | #|^["'>|&*!%@`[{]/.test(fm[2])) bad(`skills/${name}/SKILL.md description must be plain YAML: no ": " or " #" in it, no quote or bracket first`);
   }
   if ([...skillMd].length > MAX_SKILL_CHARS) bad(`skills/${name}/SKILL.md is ${[...skillMd].length} chars: keep the core under ${MAX_SKILL_CHARS}, move detail to references/`);
   // 2. links

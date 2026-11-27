@@ -89,7 +89,7 @@ Speech comes from a TTS/STT provider (Workers AI first; swappable).
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","listen","listen_stop","listen_window","ack","shake_talk","trace","hints","resume","say_cancel","gestures","dnd","show","mood","act","creature","working","progress","react","ask","ask_title","update","pkg","scene","creatures","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","say_text","listen","listen_stop","listen_window","ack","shake_talk","trace","hints","resume","say_cancel","gestures","dnd","show","mood","act","creature","working","progress","react","ask","ask_title","update","pkg","scene","creatures","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome","features":["listen_adopt"],"now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
 `features` lists what the relay does for the device (`listen_adopt`: it adopts a listen the device
 began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time sync and `log` says the
@@ -99,7 +99,8 @@ the device then never starts a shake listen nor uploads.
 `board` names the hardware (`device/firmware/boards/`, see [PORTING.md](PORTING.md)). `caps`
 lists `say` / `listen` only when the board has a speaker / microphone (`say_cues` with `say`,
 firmware that shows a say's words as they are spoken; `say_marks` with `say`, firmware that
-fires a say's inline cues on their word — see [Inline cues and actions](#inline-cues-and-actions); `listen_stop` with
+fires a say's inline cues on their word — see [Inline cues and actions](#inline-cues-and-actions); `say_text` with `say`,
+firmware that takes more of a running say's text — see `say` below; `listen_stop` with
 `listen`, firmware that can end a listen on the relay's word; `listen_window` with `listen`,
 firmware whose window is optional, 0..30000 or unlimited — see `listen` below; `ack` with
 `listen`, firmware that acknowledges the end of a turn itself — see [Turn acknowledgement](#turn-acknowledgement); `shake_talk` on
@@ -212,6 +213,37 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   word, or past word 511); a cancelled or failed say fires none of the rest. Malformed marks
   refuse the say (`invalid_args`); marks without `cues:true` are ignored. What firing does:
   [Inline cues and actions](#inline-cues-and-actions).
+  **Text in pieces (cap `say_text`)**: for a voice that makes its words as it speaks, so the say's
+  text is not all known when it starts. `cmd say` carries the words known then (at least one; its
+  `marks` may name words still to come), and while the say plays the relay sends its text again
+  each time it grew: `cmd say_text {job, text}`, e.g.
+  `{"t":"cmd","id":"c42","name":"say_text","args":{"job":"j_7","text":"Hey Juan! Purring along nicely,"}}`
+  after `cmd say {"job":"j_7","text":"Hey Juan!",...,"cues":true}`, answered
+  `{"t":"res","id":"c42","ok":true,"result":{"job":"j_7","taken":true}}`.
+  - `job`: the say's job id. `text`: the say's **whole text so far** (never a piece alone),
+    1..4096 bytes, beginning byte for byte with every text sent before for that job (the
+    `cmd say` text first): words already sent never change. It ends at the end of a word (send
+    whole words only: a word sent cut may show cut).
+  - Words are counted as for `cues` (0-based over the whole text's whitespace-split words, < 512),
+    and the frames' `w` cues name them as usual, also a word whose text has not been sent yet:
+    the device shows a word once it has both its text and its cue, and the speaker reached it.
+  - Ordering: after the `cmd say` of that job, on the same socket (commands run in order: no need
+    to wait for its answer), whenever the text grew, until that say's `say.done` (or until the
+    relay gave it up). Send it before the frames that carry its new words' audio where possible;
+    a text that comes after its words' voice shows them late, one a frame, none skipped. A repeat,
+    or an older text arriving after a newer one, changes nothing; a lost one is made good by the
+    next, so it needs no retry.
+  - The device: the words shown keep their place and size (a longer word to come may make the
+    words after it smaller, never those already shown), each new word shows as any cued word
+    does (when the speaker reaches its cue, never sooner than the reveal lead), and the say's log
+    line counts the whole text (`say words= spoken= shown=`). Without `cues:true` the reader takes
+    the new words at its own pace. Answer `{job, taken}`: `true`, the say has that text now (more
+    of it, or a piece it had); `false`, that job is not the say playing (it ended, failed or was
+    cancelled, or another job runs) or another text took the screen over its words: nothing
+    changed, send no more for it. `invalid_args`: `job` or `text` missing or empty, `text` over
+    4096 bytes, or a text that neither continues the device's text for that say nor is its beginning.
+  - Older firmware (no `say_text` cap): do not send it (it answers `unknown_command`); it shows
+    only the `cmd say` text, the rest of the voice plays without words.
   `talk` requires this `say.done` before it opens the mic: none within the streamed playback
   time + 2.5 s fails the turn with `playback_timeout` (REST 504); an elapsed estimate is never
   taken as playback.
@@ -293,7 +325,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   (`""`, `"."`, `"[BLANK_AUDIO]"`). No utterance, opener, filler or thinking follows. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
-- `say_cancel` (cap `say_cancel`): relay sends `cmd say_cancel {job}` when a say / talk / quick job fails: the device stops waiting for that say's audio (`{job, cancelling}`; any other job is a no-op). Without audio a say also gives up by itself after 8 s (30 s once frames have arrived).
+- `say_cancel` (cap `say_cancel`): relay sends `cmd say_cancel {job}` when a say / talk / quick job fails: the device stops waiting for that say's audio (`{job, cancelling}`; any other job is a no-op). Without audio a say also gives up by itself, on the speaker's own clock (whatever the link is doing): after 8 s with none at all, and 4 s after its speaker played all it had once frames have arrived (no `say.done`, back to idle); a say held through a drop the relay may resume waits out the resume window (15 s) instead.
 - `gestures` (cap `gestures`): `cmd gestures {bindings?}` sets `{tap|double_tap|button_accept|button_reject: none|talk|event|stop}` (NVS) and answers `{bindings}`; a tap during a recording ends it with reason `tap`, whatever is bound.
 - `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job, reason}`
   when its STT called the end of the listen (a [voice box](#voice-box) `stt.turn_end`): `reason`

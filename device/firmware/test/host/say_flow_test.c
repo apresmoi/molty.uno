@@ -21,7 +21,8 @@
  * The cases: a filler ("Hmm.", "Good question."), a long say on the cloud voice (cues estimated, the audio there with
  * the command), the voice box's (the command first, the audio 300 ms later, its own word timing), a faster voice path
  * (the audio 40 ms after the command), the cloud's cues coming late (300 ms after the first sound), a say right after a
- * listen and its chirp.
+ * listen and its chirp, a say whose text comes in three pieces while its voice plays (the fast voice's: cmd say_text,
+ * each piece the whole text so far, sent again once, an older one after it; never a word early, none lost).
  *
  *   say_flow_test <repo root> <case>   (say_flow_build.sh runs every case)
  */
@@ -159,6 +160,9 @@ typedef struct {
                                         * the relay estimates them for the cloud voice) */
     double cues_at;                    /* ms after the first sound: the cues reach the device (0: with their audio) */
     bool listen;                       /* a listen and its chirp first */
+    const char *const *pieces;         /* the text in pieces (NULL: whole with the command): the first with the command,
+                                        * each next the whole text so far (mole_fluid_say_text), the last the text */
+    const double *piece_at;            /* .. ms after the first sound: each next piece arrives */
 } say_case_t;
 
 /* when a word must be on the glass: LATE_MS after its sound; a cue that reaches the device later than that (the cloud's,
@@ -198,7 +202,9 @@ static void run(const say_case_t *c) {
     s_t = 0.;
     /* link_audio.c start(): following, the text, the mood, the state */
     mole_fluid_text_cue(-1);
-    mole_fluid_set_text(c->text, (int)strlen(c->text));
+    const char *const *pc = c->pieces;
+    int np = 0;                        /* the pieces in so far, less one */
+    mole_fluid_set_text(pc ? pc[0] : c->text, (int)strlen(pc ? pc[0] : c->text));
     const unsigned ver = mole_fluid_text_ver();
     (void)ver;
     wm_state("{\"state\":\"creature\",\"mood\":\"speaking\"}");
@@ -215,6 +221,13 @@ static void run(const say_case_t *c) {
     char miss[160] = "";
     for (int i = 0; i < 600; i++) {
         const double t0 = s_t;         /* this frame: from t0 to s_t */
+        /* the link task: the next piece of the text, the one before again, an older one (harmless both) */
+        if (pc && pc[np + 1] && sound >= 0. && t0 >= sound + c->piece_at[np]) {
+            np++;
+            CHECK(mole_fluid_say_text(ver, pc[np], (int)strlen(pc[np])) == ESP_OK, "%s: piece %d refused", c->name, np);
+            CHECK(mole_fluid_say_text(ver, pc[np], (int)strlen(pc[np])) == ESP_OK && mole_fluid_say_text(ver, pc[0], (int)strlen(pc[0])) == ESP_OK,
+                  "%s: piece %d again, or an older one, refused", c->name, np);
+        }
         /* the audio task, before this frame's sim reads its inputs */
         if (sound < 0. && t0 >= c->audio_at) {
             if (!next && (c->cues_at <= 0. || cue[0] <= LEAD_MS)) { mole_fluid_text_cue(0); next = 1; }   /* (word 0: at the stream's start) */
@@ -315,7 +328,8 @@ static void run(const say_case_t *c) {
         if (shown_at[k] >= 0. && (first < 0 || shown_at[k] < shown_at[first])) first = k;
     }
     const double late0 = first >= 0 ? shown_at[first] - sound : 1e9;
-    double worst = 0.; int worst_k = -1;
+    double worst = 0.; int worst_k = -1, early = 0;
+    for (int k = 1; k < nw; k++) early += shown_at[k] >= 0. && spoken_at[k] >= 0. && shown_at[k] < spoken_at[k] - LEAD_MS;
     bool on_time = true;                   /* (each word by when it is due: its sound, or its cue's arrival when that is later) */
     for (int k = 0; k < nw; k++) {
         if (shown_at[k] >= 0. && spoken_at[k] >= 0. && shown_at[k] - spoken_at[k] > worst) { worst = shown_at[k] - spoken_at[k]; worst_k = k; }
@@ -332,6 +346,8 @@ static void run(const say_case_t *c) {
     if (getenv("SAY_FLOW_WORDS"))                      /* (each word: spoken at, shown at, ms after the command) */
         for (int k = 0; k < nw; k++) printf("    %2d %-10.*s %6.0f %6.0f\n", k, len[k], c->text + off[k], spoken_at[k], shown_at[k]);
     CHECK(lost == 0, "%s: %d words spoken but never shown:%s", c->name, lost, lost_w);
+    CHECK(early == 0, "%s: %d words on the glass more than the reveal lead before their sound", c->name, early);
+    CHECK(!pc || !pc[np + 1], "%s: only %d of the text's pieces came while it played", c->name, np + 1);
     CHECK(first == 0 && late0 <= LATE_MS, "%s: the first word on the glass %.0f ms after its sound (word %d)", c->name, late0, first);
     CHECK(on_time, "%s: a word on the glass after it was due (the latest %.0f ms after its sound, word %d)", c->name, worst, worst_k);
     CHECK(missing == 0, "%s: the word due on the glass missing on %d frames (t:shown/due)%s", c->name, missing, miss);
@@ -358,14 +374,18 @@ int main(int argc, char **argv) {
     static const char F[] = "Got it. Last one: count from one to five, slowly.";
     /* the voice box's own word timing for F: pauses at its stops, a quick run of short words */
     static const double FCUE[] = { 0., 190., 640., 930., 1380., 1690., 1880., 2090., 2230., 2760. };
+    /* B in three pieces, as its voice plays: each before its first new word is spoken (the relay's lead) */
+    static const char *const BP[] = { "All good, Juan. I am timing", "All good, Juan. I am timing each step of this chat.", B, NULL };
+    static const double BP_AT[] = { 700., 2500. };
     static const say_case_t cases[] = {
-        { "filler",   "Hmm.",           5.,   320.,  NULL, 0.,   false },
-        { "filler2",  "Good question.", 5.,   1160., NULL, 0.,   false },
-        { "long",     B,                5.,   5200., NULL, 0.,   false },
-        { "voicebox", F,                300., 3400., FCUE, 0.,   false },
-        { "fast",     F,                40.,  3400., FCUE, 0.,   false },
-        { "latecues", B,                5.,   5200., NULL, 300., false },
-        { "listen",   B,                5.,   5200., NULL, 0.,   true  },
+        { "filler",   "Hmm.",           5.,   320.,  NULL, 0.,   false, NULL, NULL },
+        { "filler2",  "Good question.", 5.,   1160., NULL, 0.,   false, NULL, NULL },
+        { "long",     B,                5.,   5200., NULL, 0.,   false, NULL, NULL },
+        { "voicebox", F,                300., 3400., FCUE, 0.,   false, NULL, NULL },
+        { "fast",     F,                40.,  3400., FCUE, 0.,   false, NULL, NULL },
+        { "latecues", B,                5.,   5200., NULL, 300., false, NULL, NULL },
+        { "listen",   B,                5.,   5200., NULL, 0.,   true,  NULL, NULL },
+        { "pieces",   B,                5.,   5200., NULL, 0.,   false, BP, BP_AT },
     };
     const char *c = argv[2];
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++)

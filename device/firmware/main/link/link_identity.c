@@ -93,6 +93,7 @@ cJSON *link_identity_hello(void)
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say";
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_cues";   /* say {cues:true}: word-timed text */
     if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_marks";  /* say {marks}: inline [mood]/[action] cues fire on their word */
+    if (molty_board_has(MOLTY_CAP_SPEAKER)) caps[n++] = "say_text";   /* cmd say_text: a running say's text, further */
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen";
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen_stop";   /* the relay may end a listen early (turn_end) */
     if (molty_board_has(MOLTY_CAP_MIC)) caps[n++] = "listen_window";   /* ms optional (the setting), 0..30000, 0 = unlimited */

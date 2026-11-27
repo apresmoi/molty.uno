@@ -202,7 +202,7 @@ static void test_ack(void)
     assert(link_ack_decide(C, "tap", true, 159, false, true) == O);         /* a press that heard nobody: no chirp */
     assert(link_ack_decide(C, "tap", false, 0, false, true) == O);          /* released inside calibration: too short to have said anything */
     assert(link_say_stalled(8000, 0) && !link_say_stalled(7999, 0));        /* no audio at all: 8 s */
-    assert(link_say_stalled(30000, 1) && !link_say_stalled(29999, 1));      /* mid-stream: 30 s */
+    assert(link_say_stalled(4000, 1) && !link_say_stalled(3999, 1));        /* mid-stream: 4 s dry */
     assert(link_ack_decide(C, "turn_end", false, 0, false, true) == C);     /* the relay's end of turn: speech by definition */
     assert(link_ack_decide(C, "turn_end", true, 0, false, true) == C);
     assert(link_ack_decide(C, "silence", true, 900, false, true) == C);

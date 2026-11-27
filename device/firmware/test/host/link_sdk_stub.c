@@ -76,8 +76,11 @@ struct sdk_ring { size_t cap, len; unsigned char data[]; };
 RingbufHandle_t xRingbufferCreateWithCaps(size_t size, int type, int caps) {
     (void)type;(void)caps; RingbufHandle_t r=calloc(1,sizeof(*r)+size); assert(r); r->cap=size; return r;
 }
+void (*sdk_ring_wait)(void);
 void *xRingbufferReceiveUpTo(RingbufHandle_t r, size_t *n, unsigned ticks, size_t max) {
-    (void)ticks; if (!r->len) return NULL; *n=r->len>max?max:r->len;
+    if (!r->len && ticks && sdk_ring_wait) { sdk_now+=(int64_t)ticks*1000; sdk_ring_wait(); }
+    if (!r->len) return NULL;
+    *n=r->len>max?max:r->len;
     void *p=malloc(*n); assert(p); memcpy(p,r->data,*n); r->len-=*n; memmove(r->data,r->data+*n,r->len); return p;
 }
 void *xRingbufferReceive(RingbufHandle_t r, size_t *n, unsigned t) { return xRingbufferReceiveUpTo(r,n,t,SIZE_MAX); }

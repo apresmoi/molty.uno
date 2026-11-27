@@ -11,6 +11,6 @@ OUT="$(mktemp -d "${TMPDIR:-/tmp}/molty-say-flow.XXXXXX")"
 trap 'rm -rf "$OUT"' EXIT
 
 "$HERE/../../web/build.sh" test "$OUT" "$HERE/say_flow_test.c"
-for c in filler filler2 long voicebox fast latecues listen; do
+for c in filler filler2 long voicebox fast latecues listen pieces; do
   "$OUT/say_flow_test" "$ROOT" "$c"
 done

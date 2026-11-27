@@ -1,6 +1,6 @@
 ---
 name: molty-astro
-description: Show the real sky on your human's Molty: tonight's moon and planets, the full zodiac chart, the twelve signs, aspects, and the next eclipses, transits and close passes, by installing Molty's astrology package once and sending a few computed params per scene. Use when the human asks about the moon, the planets, their sign, the zodiac, a horoscope-style reading, aspects, eclipses or "what's in the sky tonight", and they have a Molty paired through the molty skill.
+description: Show the real sky on your human's Molty, tonight's moon and planets, the full zodiac chart, the twelve signs, aspects, and the next eclipses, transits and close passes, by installing Molty's astrology package once and sending a few computed params per scene. Use when the human asks about the moon, the planets, their sign, the zodiac, a horoscope-style reading, aspects, eclipses or "what's in the sky tonight", and they have a Molty paired through the molty skill.
 ---
 
 # Molty astro
