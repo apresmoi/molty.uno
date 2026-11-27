@@ -15,6 +15,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 #include "creature_clip.h"
 #include "sky.h"
@@ -56,6 +57,30 @@ void  cd_set_share(cd_t *d, int pct);
  *  features, the halo's rows, the halo's columns with the world and the cells; then, within those, the waits for the
  *  second band; and the second band's own time on the other core (ESP). */
 void  cd_prof(cd_t *d, uint32_t *out);
+
+/* The frame rate lab (diag/fps_lab.h, FPS-LAB.md): the creature's own cells (its dots, its halo's, its colour per cell,
+ * before the world goes round them) kept for a pose seen before, so the raster is skipped; the world (floor, dust, sky,
+ * weather) is made over them every frame as ever. A pose is its key: every input of the raster (each node's world
+ * matrix and the camera; the shapes and the palette are the clip's own, fixed). */
+enum { CD_RASTER, CD_SAME, CD_CACHED };
+#define CD_REUSE_MAX 128
+typedef struct {
+    uint64_t key;                 /* the last frame's pose key (0: none made)                                          */
+    bool gesture;                 /* ... it played more than its mood then (cc_free false)                              */
+    uint8_t last;                 /* how the last frame's creature was made: CD_RASTER, CD_SAME (the frame before's kept),
+                                   * CD_CACHED (a pose kept from before)                                               */
+    uint32_t frames[3], gframes[3];   /* frames made each way since the settings last changed; ... in a gesture       */
+    uint32_t bytes;               /* the cache's memory (PSRAM)                                                         */
+    uint64_t cyc[3], band[3];     /* cycles in cd_draw on its own core, and in the second band, each way, summed (ESP)  */
+    uint64_t upkeep;              /* ... of the key and the cache's own work (looking up, keeping a raster's cells)      */
+} cd_reuse_t;
+/** The pose key of c's frame now (never 0). */
+uint64_t cd_pose_key(const cc_t *c);
+/** From the next draw: make the pose key (key), keep the frame before's cells for the same pose (skip), keep the cells
+ *  of the last n distinct poses (n 0: none; at most CD_REUSE_MAX, PSRAM). All off: the raster every frame, as ever. A
+ *  change resets the counters and makes or frees the cache (on the drawing task). */
+void  cd_reuse(cd_t *d, bool key, bool skip, int n);
+const cd_reuse_t *cd_reuse_stats(const cd_t *d);
 
 #ifdef __cplusplus
 }
