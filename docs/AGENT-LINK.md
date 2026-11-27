@@ -1915,17 +1915,37 @@ each word's text arrived). No auto filler, no first words: the front answered.
 - Every turn still reaches agents as ONE `utterance`, now with `front: {said, waiting}`: what the
   front already said, and whether it handed the turn to the agent with a holding line (`waiting:
   true`, the person is waiting for the answer). It waits at most 1.5 s for the reply to be known
-  (`partial: true` when it was not complete). A `talk`'s result carries the same `front`.
+  (`partial: true` when it was not complete). A listen-only `talk`'s result carries the same `front`.
 - The agent's `say` / `talk` is not run through text to speech: its text goes to the box as inner
   voice and the front says it word for word in a natural delivery (the box's `realtime_inner: "own"`:
   in its own words, keeping the facts); `exact: true` is always word for word (inline `[cues]` apply
   only then, and are never spoken). If the front is still speaking, the answer queues behind
   it: never cut off, never `audio_busy`. The job's `text` is what was said (`asked`: the agent's text).
+  A `talk` with `say` does not listen itself: its result comes once its words are said (`reason:
+  "spoken"`, `hint`), and the front's hands-free listen follows (`listen: false`: none), so a
+  webhook agent is never held through a listen; the person's words come as the next `utterance`.
 - `front {context?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` = facts the
   front may use if the person asks (nothing is said now); `end: true` ends the conversation.
   `{skipped:"front_off", reason}` when the front is not serving.
 - The agent never answers a `waiting` turn: after 8 s Molty says it is still waiting, once
   (`tts front:"wait"`), then listens again. Molty shows `thinking` while it waits.
+
+**Late and repeated answers** (core/front.ts `fate`). An agent's say / talk with `in_reply_to` is
+said only while it belongs to the conversation's current moment; every case answers at once with a
+truthful result (a job that is `done`), never an error that invites a retry:
+
+| The answer to turn T arrives | It is | The agent gets |
+|---|---|---|
+| T is the latest turn, nobody speaks | said (it ends a hands-free listen nobody spoke into yet) | `status: "done"`, `said`, `reason: "spoken"`, once said |
+| the front handed T to the agent (`waiting`) | said, even after the person spoke again (queued behind them) | as above |
+| the person has spoken since T (a newer turn, or speaking now) | not said; the front gets it as silent context (`front.context`) | `spoken: false, as: "context", reason: "newer_turn", hint` |
+| T is over 60 s old (`TURN_HOLD_MS`), or its conversation ended and the front had answered T | not said, nothing sent to the box | `spoken: false, as: "dropped", reason: "old_turn"` / `"conversation_over"` |
+| the same agent answered T already (queued, playing or done) | not said again | the first answer's `job` and result, `repeated: true` (a first answer that failed does not count: the retry is judged anew) |
+
+The claim rule keeps its meaning: only an answer that is said claims the turn (`turn_claimed` for
+the other agents as before); one given as context or dropped claims nothing. Without `in_reply_to`
+an answer is said as before. A say / talk while Molty is offline is `device_offline` and opens no
+box session; the box never opens a session just for context (it keeps it for the next session).
 
 **Hands-free.** After Molty speaks, it listens again (a relay-owned listen; nobody speaking ends it
 by the box's `no_speech`, 8 s). An agent's answer arriving during that listen before anyone spoke
@@ -1950,7 +1970,11 @@ after the end of the person's speech as the relay got it: `reply` (front.reply i
 model's own end of turn to its first audio, as the box measured it), `reply_first_audio` (to the
 device), `utterance`, `agent_answer` (the agent's call), `agent_first_audio`, `waiting`, and
 `line`: one sentence ("front turn: Molty answered 0.46 s after the person stopped (model 0.30 s),
-utterance 0.82 s, handed to the agent, agent answered 2.33 s, spoken 2.78 s"). The reply's say job
+utterance 0.82 s, handed to the agent, agent answered 2.33 s, spoken 2.78 s"; parts not measured are
+left out). `reply` is near 0 when the model ended the turn: it creates its answer the moment it
+detects the end, so `front.reply` follows `stt.turn_end` at once; it is the box's commit and response
+creation when Molty ended the turn (a tap, the button). The box's `first_audio` for a reply counts
+from its response's creation (`created` covers the turn's end to that). The reply's say job
 carries `timings.front {created, first_audio, text_wait}`. `front.start`, `front.end {reason,
 turns, ms}` and the box's `front.session` (usage) are `voice_box` entries.
 
