@@ -331,8 +331,10 @@ function turnId(v: unknown): string | undefined {
 
 /** The voice front's silent context (`front {context}`): at most this many characters. */
 export const MAX_FRONT_CONTEXT = 2000;
+/** `front {context, persona: true}`: the agent's standing persona line (kept per device), at most this many characters. */
+export const MAX_FRONT_PERSONA = 500;
 
-/** say / talk `exact`: with the voice front on, it says the text word for word (core/front.ts). */
+/** say / talk `exact`: word for word; with the voice front on, the front keeps the wording as close as it can (core/front.ts). */
 function exactArg(v: unknown): boolean {
   if (v === undefined) return false;
   if (typeof v !== "boolean") throw invalid("exact must be a boolean");
@@ -560,13 +562,17 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "front": {
-      // the voice front (core/front.ts): {context?, end?}; relay-only, never forwarded to the device
-      only(args, ["context", "end"]);
+      // the voice front (core/front.ts): {context?, persona?, end?}; relay-only, never forwarded to the device
+      only(args, ["context", "persona", "end"]);
       const out: JsonObject = {};
       if (args.context !== undefined) {
         if (typeof args.context !== "string" || !args.context.trim() || args.context.length > MAX_FRONT_CONTEXT) throw invalid(`context must be text of 1..${MAX_FRONT_CONTEXT} characters`);
         out.context = args.context.trim();
       }
+      if (args.persona !== undefined && (typeof args.persona !== "boolean" || (args.persona && (typeof out.context !== "string" || out.context.length > MAX_FRONT_PERSONA)))) {
+        throw invalid(`persona: true takes a context of 1..${MAX_FRONT_PERSONA} characters (the agent's standing persona line)`);
+      }
+      if (args.persona === true) out.persona = true;
       if (args.end !== undefined && typeof args.end !== "boolean") throw invalid("end must be a boolean");
       if (args.end === true) out.end = true;
       if (!Object.keys(out).length) throw invalid("give context, or end: true");
@@ -600,7 +606,7 @@ export interface TalkArgs {
   in_reply_to?: string;
   /** The agent's own latency report (clientTiming): timings.client and the turn's trace. */
   client_timing?: JsonObject;
-  /** The voice front says `say` word for word (default: as the box sets it, word for word unless its realtime_inner is "own"). */
+  /** With the voice front on: keep the wording of `say` as close as it can (it still decides whether and when). */
   exact?: boolean;
 }
 

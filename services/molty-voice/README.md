@@ -65,9 +65,15 @@ Then use `molty-voice pair`, `check` and `run` directly; `examples/molty-voice.s
 A second kind of voice box: instead of Kyutai on a GPU, `molty-voice` talks to a **realtime voice
 model** (speech in, speech out) with **your own key**, and becomes Molty's fast conversational voice,
 the *voice front* (`docs/AGENT-LINK.md` "Voice front"). It hears you while you speak, decides when
-you are done, and answers within a fraction of a second; your agent stays the brain. Its
-answers reach the front as an "inner voice", and the front says them. The first provider is
-OpenAI's Realtime API.
+you are done, and answers within a fraction of a second; your agent stays the brain. **One
+voice:** the front is Molty's only speaker. It answers small talk itself; for anything else it
+says a short holding line that names what you asked ("checking your emails, one sec") and hands
+the turn to your agent. Everything your agent says reaches the front as its own inner thought:
+it says it in its words (a waiting turn at once, with a short "ok, got it"; something new at the
+next natural moment) or keeps it to itself when it only repeats what was said. Your agent's last
+lines (8, 2000 characters in all) and its persona line (`front {context, persona: true}`) stay
+with the front across sessions, so it sounds like your agent. The first provider is OpenAI's
+Realtime API.
 
 - **Runs anywhere:** a laptop or a small server. No GPU, no Docker, no Kyutai.
 - **Your key never leaves your machine:** put it in this process's environment
@@ -109,7 +115,6 @@ Settings (config file or `run` flags):
 | `realtime_voice` | `marin` | `--realtime-voice`; the provider's voices: marin, cedar, alloy, ash, ballad, coral, echo, sage, shimmer, verse |
 | `realtime_turn` | `semantic` | `--realtime-turn`: `semantic` ends your turn by meaning (`realtime_eagerness`, default `high`), `server` by silence (`realtime_silence_ms`, 500) |
 | `realtime_transcribe` | `gpt-4o-mini-transcribe` | the transcript your agent gets (a separate model on the same audio) |
-| `realtime_inner` | `verbatim` | how the front says your agent's answers: `verbatim` (its words, word for word, natural delivery) or `own` (the front's own words, keeping the facts); `exact: true` is always word for word; inline `[cues]` are never spoken |
 | `realtime_idle_s` | 45 | a session with nothing going on closes |
 | `realtime_max_session_s` | 600 | a session closes after this long, whatever happens |
 | `realtime_daily_minutes` | 30 | `--daily-minutes`: no session opens once today's minutes are used (0 = no cap); the box then stops offering the front and Molty falls back to the relay's voice |
@@ -135,7 +140,8 @@ config.
 (`~/.config/molty-voice/molty-voice.log`, mode 0600), capped at 1 MB plus one older file
 (`molty-voice.log.1`). Per turn: the listen's start, who ended the turn (the model, Molty, nobody),
 the provider's events that matter (speech started, committed, response created and done, errors),
-each reply's first audio, the inner voice received (mode, length) and what Molty said. Never a key,
+each reply's first audio, the inner voice received (length, exact or not), whether it was said or
+absorbed, and what Molty said. Never a key,
 a token, a link code or audio (the token and key are also masked if a line ever carried one).
 
 How it works: one provider WebSocket per conversation, kept across turns (the model remembers
@@ -255,5 +261,5 @@ The tests cover:
 - a bridge test against a fake relay and fake STT/TTS servers;
 - the error paths: no free channel, cancel, refused token;
 - the realtime engine against a fake provider (`tests/test_realtime.py`): a front turn end to end,
-  formats in and out, inner voice in own words and verbatim, the queue, idle / end / daily limit,
+  formats in and out, the inner voice voiced or absorbed, the queue, idle / end / daily limit,
   and the key kept out of logs, reprs and the saved config.

@@ -65,7 +65,7 @@ const KEEP: Prop = {
 };
 const EXACT: Prop = {
   type: "boolean",
-  description: "Only with the voice front on (the utterance has `front`): true = Molty's realtime voice says your text word for word. Default: it says your text as written (the owner may set it to rephrase, keeping your facts); [cues] are never spoken.",
+  description: "Only with the voice front on (the utterance has `front`): true = Molty's realtime voice keeps your wording as close as it can. It still decides whether and when to say it (it voices your facts in its words, or absorbs a repeat); [cues] are never spoken.",
 };
 const IN_REPLY_TO: Prop = {
   type: "string",
@@ -321,9 +321,10 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_front",
     description:
-      "The voice front (an utterance with `front` means it is on): a realtime voice model is Molty's outer voice and you are its inner voice. It already answered the person ({said, waiting}); you answer with facts through molty_talk / molty_say as usual and it speaks them. Here: context = facts it may use only if the person asks (it says nothing now); end: true = end the hands-free conversation (Molty stops listening). Returns {conversation, context?, ended?}, or {skipped:\"front_off\", reason} when the front is not serving.",
+      "The voice front (an utterance with `front` means it is on): a realtime voice model is Molty's only voice and you are its inner voice, not the speaker. It already answered the person ({said, waiting}); send facts or nothing through molty_talk / molty_say: it voices them in its words, or absorbs a repeat (the result says spoken, how: said | absorbed | queued). Here: context = facts it may use (it says nothing now); with persona: true, context is your standing persona line (who you are, how you talk; at most 500 characters), kept for every session; end: true = end the hands-free conversation. Returns {conversation, context?, ended?}, or {skipped:\"front_off\", reason} when the front is not serving.",
     inputSchema: obj({
       context: { type: "string", description: "Background for the front, at most 2000 characters, e.g. \"The deploy finished at 14:02, 3 warnings.\"" },
+      persona: { type: "boolean", description: "true: context is your standing persona line, e.g. \"You are Dude, a cat on Juan's desk; dry, warm humour.\"" },
       end: { type: "boolean", description: "true: end the conversation now." },
     }),
     auth: true,

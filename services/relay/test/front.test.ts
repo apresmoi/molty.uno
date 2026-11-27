@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/events.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { FRONT_LISTENS, FrontTalk, frontTurnSummary, stopPhrase } from "../src/core/front.js";
+import { FRONT_ROLE, FrontTalk, frontTurnSummary, stopPhrase } from "../src/core/front.js";
 import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300, boxSttFinalMs: 400, frontWaitMs: 150, frontSaidWaitMs: 300 };
@@ -17,6 +17,7 @@ const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {}) {
   const cmds: Array<{ name: string; args: any; at: number }> = [];
   const says: Record<string, number> = {};
+  const ends: Record<string, number> = {}; // when each say's end frame reached the device
   let timers: ReturnType<typeof setTimeout>[] = [];
   let codes = 0;
   const text = sock.sendText.bind(sock);
@@ -47,9 +48,10 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {})
     bin(b);
     const fr = decodeAudioFrame(b)!;
     says[fr.header.s] = (says[fr.header.s] ?? 0) + fr.payload.byteLength / 2;
+    if (fr.header.end) ends[fr.header.s] = Date.now();
     if (fr.header.end) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } })), 5);
   };
-  return { cmds, says, named: (n: string) => cmds.filter((c) => c.name === n) };
+  return { cmds, says, ends, named: (n: string) => cmds.filter((c) => c.name === n) };
 }
 
 interface BoxOpts {
@@ -61,6 +63,8 @@ interface BoxOpts {
   reply?: (heard: string) => { said: string; wait: boolean };
   /** turn end after this many mic chunks */
   turnEndAfter?: number;
+  /** the front keeps an inner voice thought to itself (it repeats what was said): no audio, tts.end absorbed */
+  absorb?: (thought: string) => boolean;
 }
 
 /** A realtime voice box on the voice socket, as molty-voice's realtime engine speaks it. */
@@ -93,8 +97,9 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
       speak(`fr${k}`, (o.reply ?? (() => ({ said: "Hi there!", wait: false })))(l.heard).said, {}, 20);
     }
     if (f.t === "stt.end") setTimeout(() => !sock.closed && listens[f.id] && say({ t: "stt.final", id: f.id, text: listens[f.id].heard, ms: { final: 2 } }), 3);
-    if (f.t === "tts") {
-      const words = f.front === "own" ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
+    if (f.t === "tts" && f.front === "inner" && o.absorb?.(f.text)) setTimeout(() => say({ t: "tts.end", id: f.id, absorbed: true }), 5);
+    else if (f.t === "tts") {
+      const words = f.front === "inner" && !f.exact ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
       speak(f.id, words);
     }
   };
@@ -214,13 +219,16 @@ describe("voice front: a turn", () => {
     expect(ctx.dev.named("listen_stop")[0].at).toBeLessThanOrEqual(ctx.dev.named("say")[0].at);
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const u = (await ctx.inbox()).find((e) => e.type === "utterance")!;
-    expect(u.data).toMatchObject({ text: "what is on my calendar today?", trigger: "shake", front: { said: "Let me check on that.", waiting: true } });
+    expect(u.data).toMatchObject({ text: "what is on my calendar today?", trigger: "shake", front: { said: "Let me check on that.", waiting: true, role: FRONT_ROLE } });
+    expect(u.data.front.role).toMatch(/^you are the inner voice/);
     expect(u.data.filler_in_ms).toBeUndefined(); // no auto filler: the front answered
     // the inner voice: no TTS request, the box's front says it in its own words
     const r = (await ctx.room.talk(ctx.token, { say: "Standup at 10 and a dentist at 3.", listen: false, in_reply_to: u.data.turn_id })) as any;
     expect(r.ok).toBe(true);
-    expect(r.result.said).toBe("So, Standup at 10 and a dentist at 3.");
-    expect(ctx.box.of("tts").map((t) => [t.text, t.front])).toEqual([["Standup at 10 and a dentist at 3.", "own"]]);
+    // one voice: the waiting turn's answer, said at once by the front; the agent is told it is not the speaker
+    expect(r.result).toMatchObject({ spoken: true, as: "inner", how: "said", said: "So, Standup at 10 and a dentist at 3." });
+    expect(r.result.hint).toMatch(/inner voice, not the speaker/);
+    expect(ctx.box.of("tts").map((t) => [t.text, t.front, t.exact])).toEqual([["Standup at 10 and a dentist at 3.", "inner", undefined]]);
     expect(sayTexts(ctx.dev)[1]).toBe("So, Standup at 10 and a dentist at 3.");
     // word cues follow the front's words
     const head = (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b.indexOf(10) < 0 ? b : b.subarray(0, b.indexOf(10))));
@@ -238,15 +246,16 @@ describe("voice front: a turn", () => {
     expect(act.some((e: any) => e.ev === "front.end" && e.data.reason === "idle")).toBe(true);
   });
 
-  it("exact says the agent's words verbatim; marks only then", async () => {
+  it("exact goes through the front too (it keeps the wording); no marks with the front", async () => {
     const ctx = await setup({ box: { reply: () => ({ said: "One sec.", wait: true }) } });
     await ctx.shake();
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const out = (await ctx.room.command(ctx.token, "say", { text: "Build [happy] 42 passed.", exact: true })) as any;
     expect(out.ok).toBe(true);
     await until(() => ctx.dev.named("say").length >= 2);
-    expect(ctx.box.of("tts").at(-1)).toMatchObject({ text: "Build 42 passed.", front: "exact" });
-    expect(ctx.dev.named("say")[1].args).toMatchObject({ text: "Build 42 passed.", marks: [[1, "happy"]] });
+    expect(ctx.box.of("tts").at(-1)).toMatchObject({ text: "Build 42 passed.", front: "inner", exact: true });
+    expect(ctx.dev.named("say")[1].args).toMatchObject({ text: "Build 42 passed." });
+    expect(ctx.dev.named("say")[1].args.marks).toBeUndefined();
     expect(ctx.dev.named("say")[1].args.exact).toBeUndefined(); // relay-only
   });
 
@@ -338,9 +347,10 @@ describe("voice front: talk and modes", () => {
     const ctx = await setup({ box: { heard: ["is it raining?"] } });
     const r = (await ctx.room.talk(ctx.token, { say: "Hi, what can I do?", exact: true })) as any;
     expect(r.ok).toBe(true);
-    expect(r.result).toMatchObject({ status: "done", said: "Hi, what can I do?", reason: "spoken", hint: FRONT_LISTENS });
+    expect(r.result).toMatchObject({ status: "done", said: "Hi, what can I do?", reason: "spoken", spoken: true, how: "said" });
+    expect(r.result.hint).toMatch(/listens next/);
     expect(r.result.heard).toBeUndefined();
-    expect(ctx.box.of("tts")[0]).toMatchObject({ front: "exact" });
+    expect(ctx.box.of("tts")[0]).toMatchObject({ front: "inner", exact: true });
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     expect(ctx.box.of("stt.start")[0].front).toBe(true);
     const u = (await ctx.inbox()).find((e) => e.type === "utterance")!;
@@ -372,6 +382,38 @@ describe("voice front: every way out", () => {
     expect(e.result).toMatchObject({ ended: true });
     expect(ctx.box.of("front.end")[0].reason).toBe("agent");
     expect(((await ctx.room.command(ctx.token, "front", {})) as any).error).toBe("invalid_args");
+  });
+
+  it("a persona line set through front {context, persona} is kept per device and given to every box that connects", async () => {
+    const ctx = await setup();
+    const c = (await ctx.room.command(ctx.token, "front", { context: "You are Dude, a cat lounging on Juan's desk; dry, warm humour.", persona: true })) as any;
+    expect(c.result).toMatchObject({ context: true });
+    expect(ctx.box.of("front.context").at(-1)).toMatchObject({ text: "You are Dude, a cat lounging on Juan's desk; dry, warm humour.", persona: true });
+    expect(await ctx.kv.get("front:persona")).toBe("You are Dude, a cat lounging on Juan's desk; dry, warm humour.");
+    await ctx.box.hello(); // the box restarts (or reconnects): it is told again
+    await until(() => ctx.box.of("front.context").filter((m) => m.persona).length === 2);
+    expect(ctx.box.of("front.context").filter((m) => m.persona).length).toBe(2);
+    expect(((await ctx.room.command(ctx.token, "front", { context: "x".repeat(501), persona: true })) as any).error).toBe("invalid_args");
+  });
+
+  it("after a front reply the device gets the say's end and the hands-free listen at once, with or without an agent answer in flight", async () => {
+    // live 2026-11-27 (turn 4): the reply's say stayed open 12.8 s for 4.5 s of audio; the next listen came 8 s late
+    for (const inFlight of [false, true]) {
+      const ctx = await setup({ chunks: 30, box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there, all good here!", wait: false }), absorb: (t) => t.startsWith("Hey") } });
+      await ctx.shake();
+      await until(() => ctx.dev.named("say").length > 0);
+      const reply = ctx.dev.named("say")[0].args.job as string;
+      const talk = inFlight ? (ctx.room.talk(ctx.token, { say: "Hey Juan! Just lounging on your desk." }) as Promise<any>) : undefined;
+      await until(() => ctx.dev.named("listen").length >= 2, 3000);
+      const sent = ctx.sock.bins.filter((b) => JSON.parse(new TextDecoder().decode(b.subarray(0, Math.max(0, b.indexOf(10)) || b.length))).s === reply);
+      expect(ctx.dev.ends[reply]).toBeDefined();
+      expect(sent.length).toBeGreaterThan(0);
+      // the end frame within the audio's own length of the say; the listen right after the say.done
+      expect(ctx.dev.ends[reply] - ctx.dev.named("say")[0].at).toBeLessThan(400);
+      expect(ctx.dev.named("listen")[1].at - ctx.dev.ends[reply]).toBeLessThan(300);
+      if (talk) expect((await talk).result).toMatchObject({ how: "absorbed" });
+      expect(sayTexts(ctx.dev)).toEqual(["Hey there, all good here!"]);
+    }
   });
 
   it("do not disturb, a tap, the box going away and the device going away all end it", async () => {
@@ -415,32 +457,38 @@ describe("voice front: every way out", () => {
 });
 
 describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)", () => {
-  it("an answer to a turn the person has moved on from is not said: the front has it as context, the agent a prompt truthful result", async () => {
-    // live: Dude's greeting for turn 1 came while the person spoke turn 2; it played after the front's reply to turn 2
-    const ctx = await setup({ chunks: 10, box: { heard: ["hi molty", "tell me something about my screen", ""], reply: () => ({ said: "Hi there!", wait: false }), turnEndAfter: 6 } });
+  it("one voice: the agent's greeting after the front's own greeting is absorbed, a new fact is said once in the front's turn", async () => {
+    // live 2026-11-27: the front greeted; 11 s later the agent's own greeting for that turn was said as a second answer
+    const ctx = await setup({ box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there!", wait: false }), absorb: (t) => t.startsWith("Hey") } });
     await ctx.shake();
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id as string;
-    // the person speaks turn 2 (the box heard speech start, the turn has not ended)
-    await until(() => Object.values(ctx.box.listens).filter((l) => l.heard).length >= 2 && Object.values(ctx.box.listens)[1].n >= 2);
-    const t0 = Date.now();
-    const r = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Purring along nicely.", in_reply_to: t1 })) as any;
-    expect(Date.now() - t0).toBeLessThan(100);
-    expect(r).toMatchObject({ ok: true, result: { status: "done", spoken: false, as: "context", reason: "newer_turn" } });
-    expect(r.result.hint).toMatch(/spoken again/);
-    expect(ctx.box.of("front.context").at(-1).text).toMatch(/Hey Juan! Purring along nicely\.$/);
-    // a retry of it is the same answer, still not said
-    const again = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Purring along nicely on your desk.", in_reply_to: t1 })) as any;
-    expect(again.result).toMatchObject({ job: r.result.job, spoken: false, repeated: true });
-    // the answer to turn 2, while nobody speaks: said
-    await until(async () => (await ctx.inbox()).filter((e) => e.type === "utterance").length >= 2);
-    const t2 = (await ctx.inbox()).filter((e) => e.type === "utterance")[1].data.turn_id as string;
-    const ok = (await ctx.room.talk(ctx.token, { say: "Your screen shows two words a line.", in_reply_to: t2 })) as any;
-    expect(ok.result).toMatchObject({ status: "done", said: "So, Your screen shows two words a line." });
-    expect(ctx.box.of("tts").map((t) => t.text)).toEqual(["Your screen shows two words a line."]);
-    expect(sayTexts(ctx.dev).some((t) => /Purring/.test(t))).toBe(false);
+    const g = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Just lounging on your desk like a proper cat.", in_reply_to: t1 })) as any;
+    expect(g).toMatchObject({ ok: true, result: { status: "done", spoken: false, as: "inner", how: "absorbed" } });
+    expect(g.result.hint).toMatch(/said nothing/);
+    const f = (await ctx.room.talk(ctx.token, { say: "By the way, your build passed." })) as any;
+    expect(f.result).toMatchObject({ status: "done", spoken: true, as: "inner", how: "said", said: "So, By the way, your build passed." });
+    expect(sayTexts(ctx.dev)).toEqual(["Hey there!", "So, By the way, your build passed."]);
+    expect(ctx.box.of("tts").map((t) => t.front)).toEqual(["inner", "inner"]); // never text to speech
     const act = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries;
-    expect(act.find((e: any) => e.kind === "job" && e.job === r.result.job).data).toMatchObject({ status: "done", as: "context", reason: "newer_turn" });
+    expect(act.find((e: any) => e.kind === "job" && e.job === g.result.job).data).toMatchObject({ status: "done", as: "inner" });
+  });
+
+  it("nothing is said while the person speaks: an answer to the turn before waits for their turn, then the front decides", async () => {
+    // live: Dude's greeting for turn 1 came while the person spoke turn 2 and played after the front's reply to it
+    const ctx = await setup({ chunks: 10, box: { heard: ["hi molty", "tell me something about my screen", ""], reply: () => ({ said: "Hi there!", wait: false }), turnEndAfter: 6, absorb: (t) => t.startsWith("Hey") } });
+    await ctx.shake();
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id as string;
+    await until(() => Object.values(ctx.box.listens).filter((l) => l.heard).length >= 2 && Object.values(ctx.box.listens)[1].n >= 2);
+    const r = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Purring along nicely.", in_reply_to: t1 })) as any;
+    expect(r.result).toMatchObject({ spoken: false, how: "absorbed" });
+    const sayAt = ctx.dev.named("say").map((c) => c.at);
+    expect(ctx.dev.named("listen_stop").length).toBeGreaterThan(0);
+    expect(sayAt.every((at) => at < ctx.dev.named("listen")[1].at || at > ctx.dev.named("listen_stop")[0].at)).toBe(true);
+    expect(sayTexts(ctx.dev).some((t) => /Purring/.test(t))).toBe(false);
+    const again = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Purring along nicely on your desk.", in_reply_to: t1 })) as any;
+    expect(again.result).toMatchObject({ job: r.result.job, how: "absorbed", repeated: true });
   });
 
   it("the same agent answering the same turn again while the first is queued, playing or done: never said twice, the first one's job", async () => {
@@ -457,7 +505,7 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     expect(second).toMatchObject({ ok: true, result: { job: one.result.job, status: "done", repeated: true, said: "So, Standup at 10." } });
     const third = (await ctx.room.command(ctx.token, "say", { text: "Standup is at 10 am.", in_reply_to: t1 })) as any;
     expect(third.result).toMatchObject({ job: one.result.job, repeated: true });
-    expect(ctx.box.of("tts").filter((t) => t.front === "own").length).toBe(1);
+    expect(ctx.box.of("tts").filter((t) => t.front === "inner").length).toBe(1);
     expect(sayTexts(ctx.dev).filter((t) => /tandup/.test(t)).length).toBe(1);
   });
 
@@ -471,10 +519,10 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     const r = (await ctx.room.command(ctx.token, "say", { text: "Hey! Going pretty smooth.", in_reply_to: t1 })) as any;
     expect(r.ok).toBe(true);
     const job = (await ctx.room.job(ctx.token, r.result.job, 0)) as any;
-    expect(job.result).toMatchObject({ status: "done", result: { spoken: false, as: "dropped", reason: "conversation_over" } });
+    expect(job.result).toMatchObject({ status: "done", result: { spoken: false, as: "inner", how: "absorbed", reason: "conversation_over" } });
     await sleep(50);
     expect(ctx.box.of("tts").length).toBe(tts);
-    expect(ctx.box.of("front.context").length).toBe(0);
+    expect(ctx.box.of("front.context").at(-1).text).toMatch(/Hey! Going pretty smooth\.$/); // kept, never voiced (no session opened for it)
     expect(sayTexts(ctx.dev)).toEqual(["Hi there!"]);
   });
 
@@ -487,14 +535,14 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     const latest = { id: "t1", at: 500 };
     expect(ft.fate("t1", latest)).toEqual({ speak: true });
     ft.spoken("t2"); // the person speaks again: t1 is not the moment any more
-    expect(ft.fate("t1", latest)).toMatchObject({ speak: false, as: "dropped", reason: "conversation_over" }); // (no conversation live here)
+    expect(ft.fate("t1", latest)).toEqual({ speak: false, reason: "conversation_over" }); // (no conversation live here)
     ft.listened({ ok: true, text: "" }, false, "t2"); // it was nothing: t1 is the moment again
     expect(ft.fate("t1", latest)).toEqual({ speak: true });
     ft.spoke("t1", { wait: true } as any); // the front handed t1 to the agent: its answer is said even after the person spoke again
     ft.spoken("t3");
     expect(ft.fate("t1", latest)).toEqual({ speak: true });
     now = 60001;
-    expect(ft.fate("t1", latest)).toEqual({ speak: false, as: "dropped", reason: "old_turn" });
+    expect(ft.fate("t1", latest)).toEqual({ speak: false, reason: "old_turn" });
   });
 });
 

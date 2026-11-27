@@ -10,10 +10,12 @@ Kyutai STT + a small fast model + Kyutai TTS, without touching the bridge or the
   listen_start(id, front, no_speech_s)  relay stt.start: a listen opens (front: answer it yourself at its end)
   listen_audio(id, pcm16)               Molty's mic, 16 kHz PCM16, as it arrives
   listen_end(id) / listen_cancel(id)    relay stt.end / stt.cancel
-  speak(id, text, mode)                 relay tts: mode "exact" (verbatim, also plain TTS), "own" (the agent's
-                                        answer in the front's words), "wait" (still waiting on the agent)
+  speak(id, text, mode, exact)          relay tts: mode "inner" (the agent's thought: voiced in the front's words,
+                                        or absorbed: tts.end absorbed; exact keeps its wording), "wait" (still
+                                        waiting on the agent), "plain" (verbatim TTS, the front off)
   speak_cancel(id)                      relay tts.cancel
-  context(text)                         relay front.context: silent background from the agent
+  context(text, persona)                relay front.context: silent background from the agent, kept across
+                                        sessions (persona: its standing persona line, in every session's brief)
   end(reason)                           relay front.end: the conversation is over, close the session
   close()                               the relay socket went away
 

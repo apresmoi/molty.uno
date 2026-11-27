@@ -25,13 +25,15 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
   box -> relay   voice.hello adds "front": 1 (the front protocol's version) and "engine": "realtime"
   relay -> box   stt.start adds "front": true: answer this listen yourself when the person's turn ends
                  ("hold": true: held to talk, the release ends it, never the model's turn detection)
-                 {"t":"tts",...,"front":"own"|"exact"|"wait"}: the agent's answer in the front's words / verbatim /
-                 "still waiting" (a plain tts is verbatim); {"t":"front.context","text"}; {"t":"front.end","reason"}
+                 {"t":"tts",...,"front":"inner"|"wait","exact"?}: the agent's thought (the front voices or absorbs it;
+                 exact: keep its wording) / "still waiting" (a plain tts is verbatim);
+                 {"t":"front.context","text","persona"?}; {"t":"front.end","reason"}
   box -> relay   {"t":"stt.hint","id","k":"speech"} the person started speaking
                  {"t":"front.reply","id","stt","ms"?} the front answers listen `stt` itself: frames s=id, tts.word,
                  tts.text, tts.end follow as for a tts
                  {"t":"tts.text","id","text","final"?} what is being said (the model's output transcript)
-                 {"t":"tts.end","id","wait"?:true,"ms"?} wait: the front handed the turn to the agent (a holding line)
+                 {"t":"tts.end","id","wait"?:true,"absorbed"?:true,"ms"?} wait: the front handed the turn to the agent
+                 (a holding line); absorbed: it kept the agent's thought and said nothing
                  {"t":"front.session","state":"open"|"closed","reason"?,"s"?,"usage"?,"today_s"?}
   both           {"t":"ping"} / {"t":"pong"} (the relay answers pings without waking up)
 """
@@ -256,12 +258,11 @@ class Bridge:
         elif t == "stt.cancel" and isinstance(mid, str):
             await f.listen_cancel(mid)
         elif t == "tts" and isinstance(mid, str) and text is not None:
-            mode = m.get("front") if m.get("front") in ("own", "exact", "wait") else "exact"
-            await f.speak(mid, text[:4000], mode)
+            await f.speak(mid, text[:4000], m.get("front") if isinstance(m.get("front"), str) else "plain", m.get("exact") is True)
         elif t == "tts.cancel" and isinstance(mid, str):
             await f.speak_cancel(mid)
         elif t == "front.context" and text:
-            await f.context(text[:4000])
+            await f.context(text[:4000], m.get("persona") is True)
         elif t == "front.end":
             await f.end(str(m.get("reason") or "ended")[:40])
 
