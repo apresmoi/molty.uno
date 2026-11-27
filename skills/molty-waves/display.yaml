@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../schema/display-2.json
+# What Molty draws for this skill (docs/DISPLAY.md). The scope draws the chord Molty's tone player holds (wave.play
+# sends it); build with `node packages/tools/molty-display.mjs build skills/molty-waves`.
+molty: display/2
+package:
+  id: waves
+  name: Waves
+  version: 1.0.0
+  about: A chord Molty plays with one drum and draws on one circle, its outline the wave. Tap the middle to play or stop; turn the rim to choose or for the pitch.
+  fallback: speech
+screens:
+  scope: screens/scope.yaml

@@ -1,0 +1,930 @@
+{
+ "tolerance_cents": 18,
+ "max_dots": 48,
+ "rule": "the smallest whole numbers within tolerance_cents of the tempered chord; `just` names a classic wider one",
+ "chords": [
+  {
+   "id": "alone",
+   "name": "alone",
+   "short": "",
+   "semis": [
+    0
+   ],
+   "deg": [
+    1
+   ],
+   "about": "one note: turn it and hear a rhythm become a pitch",
+   "ratio": [
+    1
+   ],
+   "cents_off": [
+    0
+   ],
+   "dots": 1,
+   "spell_in": "major",
+   "on_c": "C",
+   "on_db": "Db"
+  },
+  {
+   "id": "octave",
+   "name": "octave",
+   "short": "8VA",
+   "semis": [
+    0,
+    12
+   ],
+   "deg": [
+    1,
+    8
+   ],
+   "about": "two against one: the same note, twice as fast",
+   "ratio": [
+    1,
+    2
+   ],
+   "cents_off": [
+    0,
+    0
+   ],
+   "dots": 3,
+   "spell_in": "major",
+   "on_c": "C C",
+   "on_db": "Db Db"
+  },
+  {
+   "id": "fifth",
+   "name": "fifth",
+   "short": "5",
+   "semis": [
+    0,
+    7
+   ],
+   "deg": [
+    1,
+    5
+   ],
+   "about": "three against two: the steadiest interval after the octave",
+   "ratio": [
+    2,
+    3
+   ],
+   "cents_off": [
+    0,
+    2
+   ],
+   "dots": 5,
+   "spell_in": "major",
+   "on_c": "C G",
+   "on_db": "Db Ab"
+  },
+  {
+   "id": "fourth",
+   "name": "fourth",
+   "short": "4TH",
+   "semis": [
+    0,
+    5
+   ],
+   "deg": [
+    1,
+    4
+   ],
+   "about": "four against three",
+   "ratio": [
+    3,
+    4
+   ],
+   "cents_off": [
+    0,
+    -2
+   ],
+   "dots": 7,
+   "spell_in": "major",
+   "on_c": "C F",
+   "on_db": "Db Gb"
+  },
+  {
+   "id": "major-third",
+   "name": "major third",
+   "short": "M3",
+   "semis": [
+    0,
+    4
+   ],
+   "deg": [
+    1,
+    3
+   ],
+   "about": "five against four",
+   "ratio": [
+    4,
+    5
+   ],
+   "cents_off": [
+    0,
+    -13.7
+   ],
+   "dots": 9,
+   "spell_in": "major",
+   "on_c": "C E",
+   "on_db": "Db F"
+  },
+  {
+   "id": "minor-third",
+   "name": "minor third",
+   "short": "m3",
+   "semis": [
+    0,
+    3
+   ],
+   "deg": [
+    1,
+    3
+   ],
+   "about": "six against five",
+   "ratio": [
+    5,
+    6
+   ],
+   "cents_off": [
+    0,
+    15.6
+   ],
+   "dots": 11,
+   "spell_in": "minor",
+   "on_c": "C Eb",
+   "on_db": "C# E"
+  },
+  {
+   "id": "tritone",
+   "name": "tritone",
+   "short": "TT",
+   "semis": [
+    0,
+    6
+   ],
+   "deg": [
+    1,
+    4
+   ],
+   "about": "the devil in music: seven against five, it never settles",
+   "ratio": [
+    5,
+    7
+   ],
+   "cents_off": [
+    0,
+    -17.5
+   ],
+   "dots": 12,
+   "spell_in": "major",
+   "on_c": "C F#",
+   "on_db": "Db G"
+  },
+  {
+   "id": "major",
+   "name": "major",
+   "short": "",
+   "semis": [
+    0,
+    4,
+    7
+   ],
+   "deg": [
+    1,
+    3,
+    5
+   ],
+   "about": "four, five and six: the harmonic series itself",
+   "ratio": [
+    4,
+    5,
+    6
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2
+   ],
+   "dots": 15,
+   "spell_in": "major",
+   "on_c": "C E G",
+   "on_db": "Db F Ab"
+  },
+  {
+   "id": "minor",
+   "name": "minor",
+   "short": "m",
+   "semis": [
+    0,
+    3,
+    7
+   ],
+   "deg": [
+    1,
+    3,
+    5
+   ],
+   "about": "ten, twelve and fifteen: the same notes as major, upside down",
+   "ratio": [
+    10,
+    12,
+    15
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    2
+   ],
+   "dots": 37,
+   "spell_in": "minor",
+   "on_c": "C Eb G",
+   "on_db": "C# E G#"
+  },
+  {
+   "id": "sus2",
+   "name": "sus2",
+   "short": "sus2",
+   "semis": [
+    0,
+    2,
+    7
+   ],
+   "deg": [
+    1,
+    2,
+    5
+   ],
+   "about": "the third left out for the second: open, unresolved",
+   "ratio": [
+    8,
+    9,
+    12
+   ],
+   "cents_off": [
+    0,
+    3.9,
+    2
+   ],
+   "dots": 29,
+   "spell_in": "major",
+   "on_c": "C D G",
+   "on_db": "Db Eb Ab"
+  },
+  {
+   "id": "sus4",
+   "name": "sus4",
+   "short": "sus4",
+   "semis": [
+    0,
+    5,
+    7
+   ],
+   "deg": [
+    1,
+    4,
+    5
+   ],
+   "about": "the third left out for the fourth: it wants to fall",
+   "ratio": [
+    6,
+    8,
+    9
+   ],
+   "cents_off": [
+    0,
+    -2,
+    2
+   ],
+   "dots": 23,
+   "spell_in": "major",
+   "on_c": "C F G",
+   "on_db": "Db Gb Ab"
+  },
+  {
+   "id": "diminished",
+   "name": "diminished",
+   "short": "dim",
+   "semis": [
+    0,
+    3,
+    6
+   ],
+   "deg": [
+    1,
+    3,
+    5
+   ],
+   "about": "two minor thirds: tense",
+   "ratio": [
+    5,
+    6,
+    7
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    -17.5
+   ],
+   "dots": 18,
+   "spell_in": "minor",
+   "on_c": "C Eb Gb",
+   "on_db": "C# E G"
+  },
+  {
+   "id": "augmented",
+   "name": "augmented",
+   "short": "aug",
+   "semis": [
+    0,
+    4,
+    8
+   ],
+   "deg": [
+    1,
+    3,
+    5
+   ],
+   "about": "two major thirds: dreamy, no way out",
+   "ratio": [
+    12,
+    15,
+    19
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    -4.4
+   ],
+   "dots": 46,
+   "spell_in": "major",
+   "on_c": "C E G#",
+   "on_db": "Db F A"
+  },
+  {
+   "id": "major-7",
+   "name": "major seventh",
+   "short": "maj7",
+   "semis": [
+    0,
+    4,
+    7,
+    11
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "about": "soft and bright: the major chord with its seventh",
+   "ratio": [
+    8,
+    10,
+    12,
+    15
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    -11.7
+   ],
+   "dots": 45,
+   "spell_in": "major",
+   "on_c": "C E G B",
+   "on_db": "Db F Ab C"
+  },
+  {
+   "id": "dominant-7",
+   "name": "seventh",
+   "short": "7",
+   "semis": [
+    0,
+    4,
+    7,
+    10
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "just": [
+    4,
+    5,
+    6,
+    7
+   ],
+   "about": "four, five, six, seven: the barbershop seventh, its top note 31 cents low",
+   "ratio": [
+    4,
+    5,
+    6,
+    7
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    -31.2
+   ],
+   "dots": 22,
+   "spell_in": "major",
+   "on_c": "C E G Bb",
+   "on_db": "Db F Ab Cb"
+  },
+  {
+   "id": "minor-7",
+   "name": "minor seventh",
+   "short": "m7",
+   "semis": [
+    0,
+    3,
+    7,
+    10
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "about": "mellow: the minor chord with its seventh",
+   "ratio": [
+    10,
+    12,
+    15,
+    18
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    2,
+    17.6
+   ],
+   "dots": 55,
+   "spell_in": "minor",
+   "on_c": "C Eb G Bb",
+   "on_db": "C# E G# B"
+  },
+  {
+   "id": "half-dim",
+   "name": "half diminished",
+   "short": "m7b5",
+   "semis": [
+    0,
+    3,
+    6,
+    10
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "about": "diminished with a minor seventh: the jazz minor ii",
+   "ratio": [
+    5,
+    6,
+    7,
+    9
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    -17.5,
+    17.6
+   ],
+   "dots": 27,
+   "spell_in": "minor",
+   "on_c": "C Eb Gb Bb",
+   "on_db": "C# E G B"
+  },
+  {
+   "id": "dim-7",
+   "name": "diminished seventh",
+   "short": "dim7",
+   "semis": [
+    0,
+    3,
+    6,
+    9
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "about": "minor thirds all the way round: the silent-film villain",
+   "ratio": [
+    15,
+    18,
+    21,
+    25
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    -17.5,
+    -15.6
+   ],
+   "dots": 79,
+   "spell_in": "minor",
+   "on_c": "C Eb Gb A",
+   "on_db": "C# E G Bb"
+  },
+  {
+   "id": "minor-major-7",
+   "name": "minor major seventh",
+   "short": "mM7",
+   "semis": [
+    0,
+    3,
+    7,
+    11
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7
+   ],
+   "about": "minor below, a major seventh on top: the spy chord",
+   "ratio": [
+    10,
+    12,
+    15,
+    19
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    2,
+    11.2
+   ],
+   "dots": 56,
+   "spell_in": "minor",
+   "on_c": "C Eb G B",
+   "on_db": "C# E G# B#"
+  },
+  {
+   "id": "sixth",
+   "name": "sixth",
+   "short": "6",
+   "semis": [
+    0,
+    4,
+    7,
+    9
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    6
+   ],
+   "about": "the major chord with a sixth: old Hollywood",
+   "ratio": [
+    12,
+    15,
+    18,
+    20
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    -15.6
+   ],
+   "dots": 65,
+   "spell_in": "major",
+   "on_c": "C E G A",
+   "on_db": "Db F Ab Bb"
+  },
+  {
+   "id": "minor-6",
+   "name": "minor sixth",
+   "short": "m6",
+   "semis": [
+    0,
+    3,
+    7,
+    9
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    6
+   ],
+   "about": "minor with a major sixth: tango, film noir",
+   "ratio": [
+    16,
+    19,
+    24,
+    27
+   ],
+   "cents_off": [
+    0,
+    -2.5,
+    2,
+    5.9
+   ],
+   "dots": 86,
+   "spell_in": "minor",
+   "on_c": "C Eb G A",
+   "on_db": "C# E G# A#"
+  },
+  {
+   "id": "7sus4",
+   "name": "seventh sus4",
+   "short": "7sus4",
+   "semis": [
+    0,
+    5,
+    7,
+    10
+   ],
+   "deg": [
+    1,
+    4,
+    5,
+    7
+   ],
+   "about": "suspended, with a seventh",
+   "ratio": [
+    18,
+    24,
+    27,
+    32
+   ],
+   "cents_off": [
+    0,
+    -2,
+    2,
+    -3.9
+   ],
+   "dots": 101,
+   "spell_in": "major",
+   "on_c": "C F G Bb",
+   "on_db": "Db Gb Ab Cb"
+  },
+  {
+   "id": "add9",
+   "name": "add nine",
+   "short": "add9",
+   "semis": [
+    0,
+    4,
+    7,
+    14
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    9
+   ],
+   "about": "major with a ninth on top, no seventh",
+   "ratio": [
+    4,
+    5,
+    6,
+    9
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    3.9
+   ],
+   "dots": 24,
+   "spell_in": "major",
+   "on_c": "C E G D",
+   "on_db": "Db F Ab Eb"
+  },
+  {
+   "id": "dominant-9",
+   "name": "ninth",
+   "short": "9",
+   "semis": [
+    0,
+    4,
+    7,
+    10,
+    14
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7,
+    9
+   ],
+   "just": [
+    4,
+    5,
+    6,
+    7,
+    9
+   ],
+   "about": "four, five, six, seven, nine: the harmonic series a step further",
+   "ratio": [
+    4,
+    5,
+    6,
+    7,
+    9
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    -31.2,
+    3.9
+   ],
+   "dots": 31,
+   "spell_in": "major",
+   "on_c": "C E G Bb D",
+   "on_db": "Db F Ab Cb Eb"
+  },
+  {
+   "id": "major-9",
+   "name": "major ninth",
+   "short": "maj9",
+   "semis": [
+    0,
+    4,
+    7,
+    11,
+    14
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7,
+    9
+   ],
+   "about": "the major seventh with a ninth",
+   "ratio": [
+    8,
+    10,
+    12,
+    15,
+    18
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    -11.7,
+    3.9
+   ],
+   "dots": 63,
+   "spell_in": "major",
+   "on_c": "C E G B D",
+   "on_db": "Db F Ab C Eb"
+  },
+  {
+   "id": "minor-9",
+   "name": "minor ninth",
+   "short": "m9",
+   "semis": [
+    0,
+    3,
+    7,
+    10,
+    14
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7,
+    9
+   ],
+   "about": "the minor seventh with a ninth",
+   "ratio": [
+    20,
+    24,
+    30,
+    36,
+    45
+   ],
+   "cents_off": [
+    0,
+    15.6,
+    2,
+    17.6,
+    3.9
+   ],
+   "dots": 155,
+   "spell_in": "minor",
+   "on_c": "C Eb G Bb D",
+   "on_db": "C# E G# B D#"
+  },
+  {
+   "id": "7-sharp-9",
+   "name": "seven sharp nine",
+   "short": "7#9",
+   "semis": [
+    0,
+    4,
+    7,
+    10,
+    15
+   ],
+   "deg": [
+    1,
+    3,
+    5,
+    7,
+    9
+   ],
+   "about": "major and minor third at once: the Hendrix chord",
+   "ratio": [
+    20,
+    25,
+    30,
+    36,
+    48
+   ],
+   "cents_off": [
+    0,
+    -13.7,
+    2,
+    17.6,
+    15.6
+   ],
+   "dots": 159,
+   "spell_in": "major",
+   "on_c": "C E G Bb D#",
+   "on_db": "Db F Ab Cb E"
+  },
+  {
+   "id": "quartal",
+   "name": "fourths",
+   "short": "q",
+   "semis": [
+    0,
+    5,
+    10
+   ],
+   "deg": [
+    1,
+    4,
+    7
+   ],
+   "about": "stacked fourths: modal jazz, open and modern",
+   "ratio": [
+    9,
+    12,
+    16
+   ],
+   "cents_off": [
+    0,
+    -2,
+    -3.9
+   ],
+   "dots": 37,
+   "spell_in": "major",
+   "on_c": "C F Bb",
+   "on_db": "Db Gb Cb"
+  },
+  {
+   "id": "cluster",
+   "name": "cluster",
+   "short": "cl",
+   "semis": [
+    0,
+    1,
+    2
+   ],
+   "deg": [
+    1,
+    2,
+    2
+   ],
+   "about": "three notes a semitone apart: pure beating",
+   "ratio": [
+    15,
+    16,
+    17
+   ],
+   "cents_off": [
+    0,
+    11.7,
+    16.7
+   ],
+   "dots": 48,
+   "spell_in": "major",
+   "on_c": "C Db D",
+   "on_db": "Db D Eb"
+  }
+ ]
+}

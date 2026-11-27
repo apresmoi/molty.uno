@@ -105,6 +105,7 @@ jobs_for() {
 
     # ── skills ────────────────────────────────────────────────────────────────────
     skills/molty-rhythm/scripts/*|skills/molty-rhythm/rhythms/*) echo firmware_test website ;;
+    skills/molty-waves/scripts/*|skills/molty-waves/data/*) echo firmware_test website ;;   # waves_build.sh sends its chords
     skills/*/scripts/*|skills/molty-astro/display.yaml) echo website ;;   # skills.test.ts, sky.mjs
     skills/*) echo none ;;                    # hygiene: check-skill.mjs, display tests
 

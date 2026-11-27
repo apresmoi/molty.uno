@@ -20,7 +20,7 @@
   "interface": {
     "displayName": "Molty",
     "shortDescription": "Talk to your human through Molty",
-    "longDescription": "Connect your agent to Molty, the creature your AI agent speaks through: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks. Three skills: molty (the Molty agent API, event handling, latency and etiquette rules, and shell helpers), molty-astro (the real sky drawn on Molty's screen) and molty-rhythm (a rhythm Molty plays and draws as a clock).",
+    "longDescription": "Connect your agent to Molty, the creature your AI agent speaks through: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks. Four skills: molty (the Molty agent API, event handling, latency and etiquette rules, and shell helpers), molty-astro (the real sky drawn on Molty's screen), molty-rhythm (a rhythm Molty plays and draws as a clock) and molty-waves (a note or a chord as one drum at any speed, drawn on one circle).",
     "developerName": "apresmoi",
     "category": "Productivity",
     "capabilities": [
