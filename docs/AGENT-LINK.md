@@ -1874,7 +1874,11 @@ line), IDLE (no session).
    whether or not the model called its hand-off tool; the reply's end waits for the transcript for
    that (1 s at most; it comes about 0.3 s after the turn). No output token cap on a reply: live,
    one cut two replies before their hand-off call. Every response's end is logged with its status
-   and reason.
+   and reason. **Never silence:** a handed-off reply that said (almost) nothing is followed at once,
+   in the same stream, by a holding line on the person's words (out of band, tools off), and if that
+   is empty too by a fixed one read aloud ("Okay, let me check."). **A bare hum** (a very short turn
+   whose words are only "hmm", "uh", "okay") gets "Mm-hm?" read aloud, and Molty listens again: its
+   reply waits for the words (0.4 s at most; only turns under 0.9 s of speech).
 2. **An agent line that replies to turn T** (`in_reply_to`) is voiced only when the front is
    WAITING for T: at once, a short bridge ("Ok, got it:", the box's own) and the agent's words,
    then LISTENING. A voiced agent line is a read-aloud job out of band (`response.create` with
@@ -1893,7 +1897,10 @@ line), IDLE (no session).
 4. **The conversation never ends under a reply or a wait**: a listen the front's model heard
    speech in is the model's turn (the relay's own voice check does not overrule it), and a listen
    the front replied to never ends the conversation as idle. WAITING ends by its own limit: "still
-   on it" once at 8 s, then a listen; nobody speaking ends it.
+   on it" once at 8 s, then a listen; nobody speaking ends it. "Still on it" is a fixed line read
+   aloud, naming the task in the person's words when that is easy ("Still checking your calendar."),
+   never free words; when the agent's answer comes before it has sounded, it is dropped (`tts.end
+   absorbed`) and the answer plays.
 5. **Background** (the agent's lines, context, its persona) is part of the session instructions,
    marked as already said or known with the rule never to recite it; never conversation items.
    The agent's last 8 lines (2000 characters, none older than 15 minutes) and its persona line
