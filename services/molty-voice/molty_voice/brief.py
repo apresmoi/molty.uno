@@ -13,15 +13,16 @@ wording changes (docs/AGENT-LINK.md "Voice front").
   extra second of speech is a second the person waits to talk again (the device cannot hear
   while it speaks).
 - Varied holding lines: the same "let me check" every turn sounds broken.
-- One voice. The front is the only speaker; everything the agent says reaches it as its own
-  inner thought, never as an order to the speaker. Per response it is told who that thought is from
-  and what to do: voice it (a waiting turn: now, after a short bridge; something new: briefly, as one
-  voice going on) or absorb it (a repeat of what it said: the stay_silent tool, no audio). Live, a
-  model treated a bare "Inner voice: ..." message as something to react to ("let me translate
-  that"): the per-response instructions say it is its own thought, never to comment on.
-- Filler by default: without the context to answer, the front says a holding line that echoes a
-  few of the person's words ("checking your emails, one sec") and hands the turn to the agent.
+- One voice, one place that decides (molty_voice/realtime.py "state"): every turn of the person
+  gets exactly one front response, its own answer or a holding line and a hand-off; an agent line
+  is voiced only when the front waits for it. Live, letting the model choose whether to voice a
+  late agent line made it answer the wrong turn and repeat itself: there is no such choice now.
+- Filler by default: answering itself is final for that turn (the agent's later line for it is
+  only context), so the front answers only what it already has; for the rest it says a holding
+  line that echoes a few of the person's words ("checking your emails, one sec") and hands off.
   Guessing is worse than a short wait. Inline [cues] are the device's, never spoken.
+- Background (the agent's earlier lines, context, its persona) is part of the instructions, marked
+  as already said: live, background sent as conversation items was recited in a new session.
 """
 
 from __future__ import annotations
@@ -48,10 +49,12 @@ How you talk:
 
 What to do with what the person says:
 - Answer yourself ONLY when you already have what it takes: a greeting, chit-chat, thanks, how you \
-are, a repeat, or something the inner voice already told you (its context).
-- Everything else goes to the agent: anything that needs knowledge, memory, the person's data, a \
-tool, an action, a decision or the agent's own opinion, and whenever they address the agent by \
-name or ask Molty to do something. When unsure, hand off.
+are, a repeat, or something your background below already says. What you answer yourself is final \
+for that turn: the agent will not add to it.
+- Everything else goes to the agent: anything that needs knowledge, memory, the person's data, \
+their plans or day, a tool, an action, a decision or the agent's own opinion, and whenever they \
+address the agent by name or ask Molty to do something. Whenever the agent would know better, \
+hand off. When unsure, hand off.
 - To hand off: say one short, natural holding line that echoes a few of the person's own words, \
 so they hear what you are on ("ok, let me see... checking your emails, give me a second", "hmm, \
 your account, let me look"), and call hand_to_agent with what they asked in one line. Vary it \
@@ -60,13 +63,10 @@ every time. Never a bare "one moment" when you can name the thing. Never a guess
 was done.
 - If the person says goodbye or that they are done, say a short goodbye.
 
-Your inner voice's thoughts come with their own instructions: they are your own thoughts, to say \
-in your own words or to keep to yourself, never something to comment on, translate or answer. \
-System messages that start with "Inner voice context:" are background: use them, do not read \
-them out.
+When the agent answers a turn you handed it, you are told what to say: say it then, as your own \
+words. Background below is what was already said or is known: use it, never recite it, never \
+repeat it, never answer it.
 """
-
-SILENT_TOOL = "stay_silent"
 
 TOOLS = [
     {
@@ -78,28 +78,12 @@ TOOLS = [
     }
 ]
 
-# per response, for an inner voice thought only: the way to say nothing
-SILENT = [
-    {
-        "type": "function",
-        "name": SILENT_TOOL,
-        "description": "Say nothing now: the thought only repeats what you already said (a greeting after your greeting, the same answer). It stays with you as context.",
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-    }
-]
-
-
 _CUE = re.compile(r"\s*\[[^\]\n]{0,40}\]")
 
 
 def spoken(text: str) -> str:
     """The words to say: inline [cues] (the device's moods and gestures) are never spoken."""
     return re.sub(r"\s{2,}", " ", _CUE.sub("", text)).strip()
-
-
-def context(text: str) -> str:
-    """Background from the agent, said only if the person asks."""
-    return f"Inner voice context: {text}"
 
 
 def exactly(text: str) -> str:
@@ -109,21 +93,23 @@ def exactly(text: str) -> str:
 
 
 def inner(text: str, exact: bool = False, waiting: bool = False) -> str:
-    """Per-response instructions for a thought of the inner voice (the agent): voice it or absorb it."""
-    what = ("The person is waiting for this: tell them now, as your own continuation, with a short natural bridge "
-            "(\"ok, got it:\") and then all of it. Do not stay silent."
+    """Per-response instructions for an agent line the front voices: the answer it waits for, or the agent speaking up."""
+    what = ("The person is waiting for this answer: tell them now, as your own continuation, with a short natural bridge "
+            "(\"ok, got it:\") and then all of it."
             if waiting else
-            "If it tells the person something you have not said yet, tell them briefly now, as one voice going on (never a "
-            "second greeting, never a second answer). If it only repeats what you already said, call stay_silent and say nothing.")
+            "Tell the person this now, briefly, as Molty starting to talk.")
     how = "Keep its wording as close as you can." if exact else "Say it in your own spoken words."
-    return ("You are Molty's voice. Below is your own inner thought, from the part of you that knows the facts. It is not "
-            "something to comment on, translate, answer or attribute to anyone. " + what + " " + how + " Keep every fact, "
-            f"number and name exactly. The thought: {spoken(text)}")
+    return ("Now say this, from the part of you that knows the facts. It is not something to comment on, translate, answer "
+            "or attribute to anyone. " + what + " " + how + " Keep every fact, number and name exactly. Say only this, nothing "
+            f"from your background. The thought: {spoken(text)}")
 
 
-def persona(text: str) -> str:
-    """The agent's standing persona line, added to the brief of every session."""
-    return f"\nPersona: {text}"
+def instructions(persona: str, known: list[str]) -> str:
+    """The session's instructions: the brief, the agent's persona, and what is already said or known (never to recite)."""
+    out = BRIEF + (f"\nPersona: {persona}" if persona else "")
+    if known:
+        out += "\nBackground, already said or known (never say it again, never recite it):\n" + "\n".join(f"- {k}" for k in known)
+    return out
 
 
 STILL_WAITING = (

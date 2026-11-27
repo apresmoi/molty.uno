@@ -118,7 +118,9 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     # turn detection only while the listen runs: off at the open, on at its start, off at its end
     assert up["audio"]["input"]["turn_detection"] is None
     tds = [u["audio"]["input"]["turn_detection"] for u in s["updates"][1:]]
-    assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is True and tds[0]["interrupt_response"] is False
+    # create_response off: the box asks for the one reply itself, on the commit (rule 1)
+    assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is False and tds[0]["interrupt_response"] is False
+    assert len(s["creates"]) == 1
     assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
@@ -140,7 +142,7 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     assert "function_call_output" in s["items"]  # the tool call is answered, so the conversation stays valid
 
 
-def test_inner_voice_thoughts_exact_and_the_queue():
+def test_the_agent_speaking_up_between_conversations_is_voiced_exact_and_the_queue():
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "tts", "id": "t1", "text": "Your next meeting is at 3 pm.", "front": "inner"})
         await relay.send({"t": "tts", "id": "t2", "text": "Build 42 passed.", "front": "inner", "exact": True})  # while t1 speaks: queued
@@ -150,32 +152,30 @@ def test_inner_voice_thoughts_exact_and_the_queue():
 
     relay, fake, _ = asyncio.run(run(scenario))
     s = fake.sessions[0]
-    assert "Inner voice context: The build log is 200 lines long." in s["items"]
-    assert [c["instructions"] for c in s["creates"]] == [brief.inner("Your next meeting is at 3 pm."), brief.inner("Build 42 passed.", exact=True), brief.exactly("hi")]
-    assert [c.get("tools") for c in s["creates"]] == [brief.SILENT, brief.SILENT, None]
+    ins = [c["instructions"] for c in s["creates"]]
+    assert ins[0].endswith("\n\n" + brief.inner("Your next meeting is at 3 pm.")) and ins[0].startswith(brief.BRIEF)
+    assert ins[1].endswith("\n\n" + brief.inner("Build 42 passed.", exact=True))
+    assert ins[2] == brief.exactly("hi")
+    assert all(c["tool_choice"] == "none" and "tools" not in c for c in s["creates"])
+    assert "- The build log is 200 lines long." in s["updates"][-1]["instructions"]  # background in the instructions...
+    assert not any("build log" in str(i) for i in s["items"])  # ...never an item a model may recite
     assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Your next meeting is at 3 pm."
     assert relay.of("tts.text", id="t2")[-1]["text"] == "Build 42 passed."  # exact: its wording kept
     assert [m["id"] for m in relay.of("tts.end")] == ["t1", "t2", "t3"]
     assert all("error" not in m and "absorbed" not in m for m in relay.of("tts.end"))
-    assert not relay.of("front.reply")
 
 
-def test_an_answer_sent_while_the_person_talks_waits_for_the_reply():
+def test_an_agent_line_while_the_person_talks_is_context_and_the_turn_gets_its_one_reply():
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
         await relay.mic("s1", speech(400))
-        await relay.send({"t": "tts", "id": "t1", "text": "Done.", "front": "own"})  # the agent, while the person still talks
-        await asyncio.sleep(0.2)
-        held = len(fake.sessions[0]["creates"])
+        await relay.send({"t": "tts", "id": "t1", "text": "Done.", "front": "inner"})  # the agent, while the person still talks
         await relay.mic("s1", speech(200) + silence(700))
-        await relay.until(lambda: relay.of("tts.end", id="t1") and relay.of("front.reply"))
-        relay.held = held
+        await relay.until(lambda: relay.of("tts.end", id="t1") and relay.of("front.reply") and relay.of("tts.end", id=relay.of("front.reply")[0]["id"]))
 
     relay, fake, _ = asyncio.run(run(scenario))
-    assert relay.held == 0  # nothing generated while the person was talking
-    reply = relay.of("front.reply")[0]["id"]
-    ends = [m["id"] for m in relay.of("tts.end")]
-    assert ends.index(reply) < ends.index("t1")  # the front's reply first, then the agent's answer
+    assert relay.of("tts.end", id="t1")[0] == {"t": "tts.end", "id": "t1", "absorbed": True}
+    assert "t1" not in relay.audio and len(fake.sessions[0]["creates"]) == 1  # only the turn's own reply
 
 
 def test_a_plain_listen_only_transcribes():
@@ -329,7 +329,7 @@ def test_the_next_listen_is_not_ended_by_the_last_turn():
     assert not relay.of("front.reply", stt="s2")
 
 
-def test_the_inner_voice_is_the_fronts_own_thought_cues_never_spoken():
+def test_the_agents_line_is_said_as_its_own_cues_never_spoken():
     # live: "Hey Juan! [happy] All good here..." came out as "Okay, that's a neat vibe, let me translate that briefly."
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "tts", "id": "t1", "text": "Hey Juan! [happy] All good here, and yeah, pretty fast today.", "front": "inner"})
@@ -337,40 +337,44 @@ def test_the_inner_voice_is_the_fronts_own_thought_cues_never_spoken():
 
     relay, fake, _ = asyncio.run(run(scenario))
     c = fake.sessions[0]["creates"][0]
-    assert "[happy]" not in c["instructions"] and c["tool_choice"] == "auto" and c["tools"] == brief.SILENT
-    for rule in ("your own inner thought", "not something to comment on, translate, answer", "call stay_silent", "never a second greeting"):
+    assert "[happy]" not in c["instructions"] and c["tool_choice"] == "none"
+    for rule in ("not something to comment on, translate, answer", "nothing from your background", "Keep every fact, number and name exactly"):
         assert rule in c["instructions"]
-    assert not any(str(i).startswith("Inner voice: ") for i in fake.sessions[0]["items"])
+    assert not any(str(i).startswith("Inner voice") for i in fake.sessions[0]["items"])
     assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Hey Juan! All good here, and yeah, pretty fast today."
 
 
-def test_a_greeting_after_the_fronts_greeting_is_absorbed_a_new_fact_is_said():
-    # live 2026-11-27: the front greeted, then the agent's own greeting for the same turn was said as a second answer
+async def _turn(relay, sid: str, ms: int = 500):
+    """One person's turn the model ends; the relay ends the listen after it, as it does."""
+    await relay.send({"t": "stt.start", "id": sid, "rate": 16000, "front": True})
+    await relay.mic(sid, speech(ms) + silence(700))
+    await relay.until(lambda: relay.of("front.reply", stt=sid) and relay.of("tts.end", id=relay.of("front.reply", stt=sid)[0]["id"]))
+    await relay.send({"t": "stt.end", "id": sid})
+
+
+def test_the_front_answered_a_turn_itself_the_agents_line_for_it_is_only_context():
+    # live 2026-11-27: the front greeted, then the agent's own greeting for that turn was said as a second answer
     async def scenario(relay, fake, bridge):
-        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
-        await relay.mic("s1", speech(500) + silence(700))  # "hello molty": the front greets
-        await relay.until(lambda: relay.of("front.reply") and relay.of("tts.end", id=relay.of("front.reply")[0]["id"]))
-        await relay.send({"t": "stt.end", "id": "s1"})
-        await relay.send({"t": "tts", "id": "t1", "text": "Hey Juan! Just lounging on your desk.", "front": "inner"})
-        await relay.send({"t": "tts", "id": "t2", "text": "Your build 42 passed an hour ago.", "front": "inner"})
+        await _turn(relay, "s1")  # "hello molty": the front greets
+        await relay.send({"t": "tts", "id": "t1", "text": "Hey Juan! Just lounging on your desk.", "front": "inner", "turn": "s1"})
+        await relay.send({"t": "tts", "id": "t2", "text": "By the way, your build passed.", "front": "inner"})  # no turn, mid conversation
         await relay.until(lambda: relay.of("tts.end", id="t1") and relay.of("tts.end", id="t2"))
 
-    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"absorb": lambda t: t.startswith("Hey")}))
-    t1, t2 = relay.of("tts.end", id="t1")[0], relay.of("tts.end", id="t2")[0]
-    assert t1.get("absorbed") is True and "error" not in t1 and "t1" not in relay.audio
-    assert "absorbed" not in t2 and relay.of("tts.text", id="t2")[-1]["text"] == "So, Your build 42 passed an hour ago."
-    assert "function_call_output" in fake.sessions[0]["items"]  # the silent tool is answered too
+    relay, fake, _ = asyncio.run(run(scenario))
+    for t in ("t1", "t2"):
+        assert relay.of("tts.end", id=t)[0].get("absorbed") is True and t not in relay.audio
+    s = fake.sessions[0]
+    assert len(s["creates"]) == 1  # the turn's one reply, nothing else
+    assert "- Your inner voice said: Hey Juan! Just lounging on your desk." in s["updates"][-1]["instructions"]
 
 
-def test_a_question_it_cannot_answer_is_a_filler_naming_it_then_the_agents_answer_follows_on():
+def test_a_question_it_cannot_answer_is_a_filler_naming_it_then_the_agents_answer_once():
     async def scenario(relay, fake, bridge):
-        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
-        await relay.mic("s1", speech(500) + silence(700))
-        await relay.until(lambda: relay.of("front.reply") and relay.of("tts.end", id=relay.of("front.reply")[0]["id"]))
-        await relay.send({"t": "stt.end", "id": "s1"})
+        await _turn(relay, "s1")
         await relay.send({"t": "tts", "id": "w1", "text": "", "front": "wait"})
-        await relay.send({"t": "tts", "id": "t1", "text": "You have two new emails, both from Ana.", "front": "inner"})
-        await relay.send({"t": "tts", "id": "t2", "text": "One is about Friday.", "front": "inner"})
+        await relay.send({"t": "tts", "id": "t1", "text": "You have two new emails, both from Ana.", "front": "inner", "turn": "s1"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+        await relay.send({"t": "tts", "id": "t2", "text": "One is about Friday.", "front": "inner", "turn": "s1"})
         await relay.until(lambda: relay.of("tts.end", id="t2"))
 
     relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "any new emails?"}))
@@ -378,10 +382,22 @@ def test_a_question_it_cannot_answer_is_a_filler_naming_it_then_the_agents_answe
     assert relay.of("tts.end", id=reply)[0]["wait"] is True
     assert "new emails" in relay.of("tts.text", id=reply)[-1]["text"]  # the holding line names the task
     creates = fake.sessions[0]["creates"]
-    assert "naming the task" in creates[-3]["instructions"]  # the "still waiting" filler, once
-    assert creates[-2]["instructions"] == brief.inner("You have two new emails, both from Ana.", waiting=True)
+    assert "naming the task" in creates[1]["instructions"]  # the "still on it" filler, once
+    assert creates[2]["instructions"].endswith(brief.inner("You have two new emails, both from Ana.", waiting=True))
     assert relay.of("tts.text", id="t1")[-1]["text"].startswith("Ok, got it: You have two new emails")
-    assert creates[-1]["instructions"] == brief.inner("One is about Friday.")  # the turn is no longer waiting
+    assert relay.of("tts.end", id="t2")[0].get("absorbed") is True and len(creates) == 3  # no longer waiting: context
+
+
+def test_a_new_turn_wins_the_answer_to_the_turn_before_is_context():
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")  # handed off
+        await _turn(relay, "s2")  # the person speaks again before the agent answered
+        await relay.send({"t": "tts", "id": "t1", "text": "You have two new emails.", "front": "inner", "turn": "s1"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "any new emails?"}))
+    assert relay.of("tts.end", id="t1")[0].get("absorbed") is True
+    assert len(relay.of("front.reply")) == 2 and len(fake.sessions[0]["creates"]) == 2  # one reply per turn, no more
 
 
 def test_the_brief_sets_filler_by_default_and_hand_off_for_real_questions():
@@ -391,20 +407,24 @@ def test_the_brief_sets_filler_by_default_and_hand_off_for_real_questions():
     assert brief.TOOLS[0]["parameters"]["required"] == ["request"]
 
 
-def test_the_agents_lines_and_persona_outlive_the_session():
+def test_the_agents_lines_and_persona_outlive_the_session_as_background_never_said():
+    # live 2026-11-27: memory sent as items to a new session was recited ("Just lounging on your desk...") a second time
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "front.context", "text": "Dude is a cat who lounges on the desk; dry humour.", "persona": True})
-        await relay.send({"t": "tts", "id": "t1", "text": "Your build passed.", "front": "inner"})
+        await relay.send({"t": "tts", "id": "t1", "text": "Just lounging on your desk.", "front": "inner"})
         await relay.until(lambda: relay.of("tts.end", id="t1"))
         await relay.send({"t": "front.end", "reason": "idle"})
         await relay.until(lambda: relay.of("front.session", state="closed"))
-        await relay.send({"t": "tts", "id": "t2", "text": "hi", "front": "inner"})
+        await relay.send({"t": "tts", "id": "t2", "text": "Your build passed.", "front": "inner"})
         await relay.until(lambda: relay.of("tts.end", id="t2"))
 
     relay, fake, _ = asyncio.run(run(scenario))
     second = fake.sessions[1]
-    assert second["updates"][0]["instructions"].endswith("Persona: Dude is a cat who lounges on the desk; dry humour.")
-    assert "Inner voice context: Your inner voice said: Your build passed." in second["items"]
+    ins = second["updates"][0]["instructions"]
+    assert "\nPersona: Dude is a cat who lounges on the desk; dry humour." in ins
+    assert "never say it again, never recite it):\n- Your inner voice said: Just lounging on your desk." in ins
+    assert not any("lounging" in str(i) for i in second["items"])
+    assert relay.of("tts.text", id="t2")[-1]["text"] == "So, Your build passed."  # said once, nothing replayed
 
 
 def test_a_reply_that_waited_in_the_queue_counts_its_first_audio_from_its_creation():
@@ -430,14 +450,17 @@ def test_context_with_no_session_opens_none_and_reaches_the_next_one():
     # live 2026-11-27: a late answer must never open a (billed) session by itself
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "front.context", "text": "The agent said: purring along nicely."})
+        await relay.send({"t": "tts", "id": "t0", "text": "Mrrp, I am listening.", "front": "inner", "turn": "s9"})  # a turn the front never waited for
+        await relay.until(lambda: relay.of("tts.end", id="t0"))
         await asyncio.sleep(0.3)
         relay.sessions_then = len(fake.sessions)
         await relay.send({"t": "tts", "id": "t1", "text": "hi", "front": "inner"})
         await relay.until(lambda: relay.of("tts.end", id="t1"))
 
     relay, fake, _ = asyncio.run(run(scenario))
-    assert relay.sessions_then == 0
-    assert "Inner voice context: The agent said: purring along nicely." in fake.sessions[0]["items"]
+    assert relay.sessions_then == 0 and relay.of("tts.end", id="t0")[0].get("absorbed") is True
+    assert "- The agent said: purring along nicely." in fake.sessions[0]["updates"][0]["instructions"]
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, hi"
 
 
 def test_word_cues_and_texts_line_up_with_the_whole_line():
@@ -459,3 +482,17 @@ def test_word_cues_and_texts_line_up_with_the_whole_line():
         for a, b in zip(texts, texts[1:]):
             assert b == a or b.startswith(a + " ")
         assert texts[-1] == said  # a final transcript that restates earlier words never replaces them
+
+
+def test_every_turn_end_gets_its_one_reply_even_when_the_listen_ends_at_once():
+    # live 2026-11-27 (run 5, turn 2): the model ended the turn, the relay ended the listen at once (turn detection
+    # off), and no reply ever came; then the agent's line for the turn before was said instead
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
+        await relay.mic("s1", speech(500) + silence(700))
+        await relay.until(lambda: relay.of("stt.turn_end", id="s1"))
+        await relay.send({"t": "stt.end", "id": "s1"})  # as the relay does, at once
+        await relay.until(lambda: relay.of("front.reply", stt="s1") and relay.of("tts.end", id=relay.of("front.reply", stt="s1")[0]["id"]), timeout=3)
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"auto_create_ms": 300}))
+    assert len(relay.of("front.reply", stt="s1")) == 1 and len(fake.sessions[0]["creates"]) == 1

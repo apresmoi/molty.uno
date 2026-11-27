@@ -68,9 +68,10 @@ the *voice front* (`docs/AGENT-LINK.md` "Voice front"). It hears you while you s
 you are done, and answers within a fraction of a second; your agent stays the brain. **One
 voice:** the front is Molty's only speaker. It answers small talk itself; for anything else it
 says a short holding line that names what you asked ("checking your emails, one sec") and hands
-the turn to your agent. Everything your agent says reaches the front as its own inner thought:
-it says it in its words (a waiting turn at once, with a short "ok, got it"; something new at the
-next natural moment) or keeps it to itself when it only repeats what was said. Your agent's last
+the turn to your agent. Every turn of yours gets exactly one answer from the front, and your
+agent's line is voiced only for a turn the front handed it (at once, with a short "ok, got it"),
+or when no conversation is going on (your agent speaking up); any other line of your agent is
+background the front knows but never says. Your agent's last
 lines (8, 2000 characters in all) and its persona line (`front {context, persona: true}`) stay
 with the front across sessions, so it sounds like your agent. The first provider is OpenAI's
 Realtime API.
