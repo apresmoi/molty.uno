@@ -217,6 +217,7 @@ typedef struct {
     float tone;                         /* 0 a beat .. 1 a note: the note in the unit fades in                    */
     float land;                         /* the number a little bigger on a landing, 1 down to 0                   */
     bool mark;                          /* the centre's mark shows (playing: not while the rim turns)            */
+    bool still;                         /* the same as last frame, the outline too: nothing moves                */
     int budget;                         /* shapes it may make                                                    */
 } scene_wave_t;
 /** The wave's items after the layout's own (a no-op without a wave item). Each frame, after scene_beat. */
