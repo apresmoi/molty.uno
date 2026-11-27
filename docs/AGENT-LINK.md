@@ -1916,9 +1916,12 @@ a *front listen*: the device's silence VAD is off (`vad:false`, firmware with `l
 mic chunks go to the box as they arrive, and the model's turn detection ends the turn: the relay
 sends `listen_stop {reason:"turn_end"}` at once. The box's `front.reply` plays as a relay-owned say
 the moment the device's listen is over (its end frame, ≤ 600 ms): `cmd say` waits for the first
-audio, then at most 150 ms for its transcript, and shows those words (the device takes a say's text
-once, so later words of a long reply are not shown; word cues are estimated by the box from when
-each word's text arrived). No auto filler, no first words: the front answered.
+audio, then at most 150 ms for its transcript, and shows those words. Firmware with the cap
+`say_text` gets the rest as the model speaks it: `cmd say_text {job, text}` with the say's whole
+text so far (whole words, each continuing the last; at most every 100 ms, the final text always,
+none after the say ended or after `taken: false`; a transcript that changed words already sent
+stops it), and every word is cued. Older firmware shows only the first words. Word cues are
+estimated by the box from when each word's text arrived, word i of the same whitespace-split text. No auto filler, no first words: the front answered.
 
 **The agent (inner voice).** It works as the skill says, with one more field and these changes:
 

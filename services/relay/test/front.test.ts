@@ -14,7 +14,7 @@ const CAPS = ["say", "say_cues", "say_marks", "listen", "listen_stop", "listen_w
 const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 
 /** A device: answers cmds, streams 100 ms mic chunks every 15 ms for a listen (`chunks`, then its own end), stops on listen_stop, says say.done. */
-function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {}) {
+function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; sayText?: () => boolean } = {}) {
   const cmds: Array<{ name: string; args: any; at: number }> = [];
   const says: Record<string, number> = {};
   const ends: Record<string, number> = {}; // when each say's end frame reached the device
@@ -28,7 +28,7 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number } = {})
     if (f.t === "pair.request") setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "pair.result", req: f.req, ok: true, link_code: NEXT[codes++] })), 2);
     if (f.t !== "cmd") return;
     cmds.push({ name: f.name, args: f.args, at: Date.now() });
-    const result = f.name === "listen" ? { job: f.args.job, ms: 30000, ack: "chirp" } : f.name === "listen_stop" ? { job: f.args.job, stopping: true } : {};
+    const result = f.name === "listen" ? { job: f.args.job, ms: 30000, ack: "chirp" } : f.name === "listen_stop" ? { job: f.args.job, stopping: true } : f.name === "say_text" ? { job: f.args.job, taken: o.sayText?.() ?? true } : {};
     setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result })), 1);
     if (f.name === "listen") {
       const job = f.args.job;
@@ -65,6 +65,8 @@ interface BoxOpts {
   turnEndAfter?: number;
   /** the front keeps an inner voice thought to itself (it repeats what was said): no audio, tts.end absorbed */
   absorb?: (thought: string) => boolean;
+  /** speak as a model does: the transcript one word at a time with each word's audio (and cue), the final text at the end */
+  pieces?: boolean;
 }
 
 /** A realtime voice box on the voice socket, as molty-voice's realtime engine speaks it. */
@@ -74,6 +76,19 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   let k = 0;
   const say = (m: unknown) => void room.socketMessage(sock, JSON.stringify(m));
   const speak = (id: string, words: string, end: Record<string, unknown> = {}, delay = 5) => {
+    if (o.pieces) {
+      const ws = words.split(" ");
+      ws.forEach((_, i) =>
+        setTimeout(() => {
+          if (sock.closed) return;
+          say({ t: "tts.text", id, text: ws.slice(0, i + 1).join(" ") });
+          say({ t: "tts.word", id, i, text: ws[i], start_s: 0.2 * i });
+          void room.socketMessage(sock, encodeAudioFrame({ s: id, seq: i, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(3200).fill(700).buffer)));
+        }, delay + 40 * i),
+      );
+      setTimeout(() => !sock.closed && (say({ t: "tts.text", id, text: words, final: true }), say({ t: "tts.end", id, ms: { first_audio: 300 }, ...end })), delay + 40 * ws.length);
+      return;
+    }
     setTimeout(() => {
       if (sock.closed) return;
       say({ t: "tts.text", id, text: words.split(" ").slice(0, 2).join(" ") });
@@ -129,10 +144,10 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   return { got, listens, hello, of: (t: string) => got.filter((m) => m.t === t) };
 }
 
-async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[] } = {}) {
+async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[]; sayText?: () => boolean } = {}) {
   const ctx = makeRoom({ timings: FAST, log: process.env.FRONT_DEBUG ? (m, d) => console.log(m, JSON.stringify(d)) : undefined });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: o.caps ?? CAPS });
-  const dev = device(ctx.room, sock, { chunks: o.chunks });
+  const dev = device(ctx.room, sock, { chunks: o.chunks, sayText: o.sayText });
   const pair = async (link: string, name: string, role?: "voice") => {
     const out = await ctx.room.pair({ device_id: DEVICE, link_code: link, agent_name: name, ...(role ? { role } : {}) });
     if (!out.ok || out.result.status !== "approved") throw new Error(JSON.stringify(out));
@@ -543,6 +558,55 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     expect(ft.fate("t1", latest)).toEqual({ speak: true });
     now = 60001;
     expect(ft.fate("t1", latest)).toEqual({ speak: false, reason: "old_turn" });
+  });
+});
+
+describe("voice front: every spoken word shown (cap say_text)", () => {
+  const LINE = "Hey there! I'm doing well, just here on your desk, chatting and listening. What's on your mind?";
+  const run = async (o: { caps?: string[]; sayText?: () => boolean } = {}) => {
+    const ctx = await setup({ caps: o.caps ?? [...CAPS, "say_text"], sayText: o.sayText, box: { heard: ["hi molty", ""], reply: () => ({ said: LINE, wait: false }), pieces: true } });
+    await ctx.shake();
+    await until(() => ctx.dev.named("say").length > 0);
+    const job = ctx.dev.named("say")[0].args.job as string;
+    await until(() => ctx.dev.ends[job] !== undefined && ctx.dev.named("listen").length >= 2, 4000);
+    await sleep(250);
+    return { ctx, job, texts: ctx.dev.named("say_text").filter((c) => c.args.job === job) };
+  };
+
+  it("a front reply's words go to the device as they come: growing whole-word prefixes, the full text last, none after the say", async () => {
+    const { ctx, job, texts } = await run();
+    const first = ctx.dev.named("say")[0].args.text as string;
+    expect(LINE.startsWith(first) && first.length < LINE.length).toBe(true);
+    expect(texts.length).toBeGreaterThan(1);
+    let before = first;
+    for (const t of texts.map((c) => c.args.text as string)) {
+      expect(t.startsWith(before) && /\s/.test(t[before.length])).toBe(true); // continues it, whole words
+      expect(LINE.startsWith(t) && (t.length === LINE.length || LINE[t.length] === " ")).toBe(true);
+      before = t;
+    }
+    expect(before).toBe(LINE);
+    expect(texts.every((c) => c.at <= ctx.dev.ends[job] + 5)).toBe(true); // nothing after the say's end
+    // every word is cued (not only the first words): the device reveals each as it is spoken
+    const head = (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b.indexOf(10) < 0 ? b : b.subarray(0, b.indexOf(10))));
+    const cued = ctx.sock.bins.map(head).filter((h) => h.s === job).flatMap((h) => h.w ?? []).map((c: number[]) => c[0]);
+    expect(cued).toEqual(LINE.split(" ").map((_, i) => i));
+    // the job's text, the agent's `said`: the whole line
+    const r = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries.find((e: any) => e.job === job);
+    expect(r.data.said).toBe(LINE);
+  });
+
+  it("no say_text to a device without the cap", async () => {
+    const old = await run({ caps: CAPS });
+    expect(old.ctx.dev.named("say_text")).toEqual([]);
+    // as before: cues only for the words its cmd say showed
+    const head = (b: Uint8Array) => JSON.parse(new TextDecoder().decode(b.indexOf(10) < 0 ? b : b.subarray(0, b.indexOf(10))));
+    const cued = old.ctx.sock.bins.map(head).filter((h) => h.s === old.job).flatMap((h) => h.w ?? []).map((c: number[]) => c[0]);
+    expect(Math.max(...cued)).toBeLessThan((old.ctx.dev.named("say")[0].args.text as string).split(" ").length);
+  });
+
+  it("none after the device said taken:false", async () => {
+    const off = await run({ sayText: () => false });
+    expect(off.texts.length).toBe(1);
   });
 });
 

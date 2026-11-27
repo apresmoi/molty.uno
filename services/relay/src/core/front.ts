@@ -41,6 +41,8 @@ export const FRONT = {
   textHoldMs: 150,
   /** The device ends a stopped listen within one 100 ms chunk; a reply waits this long at most for its end frame. */
   deviceFreeMs: 600,
+  /** A front say's text goes to the device as it grows (cap say_text): at most once this often, the final text always. */
+  textEveryMs: 100,
 } as const;
 
 export const FRONT_MODES = ["off", "on"] as const;
@@ -460,4 +462,38 @@ export async function frontText(sp: FrontSpeech, clock: Clock, from: number): Pr
     await Promise.race([sp.changed(), sleep(clock, Math.max(1, FRONT.textHoldMs - (clock.now() - from)))]);
   }
   return sp.said.trim();
+}
+
+/** Firmware cap: the device takes a say's text as it grows (`cmd say_text {job, text}`). */
+export const SAY_TEXT_CAP = "say_text";
+const TEXT_MAX_BYTES = 4096;
+
+/**
+ * The text of front say `sp` as the model speaks it (docs/AGENT-LINK.md "Text in pieces"), when the
+ * device has the cap (false: it does not, nothing is sent). After the `cmd say` that carried `first`,
+ * `send` gets the say's whole text so far, whole words only, each one continuing the last byte for
+ * byte: at most every FRONT.textEveryMs, the final text always. It stops at the final text, when the
+ * device does not take it (taken:false, an error), when the say is over (`active`), or when the
+ * model's transcript changed words already sent (a diverging text is never sent).
+ */
+export function frontFollow(sp: FrontSpeech, caps: string[] | undefined, first: string, clock: Clock, active: () => boolean, send: (text: string) => Promise<Outcome<JsonObject>>): boolean {
+  if (!caps?.includes(SAY_TEXT_CAP)) return false;
+  void (async () => {
+    let sent = first;
+    await sleep(clock, FRONT.textEveryMs); // after the cmd say, the latest text of the window
+    for (;;) {
+      const text = sp.final ? sp.said.trim() : sp.said.replace(/\S*$/, "").trim();
+      if (!active()) return;
+      if (text !== sent) {
+        if (!text.startsWith(sent) || !/\s/.test(text[sent.length] ?? "") || new TextEncoder().encode(text).length > TEXT_MAX_BYTES) return;
+        const r = await send(text);
+        if (!r.ok || r.result.taken === false) return;
+        sent = text;
+      }
+      if (sp.final) return;
+      await sp.changed();
+      await sleep(clock, FRONT.textEveryMs);
+    }
+  })();
+  return true;
 }
