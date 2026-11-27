@@ -23,6 +23,7 @@
 #include "freertos/task.h"
 static inline uint32_t cycles(void) { return (uint32_t)esp_cpu_get_cycle_count(); }
 #define CD_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
+#define CD_MALLOC(n) heap_caps_malloc((n), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)
 /* small and hot (the body's strips): internal RAM if there is room for it and the rest, else PSRAM */
 static void *cd_fast(size_t n) { void *p = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) >= n + 32 * 1024 ? heap_caps_calloc(1, n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : NULL; return p ? p : CD_CALLOC(n); }
 #define CD_FREE(p)   heap_caps_free(p)
@@ -33,6 +34,7 @@ static void *cd_fast(size_t n) { void *p = heap_caps_get_free_size(MALLOC_CAP_IN
 #else
 static inline uint32_t cycles(void) { return 0; }
 #define CD_CALLOC(n) calloc(1, (n))
+#define CD_MALLOC(n) malloc(n)
 #define cd_fast(n)   calloc(1, (n))
 #define CD_FREE(p)   free(p)
 #define CD_SHARE     50
@@ -58,6 +60,11 @@ typedef struct { float d[3], r[3], u[3], c[3]; } cam_t;
 typedef struct { float u, v, d, i00, i01, i11, eu, ev, h, A[3][3]; } ell_t;
 typedef struct { float a[3], b[3], r0, r1, facing, invL; } capz_t;
 typedef struct { uint16_t f, z; uint8_t g, pri, col, fl; } dot_t;   /* g: owner group + 1 (0: none); pri 0: off */
+/* the creature's own cells before the world goes round them: per cell its dots (pri), its halo's dots (fh: the world kept
+ * off them), LF_FACE where its eyes are, its colour; zero outside the box (cells [x0, x1) x [y0, y1)). The world's pass
+ * reads only this, never the dots: made by each raster (live), or a pose's kept from before (cd_reuse) */
+typedef struct { uint8_t *pri, *fh, *fl; uint32_t *col; int x0, x1, y0, y1; } layer_t;
+enum { LF_FACE = 1 };
 
 struct cd {
     int W, H, DW, DH, N;
@@ -86,13 +93,19 @@ struct cd {
     /* the floor layer, kept while the camera does not move along it: a colour (0: none) | FON, per dot */
     uint32_t *frgb; float fscroll; bool fvalid, floor_new;
     uint8_t *fcell; uint32_t *fccol;        /* the floor layer as cells (bits, colour), made with it                 */
-    uint8_t *touch, *cat; int8_t *bp; uint16_t *bl;   /* per cell: reached by the creature or its halo; its dots; scratch */
+    layer_t live; const layer_t *L;         /* the raster's layer; the one this frame's world goes round              */
+    int lx0, lx1, ly0, ly1;                 /* the live layer's box before this raster (what it clears)               */
     uint8_t *catm;                          /* per cell: the creature is in it (cd_creature), kept for the frame       */
     const float *world; const cc_shape_t *sh; int ns; uint32_t frame;
     const sky_cell_t *sky[2]; int nsky[2];  /* the sky behind it (cd_sky): the moon's cells, a falling star's           */
     const weather_t *wx; const int16_t *wh;  /* the weather (cd_weather) and the water's height under it                  */
     int wx_dots[4];                         /* ... its dots merged last frame: mirrored, behind, in front, on the glass       */
     uint32_t prof[CD_STAGES];
+    struct {                                /* the lab's reuse (cd_reuse): its settings, the last pose drawn, the cache */
+        bool key, skip, hit; int n, want; uint64_t shown;   /* (want: the cache's size asked for; n: made) */
+        void *mem; layer_t *slot; uint64_t *keys; uint32_t *age, tick;
+        cd_reuse_t st;
+    } rz;
 #ifdef ESP_PLATFORM
     TaskHandle_t task; SemaphoreHandle_t go, done; void (*job)(cd_t *, int); volatile bool quit;
 #endif
@@ -179,10 +192,11 @@ cd_t *cd_create(const cc_t *c, int W, int H) {
     d->cdots = CD_CALLOC(NC); d->ccol = CD_CALLOC(sizeof(uint32_t) * NC);
     d->frgb = CD_CALLOC(sizeof(uint32_t) * N);
     d->fcell = CD_CALLOC(NC); d->fccol = CD_CALLOC(sizeof(uint32_t) * NC);
-    d->touch = CD_CALLOC(NC); d->cat = CD_CALLOC(NC); d->catm = CD_CALLOC(NC); d->bp = CD_CALLOC(NC); d->bl = CD_CALLOC(sizeof(uint16_t) * NC);
+    d->catm = CD_CALLOC(NC);
+    d->live.pri = CD_CALLOC(NC); d->live.fh = CD_CALLOC(NC); d->live.fl = CD_CALLOC(NC); d->live.col = CD_CALLOC(sizeof(uint32_t) * NC); d->L = &d->live;
     d->vig = CD_CALLOC(sizeof(float) * N); d->row_zz = CD_CALLOC(sizeof(float) * (size_t)DH); d->row_near = CD_CALLOC(sizeof(float) * (size_t)DH);
     d->wrow = CD_CALLOC(sizeof(int) * (size_t)DH); d->mote_row = CD_CALLOC(sizeof(int) * ((size_t)H + 1));
-    if (!d->dot || !d->strip[0] || !d->strip[1] || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->touch || !d->cat || !d->catm || !d->bp || !d->bl ||
+    if (!d->dot || !d->strip[0] || !d->strip[1] || !d->cdots || !d->ccol || !d->frgb || !d->fcell || !d->fccol || !d->catm || !d->live.pri || !d->live.fh || !d->live.fl || !d->live.col ||
         !d->vig || !d->row_zz || !d->row_near || !d->wrow || !d->mote_row) { cd_destroy(d); return NULL; }
     {   /* the fixed colours; the outline's shades are made each frame (their depth range) */
         float iris[3], wh[3];
@@ -243,7 +257,7 @@ void cd_destroy(cd_t *d) {
     if (d->done) vSemaphoreDelete(d->done);
 #endif
     CD_FREE(d->dot); CD_FREE(d->strip[0]); CD_FREE(d->strip[1]); CD_FREE(d->cdots); CD_FREE(d->ccol); CD_FREE(d->frgb); CD_FREE(d->fcell); CD_FREE(d->fccol);
-    CD_FREE(d->touch); CD_FREE(d->cat); CD_FREE(d->catm); CD_FREE(d->bp); CD_FREE(d->bl);
+    CD_FREE(d->catm); CD_FREE(d->live.pri); CD_FREE(d->live.fh); CD_FREE(d->live.fl); CD_FREE(d->live.col); CD_FREE(d->rz.mem);
     CD_FREE(d->vig); CD_FREE(d->row_zz); CD_FREE(d->row_near); CD_FREE(d->wrow); CD_FREE(d->mote_row);
     CD_FREE(d->mote_i); CD_FREE(d->mote_band); CD_FREE(d->mote_ph); CD_FREE(d->mote_rgb);
     CD_FREE(d);
@@ -638,19 +652,57 @@ static inline uint32_t dot_rgb(const cd_t *d, const dot_t *p) {
 
 static const uint8_t BIT[8] = { 0, 1, 2, 6, 3, 4, 5, 7 };   /* dot (col << 2 | row) -> braille bit */
 
-static void ph_cells(cd_t *d, int part) {
-    const int DW = d->DW, DH = d->DH, W = d->W;
-    int ja, jb; band(0, d->H, d->csplit, part, &ja, &jb);
-    const int ya = ja * 4, yb = jb * 4;
-    {   /* the halo's columns over this band's rows of the box */
-        const int y0 = d->by0 + 2 > ya ? d->by0 + 2 : ya, y1 = d->by1 - 2 < yb ? d->by1 - 2 : yb;
-        for (int Y = y0; Y < y1; Y++) {
-            dot_t *p = d->dot + Y * DW; uint8_t *tc = d->touch + (Y >> 2) * W;
-            for (int X = d->bx0 + 2; X < d->bx1 - 2; X++) {
-                const uint8_t v = (uint8_t)((p[X - DW].fl | p[X].fl | p[X + DW].fl) & FA) | ((p[X - 2 * DW].fl | p[X + 2 * DW].fl) & FB);
-                if (v) { p[X].fl |= FH; tc[X >> 1] = 1; }
+/* the creature's layer over cell rows [ja, jb) of the band, from its dots (the halo's columns made): the last box's
+ * cells cleared, then each cell of this box's (the live layer's box, set for this raster by cd_draw) */
+static void layer_make(cd_t *d, int ja, int jb) {
+    layer_t *L = &d->live;
+    const int W = d->W, DW = d->DW, DH = d->DH;
+    {   /* the last box's cells and this one's, cleared */
+        const bool was = d->lx1 > d->lx0 && d->ly1 > d->ly0;
+        const int x0 = was && d->lx0 < L->x0 ? d->lx0 : L->x0, x1 = was && d->lx1 > L->x1 ? d->lx1 : L->x1;
+        int y0 = was && d->ly0 < L->y0 ? d->ly0 : L->y0, y1 = was && d->ly1 > L->y1 ? d->ly1 : L->y1;
+        if (y0 < ja) y0 = ja;
+        if (y1 > jb) y1 = jb;
+        if (x1 > x0) for (int j = y0; j < y1; j++) {
+            memset(L->pri + j * W + x0, 0, (size_t)(x1 - x0)); memset(L->fh + j * W + x0, 0, (size_t)(x1 - x0)); memset(L->fl + j * W + x0, 0, (size_t)(x1 - x0));
+        }
+    }
+    const int y0 = L->y0 > ja ? L->y0 : ja, y1 = L->y1 < jb ? L->y1 : jb;
+    for (int j = y0; j < y1; j++) for (int i = L->x0; i < L->x1; i++) {
+        /* a cell's colour is its highest priority dot's, the brightest among those, the first of equals (rows, then
+         * columns) */
+        uint8_t pri = 0, fh = 0, fl = 0; uint32_t col = 0; int bp = 0; unsigned bl = 0;
+        for (int r = 0; r < 4 && 4 * j + r < DH; r++) {
+            const dot_t *p = d->dot + (4 * j + r) * DW + 2 * i;
+            for (int c = 0; c < 2; c++) {
+                const uint8_t bit = (uint8_t)(1 << BIT[c << 2 | r]);
+                if (p[c].fl & FH) fh |= bit;
+                if (!p[c].pri) continue;
+                pri |= bit;
+                const uint32_t v = dot_rgb(d, p + c); const unsigned l = lum(v);
+                if (p[c].pri > bp || (p[c].pri == bp && l > bl)) { bp = p[c].pri; bl = l; col = v; }
+                if (p[c].col == C_IRIS || p[c].col == C_PUPIL || p[c].col == C_SHINE) fl |= LF_FACE;
             }
         }
+        const int k = j * W + i;
+        L->pri[k] = pri; L->fh[k] = fh; L->fl[k] = fl; L->col[k] = col;
+    }
+}
+
+static void ph_cells(cd_t *d, int part) {
+    const int DW = d->DW, W = d->W;
+    int ja, jb; band(0, d->H, d->csplit, part, &ja, &jb);
+    const int ya = ja * 4, yb = jb * 4;
+    if (!d->rz.hit) {   /* the halo's columns over this band's rows of the box, then the creature's layer from its dots */
+        const int y0 = d->by0 + 2 > ya ? d->by0 + 2 : ya, y1 = d->by1 - 2 < yb ? d->by1 - 2 : yb;
+        for (int Y = y0; Y < y1; Y++) {
+            dot_t *p = d->dot + Y * DW;
+            for (int X = d->bx0 + 2; X < d->bx1 - 2; X++) {
+                const uint8_t v = (uint8_t)((p[X - DW].fl | p[X].fl | p[X + DW].fl) & FA) | ((p[X - 2 * DW].fl | p[X + 2 * DW].fl) & FB);
+                if (v) p[X].fl |= FH;
+            }
+        }
+        layer_make(d, ja, jb);
     }
     static const float FLR[3] = { 0x8f / 255.f, 0x87 / 255.f, 0xc4 / 255.f }, TEX[3] = { 0x6c / 255.f, 0x65 / 255.f, 0x98 / 255.f },
                        DIM[3] = { 0x5c / 255.f, 0x56 / 255.f, 0x88 / 255.f }, MOTE[3] = { 0xb4 / 255.f, 0xac / 255.f, 0xec / 255.f };
@@ -686,36 +738,36 @@ static void ph_cells(cd_t *d, int part) {
             }
         }
     }
-    /* cells: the floor's cells as they are, then the cells under the creature's box made again (its dots own their cell;
-     * the floor there only outside the halo); a cell's colour is its highest priority dot's, the brightest among those */
+    /* cells: the floor's cells as they are, then the cells the creature's halo reaches made again: one with the creature's
+     * dots shows only them, the rest the floor's dots off the halo, the brightest one's colour (the first of equals) */
+    const layer_t *L = d->L;
     memcpy(d->cdots + ja * W, d->fcell + ja * W, (size_t)((jb - ja) * W)); memset(d->catm + ja * W, 0, (size_t)((jb - ja) * W)); memcpy(d->ccol + ja * W, d->fccol + ja * W, sizeof(uint32_t) * (size_t)((jb - ja) * W));
-    const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1 < W ? (d->bx1 + 1) >> 1 : W;
-    const int cy0 = d->by0 >> 2 > ja ? d->by0 >> 2 : ja, cy1 = (d->by1 + 3) >> 2 < jb ? (d->by1 + 3) >> 2 : jb;
-    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) { const int k = j * W + i; if (d->touch[k]) { d->cdots[k] = 0; d->ccol[k] = 0; d->bp[k] = -1; } }
-    for (int Y = cy0 * 4; Y < cy1 * 4 && Y < DH; Y++) {
-        const int j = Y >> 2, r = Y & 3;
-        const dot_t *p = d->dot + Y * DW; const uint32_t *fr = d->frgb + Y * DW; const uint8_t *tc = d->touch + j * W;
-        for (int X = cx0 * 2; X < cx1 * 2; X++) {
-            if (!tc[X >> 1]) { X |= 1; continue; }               /* nothing of the creature in this cell: the floor's cell as made */
-            int pr; uint32_t v;
-            if (p[X].pri) { pr = p[X].pri; v = dot_rgb(d, p + X); }
-            else if (!(p[X].fl & FH) && (fr[X] & FON)) { pr = 0; v = fr[X] & 0xffffff; }
-            else continue;
-            const int k = j * W + (X >> 1), bit = 1 << BIT[(X & 1) << 2 | r];
-            d->cdots[k] |= (uint8_t)bit;
-            if (pr >= 1) d->cat[k] |= (uint8_t)bit;
-            const uint16_t l = (uint16_t)lum(v);
-            if (pr > d->bp[k] || (pr == d->bp[k] && l > d->bl[k])) { d->bp[k] = (int8_t)pr; d->bl[k] = l; d->ccol[k] = v; }
+    const int cx0 = L->x0, cx1 = L->x1, cy0 = L->y0 > ja ? L->y0 : ja, cy1 = L->y1 < jb ? L->y1 : jb;
+    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
+        const int k = j * W + i;
+        const uint8_t fh = L->fh[k];
+        if (!fh) continue;                                       /* nothing of the creature in this cell: the floor's cell as made */
+        if (L->pri[k]) { d->cdots[k] = L->pri[k]; d->ccol[k] = L->col[k]; d->catm[k] = 1; continue; }
+        uint8_t bits = 0; uint32_t v = 0; unsigned bl = 0;
+        for (int r = 0; r < 4 && 4 * j + r < d->DH; r++) {
+            const uint32_t *fr = d->frgb + (4 * j + r) * DW + 2 * i;
+            for (int c = 0; c < 2; c++) {
+                const uint8_t bit = (uint8_t)(1 << BIT[c << 2 | r]);
+                if ((fh & bit) || !(fr[c] & FON)) continue;
+                const unsigned l = lum(fr[c] & 0xffffff);
+                if (!bits || l > bl) { bl = l; v = fr[c] & 0xffffff; }
+                bits |= bit;
+            }
         }
+        d->cdots[k] = bits; d->ccol[k] = v;
     }
     /* the dust: only its motes (made once), where neither the creature's halo nor the floor is; a cell with the creature
      * in it keeps only the creature's dots */
     for (int m = d->mote_row[ja]; m < d->mote_row[jb]; m++) {
         const int i = (int)d->mote_i[m];
-        const dot_t *p = d->dot + i;
-        if ((p->fl & FH) || d->frgb[i] || p->pri) continue;
-        const int X = i % DW, Y = i / DW, k = (Y >> 2) * W + (X >> 1);
-        if (d->cat[k]) continue;
+        if (d->frgb[i]) continue;
+        const int X = i % DW, Y = i / DW, k = (Y >> 2) * W + (X >> 1), bit = 1 << BIT[(X & 1) << 2 | (Y & 3)];
+        if (((L->pri[k] | L->fh[k]) & bit) || d->catm[k]) continue;
         const int ph = (int)((d->frame + (uint32_t)((((Y >> 2) * 11) % d->H) * TWINKLE / d->H)) / TWINKLE);
         if (ph != d->mote_ph[m]) {                                /* its twinkle moved on: every third frame or so */
             d->mote_ph[m] = ph;
@@ -726,32 +778,28 @@ static void ph_cells(cd_t *d, int part) {
         }
         const uint32_t v = d->mote_rgb[m], w = d->ccol[k];
         if (!v) continue;
-        d->cdots[k] |= (uint8_t)(1 << BIT[(X & 1) << 2 | (Y & 3)]);
+        d->cdots[k] |= (uint8_t)bit;
         if (!w || lum(v) > lum(w)) d->ccol[k] = v;
     }
-    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
-        const int k = j * W + i;
-        if (d->cat[k]) { d->cdots[k] = d->cat[k]; d->catm[k] = 1; }   /* a cell with the creature in it shows only its dots */
-        if (!d->cdots[k]) d->ccol[k] = 0;
-        d->cat[k] = 0; d->bp[k] = 0; d->bl[k] = 0; d->touch[k] = 0;   /* the scratch back to clear */
-    }
+    for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) { const int k = j * W + i; if (!d->cdots[k]) d->ccol[k] = 0; }
 }
 
 /* ── 8. the sky (sky.h): after the cells, on the calling core (a few hundred dots at most) ───────────────────────── */
 
 static void sky_merge(cd_t *d) {
     const int W = d->W, DW = d->DW;
+    const layer_t *L = d->L;
     for (int l = 0; l < 2; l++) for (int q = 0; q < d->nsky[l]; q++) {
         const sky_cell_t *c = &d->sky[l][q];
         const int k = c->k;
         if (k >= d->W * d->H || d->catm[k]) continue;        /* the creature's cell: its dots alone */
         const int X0 = (k % W) * 2, Y0 = (k / W) * 4;
+        const uint8_t off = L->pri[k] | L->fh[k];
         uint8_t bits = 0;
         for (int b = 0; b < 8; b++) {
             const int col = b >> 2, row = b & 3, bit = 1 << BIT[b];
             if (!(c->bits & bit)) continue;
-            const dot_t *p = d->dot + (Y0 + row) * DW + X0 + col;
-            if (!(p->fl & FH) && !p->pri && !(d->frgb[(Y0 + row) * DW + X0 + col] & FON)) bits |= (uint8_t)bit;   /* off the halo, the floor */
+            if (!(off & bit) && !(d->frgb[(Y0 + row) * DW + X0 + col] & FON)) bits |= (uint8_t)bit;   /* off the halo, the floor */
         }
         if (!bits) continue;
         if (l == 0 || !d->cdots[k] || lum(c->rgb) > lum(d->ccol[k])) d->ccol[k] = c->rgb;
@@ -794,22 +842,22 @@ static bool wx_mirror_at(const cd_t *d, int *X, int *Y, float rough) {
 static void wx_put(cd_t *d, int X, int Y, uint32_t v, float k, float rough) {
     if (!wx_mirror_at(d, &X, &Y, rough)) return;
     if (X < 0 || Y <= (int)d->horizon || X >= d->DW || Y >= d->DH) return;
-    const int i = Y * d->DW + X, kc = (Y >> 2) * d->W + (X >> 1);
-    const dot_t *p = d->dot + i;
-    if (d->vig[i] <= 0.f || (p->fl & FH) || p->pri || d->catm[kc]) return;
+    const int i = Y * d->DW + X, kc = (Y >> 2) * d->W + (X >> 1), bit = 1 << BIT[(X & 1) << 2 | (Y & 3)];
+    if (d->vig[i] <= 0.f || ((d->L->pri[kc] | d->L->fh[kc]) & bit) || d->catm[kc]) return;
     const int q = weather_wet_at(d->wx, kc);
     if (!q) return;
     const uint32_t c = rgb_k(v, k * (float)q * 0.25f * d->vig[i]);
     if (lum(c) < 24) return;
     d->wx_dots[0]++;
-    d->cdots[kc] |= (uint8_t)(1 << BIT[(X & 1) << 2 | (Y & 3)]);
+    d->cdots[kc] |= (uint8_t)bit;
     if (lum(c) > lum(d->ccol[kc])) d->ccol[kc] = c;
 }
 
 static void wx_merge(cd_t *d) {
     const weather_t *w = d->wx;
     const int W = d->W, H = d->H, DW = d->DW, DH = d->DH;
-    const int cx0 = d->bx0 >> 1, cx1 = (d->bx1 + 1) >> 1 < W ? (d->bx1 + 1) >> 1 : W, cy0 = d->by0 >> 2, cy1 = (d->by1 + 3) >> 2 < H ? (d->by1 + 3) >> 2 : H;
+    const layer_t *L = d->L;
+    const int cx0 = L->x0, cx1 = L->x1, cy0 = L->y0, cy1 = L->y1;
     const float rough = clampf(w->level * 0.5f, 0.f, 1.f);
     memset(d->wx_dots, 0, sizeof(d->wx_dots));
     if (w->wet > 0.f) {
@@ -850,15 +898,11 @@ static void wx_merge(cd_t *d) {
     int fx0 = W, fx1 = -1, fy0 = H, fy1 = -1;
     if (w->nfront || w->nglass)
         for (int j = cy0; j < cy1; j++) for (int i = cx0; i < cx1; i++) {
-            if (!d->catm[j * W + i]) continue;
-            for (int b = 0; b < 8; b++) {
-                const dot_t *p = d->dot + (4 * j + (b & 3)) * DW + 2 * i + (b >> 2);
-                if (!p->pri || (p->col != C_IRIS && p->col != C_PUPIL && p->col != C_SHINE)) continue;
-                if (i < fx0) fx0 = i;
-                if (i > fx1) fx1 = i;
-                if (j < fy0) fy0 = j;
-                if (j > fy1) fy1 = j;
-            }
+            if (!d->catm[j * W + i] || !(L->fl[j * W + i] & LF_FACE)) continue;
+            if (i < fx0) fx0 = i;
+            if (i > fx1) fx1 = i;
+            if (j < fy0) fy0 = j;
+            if (j > fy1) fy1 = j;
         }
     fx0 -= 3; fx1 += 3; fy0 -= 2; fy1 += 3;
     const sky_cell_t *Ls[3] = { w->back_c, w->front_c, w->glass_c };
@@ -869,14 +913,14 @@ static void wx_merge(cd_t *d) {
         if (k >= W * H || d->catm[k]) continue;             /* the creature's cell: its dots alone */
         if (l && i >= fx0 && i <= fx1 && j >= fy0 && j <= fy1) continue;   /* never in front of its face */
         const int X0 = i * 2, Y0 = j * 4;
+        const uint8_t pri = L->pri[k], fh = L->fh[k];
         uint8_t bits = 0; bool body = false;
         for (int b = 0; b < 8; b++) {
             const int col = b >> 2, row = b & 3, bit = 1 << BIT[b];
             if (!(c->bits & bit)) continue;
             const int at = (Y0 + row) * DW + X0 + col;
-            const dot_t *p = d->dot + at;
-            if (d->vig[at] <= 0.f || p->pri) continue;
-            if (p->fl & FH) {                               /* behind: the cat hides it; in front: across its body, a dot in four
+            if (d->vig[at] <= 0.f || (pri & bit)) continue;
+            if (fh & bit) {                               /* behind: the cat hides it; in front: across its body, a dot in four
                                                              * left out and dimmer (a line, not a scratch) */
                 if (!l || (l == 1 && (Y0 + row) % 4 == 3)) continue;
                 body = true;
@@ -896,8 +940,12 @@ void cd_weather_dots(const cd_t *d, int out[4]) { for (int q = 0; q < 4; q++) ou
 
 /* ── the frame ─────────────────────────────────────────────────────────── */
 
+static int reuse_find(cd_t *d, const cc_t *c);
+static void reuse_keep(cd_t *d);
+
 void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     uint32_t _pc = cycles();
+    const uint32_t c_in = _pc, band_in = d->prof[ST_BAND];
 #define PROF_STAGE(n) do { const uint32_t _t = cycles(); d->prof[n] += _t - _pc; _pc = _t; } while (0)
     const float *world = d->world = cc_world(c);
     const cc_shape_t *sh; const int ns = d->ns = cc_shapes(c, &sh);
@@ -918,77 +966,88 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
         k->c[0] -= fu * d->dsx * k->r[0]; k->c[2] -= fu * d->dsx * k->r[2];
     }
 
-    /* the creature's box this frame (every primitive's bounds, plus room for lines and the halo), and each row's work */
-    box_t bb = { DW, -1, DH, -1 };
-    memset(d->wrow, 0, sizeof(int) * (size_t)DH);
-    for (int q = 0; q < ns; q++) {
-        const cc_shape_t *s = &sh[q];
-        d->pok[q] = 0;
-        box_t b;
-        if (s->kind == CC_BLOB || s->kind == CC_ELL || s->kind == CC_PATCH) {
-            if (!ellipse(d, world, s, &d->pe[q])) continue;
-            b = s->kind == CC_BLOB ? blob_box(d, q) : sbox(d, d->pe[q].u, d->pe[q].v, d->pe[q].eu, d->pe[q].ev);
-        } else {
-            capz_t *cp = &d->pc[q];
-            if (s->kind == CC_CONE) cone_capsule(d, world, s, cp); else capsule(d, world, s, s->r[0], s->r[1], cp);
-            capz_t w = *cp;
-            if (s->group == CG_WHISKER) w.r0 = w.r1 = 0.55f * d->dsx;
-            b = cap_box(d, &w);
-        }
-        d->pok[q] = 1;
-        d->sbx[q].x0 = (int16_t)b.x0; d->sbx[q].x1 = (int16_t)b.x1; d->sbx[q].y0 = (int16_t)b.y0; d->sbx[q].y1 = (int16_t)b.y1;
-        grow(&bb, b);
-        if (s->kind != CC_PATCH && s->group < CG_NSTRUCT) for (int Y = b.y0; Y <= b.y1; Y++) d->wrow[Y] += b.x1 - b.x0 + 1;
-    }
-    const int M = 4;
-    box_t nb = { bb.x0 - M, bb.x1 + 1 + M, bb.y0 - M, bb.y1 + 1 + M };
-    if (nb.x0 < 0) nb.x0 = 0;
-    if (nb.y0 < 0) nb.y0 = 0;
-    if (nb.x1 > DW) nb.x1 = DW;
-    if (nb.y1 > DH) nb.y1 = DH;
-    if (bb.x1 < 0) nb = (box_t){ 0, 0, 0, 0 };
-    {   /* what to clear: the union of last frame's box and this one's */
-        const bool last = d->bx1 > d->bx0 && d->by1 > d->by0;
-        d->ux0 = last && d->bx0 < nb.x0 ? d->bx0 : nb.x0; d->ux1 = last && d->bx1 > nb.x1 ? d->bx1 : nb.x1;
-        d->uy0 = last && d->by0 < nb.y0 ? d->by0 : nb.y0; d->uy1 = last && d->by1 > nb.y1 ? d->by1 : nb.y1;
-    }
-    d->bx0 = nb.x0; d->bx1 = nb.x1; d->by0 = nb.y0; d->by1 = nb.y1;
-    d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
-    d->split = balance(d->wrow, d->by0, d->by1, d->share);
-    {   /* the blobs nearest first (by their nearest point): a dot already as near is passed over at once. The field is
-         * a sum of whole steps (any order), so only equal depths could tell the orders apart */
-        d->nord = 0;
+    const int how = d->rz.key ? reuse_find(d, c) : CD_RASTER;   /* (the lab's: this pose's cells kept from before) */
+    d->rz.hit = how != CD_RASTER;
+    if (!d->rz.hit) {
+        /* the creature's box this frame (every primitive's bounds, plus room for lines and the halo), and each row's work */
+        box_t bb = { DW, -1, DH, -1 };
+        memset(d->wrow, 0, sizeof(int) * (size_t)DH);
         for (int q = 0; q < ns; q++) {
-            if (sh[q].kind != CC_BLOB || !d->pok[q]) continue;
-            const float top = d->pe[q].d + d->pe[q].h; int at = d->nord++;
-            while (at > 0 && d->pe[d->ord[at - 1]].d + d->pe[d->ord[at - 1]].h < top) { d->ord[at] = d->ord[at - 1]; at--; }
-            d->ord[at] = (int16_t)q;
+            const cc_shape_t *s = &sh[q];
+            d->pok[q] = 0;
+            box_t b;
+            if (s->kind == CC_BLOB || s->kind == CC_ELL || s->kind == CC_PATCH) {
+                if (!ellipse(d, world, s, &d->pe[q])) continue;
+                b = s->kind == CC_BLOB ? blob_box(d, q) : sbox(d, d->pe[q].u, d->pe[q].v, d->pe[q].eu, d->pe[q].ev);
+            } else {
+                capz_t *cp = &d->pc[q];
+                if (s->kind == CC_CONE) cone_capsule(d, world, s, cp); else capsule(d, world, s, s->r[0], s->r[1], cp);
+                capz_t w = *cp;
+                if (s->group == CG_WHISKER) w.r0 = w.r1 = 0.55f * d->dsx;
+                b = cap_box(d, &w);
+            }
+            d->pok[q] = 1;
+            d->sbx[q].x0 = (int16_t)b.x0; d->sbx[q].x1 = (int16_t)b.x1; d->sbx[q].y0 = (int16_t)b.y0; d->sbx[q].y1 = (int16_t)b.y1;
+            grow(&bb, b);
+            if (s->kind != CC_PATCH && s->group < CG_NSTRUCT) for (int Y = b.y0; Y <= b.y1; Y++) d->wrow[Y] += b.x1 - b.x0 + 1;
+        }
+        const int M = 4;
+        box_t nb = { bb.x0 - M, bb.x1 + 1 + M, bb.y0 - M, bb.y1 + 1 + M };
+        if (nb.x0 < 0) nb.x0 = 0;
+        if (nb.y0 < 0) nb.y0 = 0;
+        if (nb.x1 > DW) nb.x1 = DW;
+        if (nb.y1 > DH) nb.y1 = DH;
+        if (bb.x1 < 0) nb = (box_t){ 0, 0, 0, 0 };
+        {   /* what to clear: the union of last frame's box and this one's */
+            const bool last = d->bx1 > d->bx0 && d->by1 > d->by0;
+            d->ux0 = last && d->bx0 < nb.x0 ? d->bx0 : nb.x0; d->ux1 = last && d->bx1 > nb.x1 ? d->bx1 : nb.x1;
+            d->uy0 = last && d->by0 < nb.y0 ? d->by0 : nb.y0; d->uy1 = last && d->by1 > nb.y1 ? d->by1 : nb.y1;
+        }
+        d->bx0 = nb.x0; d->bx1 = nb.x1; d->by0 = nb.y0; d->by1 = nb.y1;
+        d->rx0 = d->ry0 = 0; d->rx1 = d->ry1 = -1;
+        d->split = balance(d->wrow, d->by0, d->by1, d->share);
+        {   /* the blobs nearest first (by their nearest point): a dot already as near is passed over at once. The field is
+             * a sum of whole steps (any order), so only equal depths could tell the orders apart */
+            d->nord = 0;
+            for (int q = 0; q < ns; q++) {
+                if (sh[q].kind != CC_BLOB || !d->pok[q]) continue;
+                const float top = d->pe[q].d + d->pe[q].h; int at = d->nord++;
+                while (at > 0 && d->pe[d->ord[at - 1]].d + d->pe[d->ord[at - 1]].h < top) { d->ord[at] = d->ord[at - 1]; at--; }
+                d->ord[at] = (int16_t)q;
+            }
+        }
+        for (int s = 0; s < 2; s++) {
+            d->hip[s] = 0.f;
+            if (d->thigh[s] < 0) continue;
+            const float o[3] = { world[d->thigh[s] * 12 + 3], world[d->thigh[s] * 12 + 7], world[d->thigh[s] * 12 + 11] }; float p[3];
+            proj(d, o, p); d->hip[s] = p[1];
+        }
+        PROF_STAGE(ST_PROJ);
+        split_run(d, ph_solid);
+        PROF_STAGE(ST_SOLID);
+        split_run(d, ph_lines);
+        {   /* the outline's shades over the body's depth range */
+            const int zlo = d->zlo[0] < d->zlo[1] ? d->zlo[0] : d->zlo[1], zhi = d->zhi[0] > d->zhi[1] ? d->zhi[0] : d->zhi[1];
+            d->zlo_all = zlo; d->lscale = zhi > zlo ? (float)(NLINE - 1) / (float)(zhi - zlo) : 0.f;
+            for (int l = 0; l < NLINE; l++) {
+                const float t = (float)l / (NLINE - 1); float col[3];
+                for (int q = 0; q < 3; q++) col[q] = minf(1.f, d->body[q] * (0.5f + 0.5f * t) + (1.f - d->body[q]) * 0.45f * t * t);
+                d->pal[l] = pack(col);
+            }
+        }
+        PROF_STAGE(ST_LINES);
+        features(d);
+        PROF_STAGE(ST_FEAT);
+        split_run(d, ph_halo_rows);
+        PROF_STAGE(ST_HALO);
+        {   /* the live layer's box this raster, in cells (the last one's kept: layer_make clears it) */
+            layer_t *L = &d->live;
+            d->lx0 = L->x0; d->lx1 = L->x1; d->ly0 = L->y0; d->ly1 = L->y1;
+            L->x0 = d->bx0 >> 1; L->x1 = (d->bx1 + 1) >> 1 < d->W ? (d->bx1 + 1) >> 1 : d->W;
+            L->y0 = d->by0 >> 2; L->y1 = (d->by1 + 3) >> 2 < d->H ? (d->by1 + 3) >> 2 : d->H;
+            d->L = L;
         }
     }
-    for (int s = 0; s < 2; s++) {
-        d->hip[s] = 0.f;
-        if (d->thigh[s] < 0) continue;
-        const float o[3] = { world[d->thigh[s] * 12 + 3], world[d->thigh[s] * 12 + 7], world[d->thigh[s] * 12 + 11] }; float p[3];
-        proj(d, o, p); d->hip[s] = p[1];
-    }
-    PROF_STAGE(ST_PROJ);
-    split_run(d, ph_solid);
-    PROF_STAGE(ST_SOLID);
-    split_run(d, ph_lines);
-    {   /* the outline's shades over the body's depth range */
-        const int zlo = d->zlo[0] < d->zlo[1] ? d->zlo[0] : d->zlo[1], zhi = d->zhi[0] > d->zhi[1] ? d->zhi[0] : d->zhi[1];
-        d->zlo_all = zlo; d->lscale = zhi > zlo ? (float)(NLINE - 1) / (float)(zhi - zlo) : 0.f;
-        for (int l = 0; l < NLINE; l++) {
-            const float t = (float)l / (NLINE - 1); float col[3];
-            for (int q = 0; q < 3; q++) col[q] = minf(1.f, d->body[q] * (0.5f + 0.5f * t) + (1.f - d->body[q]) * 0.45f * t * t);
-            d->pal[l] = pack(col);
-        }
-    }
-    PROF_STAGE(ST_LINES);
-    features(d);
-    PROF_STAGE(ST_FEAT);
-    split_run(d, ph_halo_rows);
-    PROF_STAGE(ST_HALO);
     {   /* the world: the floor moves when the camera did; the cells' split balances the box's rows and the floor's */
         const float scroll = (k->c[0] * k->r[0] + k->c[2] * k->r[2]) / d->dsx;
         d->floor_new = !d->fvalid || fabsf(scroll - d->fscroll) > 1e-4f;
@@ -999,6 +1058,12 @@ void cd_draw(cd_t *d, const cc_t *c, uint32_t frame) {
     split_run(d, ph_cells);
     if (d->nsky[0] || d->nsky[1]) sky_merge(d);
     if (weather_drawn(d->wx)) wx_merge(d);
+    if (d->rz.key) {
+        if (how == CD_RASTER && d->rz.n) reuse_keep(d);
+        cd_reuse_t *st = &d->rz.st;
+        st->last = (uint8_t)how; st->frames[how]++; st->gframes[how] += st->gesture;
+        st->cyc[how] += cycles() - c_in; st->band[how] += d->prof[ST_BAND] - band_in;
+    }
     PROF_STAGE(ST_CELLS);
 }
 
@@ -1006,3 +1071,71 @@ void cd_cells(const cd_t *d, const uint8_t **dots, const uint32_t **rgb) { *dots
 const uint8_t *cd_creature(const cd_t *d) { return d->catm; }
 void cd_set_share(cd_t *d, int pct) { d->share = pct < 20 ? 20 : pct > 90 ? 90 : pct; }
 void cd_prof(cd_t *d, uint32_t *out) { for (int i = 0; i < CD_STAGES; i++) { out[i] += d->prof[i]; d->prof[i] = 0; } }
+
+/* ── the lab's reuse (cd_reuse) ─────────────────────────────────────────── */
+
+static inline uint32_t rotl(uint32_t x, int r) { return x << r | x >> (32 - r); }
+static inline uint32_t fmix(uint32_t h) { h ^= h >> 16; h *= 0x85ebca6bu; h ^= h >> 13; h *= 0xc2b2ae35u; return h ^ h >> 16; }
+uint64_t cd_pose_key(const cc_t *c) {
+    /* the raster's inputs bit for bit, two 32-bit hashes of them (murmur3's step and FNV-1a, a word at a time) */
+    float cam[3]; cc_cam(c, &cam[0], &cam[1], &cam[2]);
+    const float *w = cc_world(c);
+    const int n = 12 * cc_nodes(c);
+    uint32_t a = 0x9747b28cu, b = 0x811c9dc5u;
+    for (int i = 0; i < n + 3; i++) {
+        uint32_t u; memcpy(&u, i < n ? w + i : cam + (i - n), 4);
+        a ^= rotl(u * 0xcc9e2d51u, 15) * 0x1b873593u; a = rotl(a, 13) * 5u + 0xe6546b64u;
+        b = (b ^ u) * 16777619u;
+    }
+    const uint64_t key = (uint64_t)fmix(a ^ (uint32_t)n) << 32 | fmix(b);
+    return key ? key : 1;
+}
+
+/* this frame's pose: the frame before's (skip), else one in the cache (its layer is this frame's), else a raster */
+static int reuse_find(cd_t *d, const cc_t *c) {
+    const uint32_t t = cycles();
+    const uint64_t key = cd_pose_key(c);
+    int how = CD_RASTER;
+    if (d->rz.skip && key == d->rz.shown) how = CD_SAME;
+    else for (int s = 0; s < d->rz.n; s++) if (d->rz.keys[s] == key) { d->rz.age[s] = ++d->rz.tick; d->L = &d->rz.slot[s]; how = CD_CACHED; break; }
+    d->rz.shown = key;
+    d->rz.st.key = key; d->rz.st.gesture = !cc_free(c);
+    d->rz.st.upkeep += cycles() - t;
+    return how;
+}
+/* a raster's layer into the cache, over its least recently used pose */
+static void reuse_keep(cd_t *d) {
+    const uint32_t t = cycles();
+    int v = 0;
+    for (int s = 0; s < d->rz.n; s++) { if (!d->rz.keys[s]) { v = s; break; } if (d->rz.age[s] < d->rz.age[v]) v = s; }
+    layer_t *S = &d->rz.slot[v];
+    const layer_t *L = &d->live;
+    const size_t NC = (size_t)d->W * d->H;
+    memcpy(S->pri, L->pri, NC); memcpy(S->fh, L->fh, NC); memcpy(S->fl, L->fl, NC); memcpy(S->col, L->col, sizeof(uint32_t) * NC);
+    S->x0 = L->x0; S->x1 = L->x1; S->y0 = L->y0; S->y1 = L->y1;
+    d->rz.keys[v] = d->rz.shown; d->rz.age[v] = ++d->rz.tick;
+    d->rz.st.upkeep += cycles() - t;
+}
+
+void cd_reuse(cd_t *d, bool key, bool skip, int n) {
+    n = n < 0 ? 0 : n > CD_REUSE_MAX ? CD_REUSE_MAX : n;
+    const int want = n;
+    key = key || skip || n;
+    if (key == d->rz.key && skip == d->rz.skip && n == d->rz.want) return;
+    CD_FREE(d->rz.mem); d->rz.mem = NULL; d->rz.slot = NULL; d->rz.keys = NULL; d->rz.age = NULL;
+    d->L = &d->live; d->rz.shown = 0;              /* (the next frame a raster: the live layer may be an older pose's) */
+    memset(&d->rz.st, 0, sizeof(d->rz.st));
+    const size_t NC = (size_t)d->W * d->H, stride = (7 * NC + 3) & ~(size_t)3, per = sizeof(layer_t) + sizeof(uint64_t) + sizeof(uint32_t) + stride;
+    uint8_t *m = n ? CD_MALLOC(per * (size_t)n) : NULL;   /* (its cells are written before they are read: not cleared) */
+    if (m) {
+        d->rz.mem = m;
+        d->rz.slot = (layer_t *)m; d->rz.keys = (uint64_t *)(m + sizeof(layer_t) * (size_t)n); d->rz.age = (uint32_t *)(d->rz.keys + n);
+        memset(d->rz.keys, 0, (sizeof(uint64_t) + sizeof(uint32_t)) * (size_t)n);
+        uint8_t *cells = (uint8_t *)(d->rz.age + n);
+        for (int s = 0; s < n; s++, cells += stride)
+            d->rz.slot[s] = (layer_t){ .col = (uint32_t *)cells, .pri = cells + 4 * NC, .fh = cells + 5 * NC, .fl = cells + 6 * NC };
+        d->rz.st.bytes = (uint32_t)(per * (size_t)n);
+    } else n = 0;
+    d->rz.key = key; d->rz.skip = skip; d->rz.want = want; d->rz.n = n; d->rz.tick = 0;
+}
+const cd_reuse_t *cd_reuse_stats(const cd_t *d) { return &d->rz.st; }

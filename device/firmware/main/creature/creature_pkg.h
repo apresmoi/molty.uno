@@ -14,6 +14,7 @@
 #include "creature_player.h"
 #include "mood_engine.h"
 #include "fluid_director.h"   /* fd_moment_t */
+#include "creature_dots.h"    /* cd_reuse_t */
 
 #ifdef __cplusplus
 extern "C" {
@@ -86,6 +87,10 @@ void   cpk_cells(const cpk_t *k, const uint8_t **dots, const uint32_t **rgb);
 /** Write those colours into the sim's carried colour (after its colour step), so each cell shows its own at once; and the
  *  rings the target holds this frame (listen, question, progress: fluid_target_ring and the rest) over them. */
 void   cpk_paint(cpk_t *k, fluid_sim_t *s);
+/** The frame rate lab's reuse for a rigged creature's dots from its next frame (cd_reuse: the pose key, the same pose's
+ *  cells kept, a cache of n poses); its counters (NULL: none, a channel creature or before its first frame). */
+void   cpk_reuse(cpk_t *k, bool key, bool skip, int n);
+const cd_reuse_t *cpk_reuse_stats(const cpk_t *k);
 
 #ifdef __cplusplus
 }
