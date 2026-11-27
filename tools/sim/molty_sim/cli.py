@@ -1,4 +1,4 @@
-"""molty-sim run | check | measure | show | reflex-bench | reflex-turns — see tools/sim/README.md."""
+"""molty-sim run | check | measure | show | reflex-bench | reflex-turns | front — see tools/sim/README.md."""
 
 from __future__ import annotations
 
@@ -77,6 +77,14 @@ def main(argv: list[str] | None = None) -> int:
     sh = sub.add_parser("show", help="print the summary table of a finished run")
     sh.add_argument("run_dir")
 
+    fr = sub.add_parser("front", help="the voice front end to end: a WAV into a local relay, a local molty-voice (realtime engine) and a fake provider (or --live)")
+    fr.add_argument("--wav", action="append", default=[], help="16 kHz (or any rate) mono PCM16 WAV the person says; repeat for later turns (default: a synthetic clip)")
+    fr.add_argument("--live", action="store_true", help="the real provider, with the key from this command's environment (MOLTY_REALTIME_KEY or OPENAI_API_KEY)")
+    fr.add_argument("--agent-ms", type=int, default=1500, help="the scripted agent's think time before its answer (default 1500)")
+    fr.add_argument("--answer", default=None, help="what the agent answers when the front hands it the turn")
+    fr.add_argument("--fake-first-audio-ms", type=int, default=300, help="the fake provider's time to its first audio (default 300)")
+    fr.add_argument("--runs-dir", help="where the logs go (default tools/sim/runs)")
+
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(a, "verbose", False) else logging.WARNING, format="%(asctime)s %(name)s %(message)s")
 
@@ -104,6 +112,14 @@ def main(argv: list[str] | None = None) -> int:
 
         print(json.dumps(measure(), indent=2))
         return 0
+    if a.cmd == "front":
+        import time as _time
+
+        from .front import ANSWER, front_run
+        from .run import SIM_DIR as _SIM
+
+        out = (Path(a.runs_dir) if a.runs_dir else _SIM / "runs") / f"front-{_time.strftime('%Y%m%d-%H%M%S')}"
+        return asyncio.run(front_run(a.wav, a.live, out, a.agent_ms, a.answer or ANSWER, a.fake_first_audio_ms))
     if a.cmd == "show":
         d = json.loads((Path(a.run_dir) / "report.json").read_text())
         print(report.shake_table(d["turns"], d["summary"]) if d["turns"] and "arm" in d["turns"][0] else report.table(d["turns"], d["summary"]))
