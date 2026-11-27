@@ -3,11 +3,20 @@
   <img src="docs/assets/molty-hero.webp" width="830" height="360" alt="molty.UNO: the name beside a round screen where a cat breathes, blinks and grooms itself, then a sky chart, a rhythm clock with its hand sweeping, and the question 'open the PR?' answered yes with a tap. Each change of picture dissolves through dust.">
 </picture>
 
-### A round desk device that gives your AI agent a body.
+### A creature your AI agent speaks through.
 
 [Website](https://molty.uno) · [Showcase](https://molty.uno/showcase/) · [Docs](https://molty.uno/getting-started/introduction/) · [Setup](https://molty.uno/setup/)
 
 [![CI](https://github.com/apresmoi/molty.uno/actions/workflows/ci.yml/badge.svg)](https://github.com/apresmoi/molty.uno/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/apresmoi/molty.uno?include_prereleases)](https://github.com/apresmoi/molty.uno/releases) [![MIT](https://img.shields.io/badge/licence-MIT-9fe8c4)](LICENSE)
+
+Molty is the interface for your agent: a creature drawn in braille dots that your agent can
+control to talk to you, listen, ask a question you answer with a tap, and show its mood.
+
+Any agent can be the brain. Molty keeps breathing, blinking and reacting at once while your
+agent thinks.
+
+Open source. It runs today on three small ESP32-S3 touch screens, and can be adapted to any
+device that can run it.
 
 ## Connect your agent
 
@@ -34,7 +43,7 @@ add the relay as a remote MCP server (`https://<relay>/mcp`).
   planets and the signs; [molty-rhythm](skills/molty-rhythm/) a metronome that plays rhythms
   from around the world as a clock.
 - **Any agent is the brain.** Claude, Codex, Grok, OpenClaw, your own script. The thinking
-  happens wherever your agent runs; Molty is the body.
+  happens wherever your agent runs; Molty is what it speaks through.
 - **No laptop in the loop.** Molty dials out to a small cloud relay, so your agent reaches
   it from anywhere, with no port forwarding.
 
@@ -43,14 +52,15 @@ add the relay as a remote MCP server (`https://<relay>/mcp`).
 ```mermaid
 flowchart TD
   accTitle: Molty, the relay and your agent
-  console[Console] ---|USB-C or Wi-Fi| molty[Molty, on your desk]
+  console[Console] ---|USB-C or Wi-Fi| molty[Molty, on its screen]
   molty -->|audio, events| relay[Relay, in the cloud]
   relay -->|commands| molty
   agent[Your agent, anywhere] -->|MCP or REST| relay
   relay -->|results| agent
 ```
 
-Molty has a screen, a mic, a speaker, a motion sensor and touch. It dials out to the relay over WSS. Your agent is
+The boards it runs on today have a touch screen, a mic, a speaker and a motion sensor (the 1.28
+has no audio). Molty dials out to the relay over WSS. Your agent is
 Claude, Codex, Grok, OpenClaw or any other. The console is setup and settings, served by Molty itself at
 `http://10.13.37.1` (USB) or `http://molty.local` (Wi-Fi).
 

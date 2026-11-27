@@ -1,7 +1,7 @@
 // Landing copy and data. Few words: the screens do the talking.
 import { SITE_URL, SITE_DESCRIPTION, REPO_URL, REPO_BRANCH } from "../../config/site.mjs";
 
-export const title = "molty.UNO — liquid ASCII creatures for any screen";
+export const title = "molty.UNO: liquid ASCII creatures for any screen";
 export const description = SITE_DESCRIPTION;
 
 export const ldJson = {
