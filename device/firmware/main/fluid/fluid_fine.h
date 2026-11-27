@@ -152,6 +152,8 @@ typedef struct fluid_fine {
     uint8_t *imm;                       /* N: the word's own cells this frame (a word forming)    */
     uint8_t *why;                       /* N: what moves its dust this frame (1 << FLUID_ANIM_WORD, _WATER) */
     bool rim;                           /* a ring on the rim (fluid_fine_rim)                    */
+    bool hold;                          /* .. and every frame while it is set (a scene whose own motion wants the drawer's
+                                         * whole frame: a wave): its owner's, never the drawer's                        */
     bool pause;                         /* the light and the specks' shifts hold still this frame (the picture is changing
                                          * whole: the drawer's) */
     uint8_t lrow;                       /* which quarter of the light's grid rows, and of the cell rows' light-dependent

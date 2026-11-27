@@ -76,6 +76,7 @@ typedef struct {
     int8_t lst; uint8_t eln;            /* the list param it was repeated over (-1 none) and which element */
     bool live;                          /* drawn anew each frame (a beat's hand, its swelling hits): a shape only,
                                          * never in the kept dots, the fine dust or a key                         */
+    bool lead;                          /* ... its shapes the screen's mover (FLUID_TAG_LEAD: a wave's hand)       */
     int8_t layer;                       /* a beat's hit: its layer (a tap mutes it), else -1                      */
     /* a dial: a click every step degrees adds by (fast turning fast) to val, vmin..vmax; or steps through its labels
      * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1;
@@ -201,7 +202,7 @@ bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w);
 #define SCENE_WAVE_AFTERGLOW 0.12f      /* s: the outline keeps what the hand drew this long, while slow        */
 #define SCENE_WAVE_MIN_SEGS 48
 #define SCENE_WAVE_TOP_Y    0.73f       /* the note (chords) or the whole numbers (playing) up top              */
-enum { SCENE_WAVE_NOTES, SCENE_WAVE_CHORDS, SCENE_WAVE_PLAYING };
+enum { SCENE_WAVE_CHORDS, SCENE_WAVE_PLAYING };   /* wave.h WAVE_AT_*: the chooser, playing */
 typedef struct {
     bool on;
     int level;                          /* SCENE_WAVE_*                                                          */
@@ -209,6 +210,7 @@ typedef struct {
     uint8_t count[5];                   /* each voice's whole number: its dots a turn                            */
     uint32_t rgb[5], muted;
     float H, fc;                        /* the clock: turns (0..1), turns a second                                */
+    float hand;                         /* where the hand is drawn, turns (the clock's, a frame apart: mole_fluid.c) */
     float ph[5], f[5], env[5];          /* each voice: its phase from its hit, its rate (Hz), its level           */
     bool pluck[5];                      /* ... ringing as a preview (stopped)                                    */
     const float *trace;                 /* SCENE_WAVE_PTS + 1 radii, NULL: the plain circle                      */

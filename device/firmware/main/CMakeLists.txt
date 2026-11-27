@@ -276,6 +276,9 @@ set_source_files_properties(
     "creature/creature_dots.c"
     "creature/creature_ring.c"
     "scene/scene_player.c"
+    "rhythm/wave_player.c"
+    "rhythm/wave_core.c"
+    "rhythm/rhythm_player.c"
     ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"
 )

@@ -14,18 +14,28 @@
 #define WAVE_CALLOC(n) calloc(1, (n))
 #endif
 
-/* the notes: both spellings, and the one a key prefers (fewer accidentals); a hue a note round the circle of fifths,
- * all twelve equally bright on black (OKLCH 0.8, 0.13) */
-static const char *const SHARP[12] = { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-static const char *const FLAT[12] = { "C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B" };
+/* the notes as a key spells them (fewer accidentals); a hue a note round the circle of fifths, all twelve equally bright
+ * on black (OKLCH 0.8, 0.13) */
 static const char *const IN_KEY[2][12] = { { "C", "Db", "D", "Eb", "E", "F", "F#", "G", "Ab", "A", "Bb", "B" },
                                            { "C", "C#", "D", "Eb", "E", "F", "F#", "G", "G#", "A", "Bb", "B" } };
 static const uint32_t PALETTE[12] = { 0xff9b93u, 0x5dcbffu, 0xe4b750u, 0xc4acffu, 0x86d489u, 0xff99c2u,
                                       0x2ad5e5u, 0xfea668u, 0x95bcffu, 0xbbc75fu, 0xe8a0ecu, 0x49d9b9u };
-#define INK      0xc8cce0u              /* the readout's unit, off the chosen note                              */
-#define PREVIEW  60                     /* MIDI: the previews and the entry, the middle of the piano (octave 4) */
+#define INK      0xc8cce0u              /* the readout's unit, between notes                                    */
+#define PREVIEW  60                     /* MIDI: the pitch before any (middle C), and wave.play's with none     */
 #define SLOW     1.4f                   /* turns a second: `count` goes down by octaves to under this           */
 #define LAND_S   0.4f
+/* the rim while it plays: the pitch in fine steps, a note a detent (wave_local_turn). Under WAVE_NOTE_HZ hits a second,
+ * BEAT_FINE a click to BEAT_MID, BEAT_MID_BY to BEAT_WHOLE, then whole ones (each a detent); over it NOTE_FINE of a
+ * semitone a click (25 cents: a note every fourth) to SEMI_FROM, a semitone to TONE_FROM, then a whole tone */
+#define BEAT_FINE   0.1f
+#define BEAT_MID    4.f
+#define BEAT_MID_BY 0.2f
+#define BEAT_WHOLE  10.f
+#define NOTE_FINE   0.25f
+#define SEMI_FROM   72.f                /* C5 */
+#define TONE_FROM   84.f                /* C6 */
+#define MAGNET      0.08f               /* semitones: a step that ends this near a note ends on it            */
+#define PULL        1                   /* clicks a detent holds before a fine step leaves it                 */
 
 typedef struct { char id[WAVE_ID_MAX + 1], label[WAVE_LABEL_MAX + 1]; wav_chord_t ch; uint8_t key; } wave_kind_t;
 typedef struct {
@@ -33,8 +43,9 @@ typedef struct {
     wave_kind_t lib[WAVE_KINDS];
     int nlib;
     bool on;
-    int level, pc, kind;                    /* the level, the chosen note, the chord kind                        */
-    float midi;                             /* the root's pitch while it plays (MIDI, fractions allowed)          */
+    int level, kind;                        /* WAVE_AT_*, the chord kind                                         */
+    int pull;                               /* clicks held at a detent, signed (wave_local_turn)                 */
+    float midi;                             /* the root's pitch (MIDI, fractions allowed): playing, or last played */
     uint32_t muted;
     uint8_t tuning;
     float orphan, land;
@@ -49,6 +60,7 @@ static inline int mod12(int m) { return ((m % 12) + 12) % 12; }
 static inline const wave_kind_t *kind_of(void) { return &s_w->lib[s_w->kind]; }
 static int top_midi(void) { return wav_top_midi(&kind_of()->ch, s_w->tuning); }
 static float clamp_midi(float m) { const float top = (float)top_midi(); return m < WAVE_LOW_MIDI ? WAVE_LOW_MIDI : m > top ? top : m; }
+static int pc_of(void) { return mod12((int)lrintf(s_w->midi)); }   /* the note the pitch is on, or nearest */
 
 void wave_readout(float hz, float midi, int key, char big[32], char unit[32]) {
     if (hz < WAVE_NOTE_HZ) {
@@ -63,8 +75,9 @@ void wave_readout(float hz, float midi, int key, char big[32], char unit[32]) {
         if (c % 10) snprintf(big, 32, "%d.%02dK", c / 100, c % 100);
         else snprintf(big, 32, "%d.%dK", c / 100, c % 100 / 10);
     } else snprintf(big, 32, "%d", (int)lrintf(hz));
-    const int m = (int)lrintf(midi);
-    snprintf(unit, 32, "HZ %s%d", IN_KEY[key & 1][mod12(m)], (int)floorf(m / 12.f) - 1);
+    const int m = (int)lrintf(midi), c = (int)lrintf((midi - (float)m) * 100.f);   /* (between notes: how far, in cents) */
+    if (c) snprintf(unit, 32, "HZ %s%d %+d", IN_KEY[key & 1][mod12(m)], (int)floorf(m / 12.f) - 1, c);
+    else snprintf(unit, 32, "HZ %s%d", IN_KEY[key & 1][mod12(m)], (int)floorf(m / 12.f) - 1);
 }
 
 /* ── the chord kinds, as wave.play sends them ───────────────────────────────────────────────────────────────────── */
@@ -122,28 +135,26 @@ static void push_state(const char *state) {             /* (locked) */
     wave_ev_t e = { .kind = WAVE_EV_STATE, .hz = wav_hz(s_w->midi) };
     snprintf(e.state, sizeof e.state, "%s", state);
     snprintf(e.chord, sizeof e.chord, "%s", kind_of()->id);
-    snprintf(e.note, sizeof e.note, "%s", IN_KEY[kind_of()->key][s_w->pc]);
+    snprintf(e.note, sizeof e.note, "%s", IN_KEY[kind_of()->key][pc_of()]);
     push(&e);
 }
-static void preview(bool chord) {                        /* (locked) the note, or its chord, plucked once */
-    static const wav_chord_t ONE = { 1, { 1 }, { 0 } };
-    wav_chord(&s_w->p, chord ? &kind_of()->ch : &ONE, wav_hz(PREVIEW + s_w->pc), WAV_PLUCK, s_w->tuning, true);
+static void preview(void) {                              /* (locked) the chord kind plucked once, at the pitch */
+    wav_chord(&s_w->p, &kind_of()->ch, wav_hz(s_w->midi), WAV_PLUCK, s_w->tuning, true);
 }
 static void enter(float midi) {                          /* (locked) playing, from its hit */
     s_w->level = WAVE_AT_PLAYING;
     s_w->midi = clamp_midi(midi);
-    s_w->muted = 0;
+    s_w->muted = 0; s_w->pull = 0;
     wav_set_mute(&s_w->p, 0);
     wav_chord(&s_w->p, &kind_of()->ch, wav_hz(s_w->midi), WAV_HOLD, s_w->tuning, true);
 }
-static void rest(void) {                                 /* (locked) stopped, choosing, on the note it stopped at */
+static void rest(void) {                                 /* (locked) stopped, choosing, at the pitch it stopped at */
     s_w->level = WAVE_AT_CHORDS;
-    s_w->pc = mod12((int)lrintf(s_w->midi));
     wav_silence(&s_w->p);
 }
 static void pitch(float midi) {                          /* (locked) */
     if (s_w->level != WAVE_AT_PLAYING) { enter(midi); return; }
-    s_w->midi = clamp_midi(midi);
+    s_w->midi = clamp_midi(midi); s_w->pull = 0;
     wav_set_root(&s_w->p, wav_hz(s_w->midi));
 }
 static bool on(void) { return s_w && s_w->on; }
@@ -152,7 +163,7 @@ static bool on(void) { return s_w && s_w->on; }
 static cJSON *state_json(void) {
     cJSON *o = cJSON_CreateObject(), *m = cJSON_CreateArray();
     cJSON_AddStringToObject(o, "chord", kind_of()->id);
-    cJSON_AddStringToObject(o, "note", IN_KEY[kind_of()->key][s_w->pc]);
+    cJSON_AddStringToObject(o, "note", IN_KEY[kind_of()->key][pc_of()]);
     cJSON_AddNumberToObject(o, "midi", roundf(s_w->midi * 100.f) / 100.f);
     cJSON_AddNumberToObject(o, "hz", roundf(wav_hz(s_w->midi) * 100.f) / 100.f);
     cJSON_AddStringToObject(o, "tuning", s_w->tuning == WAV_EQUAL ? "equal" : "just");
@@ -257,10 +268,10 @@ const char *wave_play(const cJSON *args, cJSON **out) {
     rhythm_lock();
     if (!ready()) { rhythm_unlock(); return "oom"; }
     memcpy(s_w->lib, lib, sizeof(lib[0]) * (size_t)n);
-    s_w->nlib = n; s_w->kind = pick->valueint; s_w->pc = pc;
+    s_w->nlib = n; s_w->kind = pick->valueint; s_w->pull = 0;
     s_w->p.t = s_tab;
     s_w->tuning = tuning; s_w->on = true; s_w->orphan = 0.f; s_w->land = 0.f; s_w->midi = clamp_midi(midi);
-    if (cJSON_IsTrue(paused)) { s_w->level = WAVE_AT_CHORDS; wav_silence(&s_w->p); preview(true); }
+    if (cJSON_IsTrue(paused)) { s_w->level = WAVE_AT_CHORDS; wav_silence(&s_w->p); preview(); }
     else {
         enter(midi);
         s_w->muted = mute;
@@ -282,7 +293,7 @@ const char *wave_set(const cJSON *args, cJSON **out) {
     uint32_t mute = 0;
     bool have = false;
     float midi = s_w->midi;
-    const int kind = pick && whole(pick, 0, s_w->nlib - 1) ? pick->valueint : s_w->kind, pc = note && whole(note, 0, 11) ? note->valueint : s_w->pc;
+    const int pc0 = pc_of(), kind = pick && whole(pick, 0, s_w->nlib - 1) ? pick->valueint : s_w->kind, pc = note && whole(note, 0, 11) ? note->valueint : pc0;
     if ((note && !whole(note, 0, 11)) || (pick && !whole(pick, 0, s_w->nlib - 1)) || (paused && !cJSON_IsBool(paused)) ||
         !tuning_of(cJSON_GetObjectItemCaseSensitive(args, "tuning"), &tuning) || (mj && !mute_of(mj, s_w->lib[kind].ch.n, &mute)) ||
         !pitch_of(args, true, pc, s_w->lib[kind].ch.count[0], &have, &midi)) {
@@ -290,12 +301,12 @@ const char *wave_set(const cJSON *args, cJSON **out) {
         return "invalid_args";
     }
     const bool playing = s_w->level == WAVE_AT_PLAYING;
-    if (kind != s_w->kind || pc != s_w->pc) {            /* another chord or note: playing, it starts again in its octave */
+    if (kind != s_w->kind || pc != pc0) {                /* another chord kind at the pitch, or another note in its octave */
         const int m = (int)lrintf(s_w->midi);
-        s_w->kind = kind; s_w->pc = pc;
-        if (s_w->level == WAVE_AT_NOTES) s_w->level = WAVE_AT_CHORDS;
-        if (playing) enter((float)(m - mod12(m) + pc));
-        else preview(true);
+        s_w->kind = kind;
+        if (pc != pc0) s_w->midi = clamp_midi((float)(m - mod12(m) + pc));
+        if (playing) enter(s_w->midi);
+        else preview();
     }
     if (tuning != s_w->tuning) { s_w->tuning = tuning; wav_set_tuning(&s_w->p, tuning); if (s_w->level == WAVE_AT_PLAYING) pitch(s_w->midi); }
     if (have) pitch(midi);
@@ -322,27 +333,21 @@ bool wave_now(wave_screen_t *o) {
     if (!on()) { rhythm_unlock(); return false; }
     const wave_kind_t *k = kind_of();
     o->on = true; o->level = s_w->level; o->t = s_w->p.t; o->land = s_w->land;
-    o->index = s_w->level == WAVE_AT_NOTES ? s_w->pc : s_w->kind;
+    o->index = s_w->kind;
     wav_view(&s_w->p, rhythm_heard_seen(), &o->v);
-    const int root = s_w->level == WAVE_AT_PLAYING ? mod12((int)lrintf(s_w->midi)) : s_w->pc;
+    const int root = pc_of();
     o->nv = k->ch.n;
     for (int i = 0; i < k->ch.n; i++) { o->count[i] = k->ch.count[i]; o->rgb[i] = PALETTE[mod12(root + k->ch.semi[i])]; }
-    if (s_w->level == WAVE_AT_NOTES) {
-        if (strcmp(SHARP[s_w->pc], FLAT[s_w->pc])) snprintf(o->name, sizeof o->name, "%s/%s", SHARP[s_w->pc], FLAT[s_w->pc]);
-        else snprintf(o->name, sizeof o->name, "%s", SHARP[s_w->pc]);
-        o->name_rgb = PALETTE[s_w->pc];
-    } else {
-        snprintf(o->name, sizeof o->name, "%s", k->label);
-        o->name_rgb = s_w->level == WAVE_AT_PLAYING ? INK : 0xffffffu;
-        snprintf(o->top, sizeof o->top, "%s", IN_KEY[k->key][s_w->pc]);
-        o->top_rgb = PALETTE[s_w->pc];
-    }
+    snprintf(o->name, sizeof o->name, "%s", k->label);
+    o->name_rgb = s_w->level == WAVE_AT_PLAYING ? INK : 0xffffffu;
+    snprintf(o->top, sizeof o->top, "%s", IN_KEY[k->key][root]);
+    o->top_rgb = PALETTE[root];
     if (s_w->level == WAVE_AT_PLAYING) {
         const float f = wav_hz(s_w->midi);                  /* (where it glides to: a glide redraws no letter) */
         wave_readout(f, s_w->midi, k->key, o->big, o->unit);
         o->tone = f <= WAVE_NOTE_HZ ? 0.f : f >= 30.f ? 1.f : (f - WAVE_NOTE_HZ) / (30.f - WAVE_NOTE_HZ);
         o->tone = o->tone * o->tone * (3.f - 2.f * o->tone);
-        o->unit_rgb = f >= WAVE_NOTE_HZ && root == s_w->pc ? PALETTE[root] : INK;   /* the chosen note, in any octave: its colour */
+        o->unit_rgb = f >= WAVE_NOTE_HZ && s_w->midi == roundf(s_w->midi) ? PALETTE[root] : INK;   /* on a note: its colour */
     }
     rhythm_unlock();
     return true;
@@ -351,7 +356,7 @@ bool wave_now(wave_screen_t *o) {
 bool wave_where(int *level, int *index, float *midi, float *land) {
     rhythm_lock();
     const bool have = on();
-    if (have) { *level = s_w->level; *index = s_w->level == WAVE_AT_NOTES ? s_w->pc : s_w->kind; *midi = s_w->midi; *land = s_w->land; }
+    if (have) { *level = s_w->level; *index = s_w->kind; *midi = s_w->midi; *land = s_w->land; }
     rhythm_unlock();
     return have;
 }
@@ -362,41 +367,65 @@ const char *wave_kind_id(int i, char out[WAVE_ID_MAX + 1]) {
     return out;
 }
 
-int wave_labels(char (*out)[WAVE_LABEL_MAX + 1], uint32_t *tints, int max) {
+int wave_labels(char (*out)[WAVE_LABEL_MAX + 1], int max) {
     rhythm_lock();
     int n = 0;
-    if (on() && s_w->level == WAVE_AT_NOTES)
-        for (; n < 12 && n < max; n++) {
-            snprintf(out[n], WAVE_LABEL_MAX + 1, "%s", FLAT[n]);
-            if (tints) tints[n] = PALETTE[n];
-        }
-    else if (on())
-        for (; n < s_w->nlib && n < max; n++) { snprintf(out[n], WAVE_LABEL_MAX + 1, "%s", s_w->lib[n].label); if (tints) tints[n] = 0; }
+    for (; on() && n < s_w->nlib && n < max; n++) snprintf(out[n], WAVE_LABEL_MAX + 1, "%s", s_w->lib[n].label);
     rhythm_unlock();
     return n;
+}
+
+/* hits a second at MIDI m, and back */
+static float midi_of(float hz) { return 69.f + 12.f * log2f(hz / 440.f); }
+/* a detent: a whole number of hits a second, or a note */
+static bool detent(float m) {
+    const float f = wav_hz(m);
+    return f < WAVE_NOTE_HZ ? fabsf(f - roundf(f)) < 2e-3f : fabsf(m - roundf(m)) < 2e-3f;
+}
+/* the pitch a click from m, dir 1 up or -1 down: the next on its zone's grid that way (the zone of the side it goes to) */
+static float step_pitch(float m, int dir) {
+    const float probe = m + dir * 1e-3f, f = wav_hz(probe);
+    float by, at = m, base = 0.f, to;
+    if (f < WAVE_NOTE_HZ) { by = f < BEAT_MID ? BEAT_FINE : f < BEAT_WHOLE ? BEAT_MID_BY : 1.f; at = wav_hz(m); }
+    else if (probe < SEMI_FROM) by = NOTE_FINE;
+    else if (probe < TONE_FROM) by = 1.f;
+    else { by = 2.f; base = TONE_FROM; }
+    const float q = (at - base) / by;
+    to = base + (dir > 0 ? floorf(q + 0.01f) + 1.f : ceilf(q - 0.01f) - 1.f) * by;
+    if (f < WAVE_NOTE_HZ) { if (fabsf(to - roundf(to)) < 0.02f) to = roundf(to); return midi_of(to); }
+    return fabsf(to - roundf(to)) < MAGNET ? roundf(to) : to;
 }
 
 int wave_local_turn(int clicks, bool fast) {
     rhythm_lock();
     int moved = 0;
     if (on() && clicks) {
-        if (s_w->level == WAVE_AT_NOTES) { s_w->pc = mod12(s_w->pc + clicks); preview(false); moved = 1; }
-        else if (s_w->level == WAVE_AT_CHORDS) { s_w->kind = ((s_w->kind + clicks) % s_w->nlib + s_w->nlib) % s_w->nlib; preview(true); moved = 1; }
+        if (s_w->level == WAVE_AT_CHORDS) { s_w->kind = ((s_w->kind + clicks) % s_w->nlib + s_w->nlib) % s_w->nlib; preview(); moved = WAVE_TURN_STEP; }
         else {
-            /* a semitone a click; turning fast, straight to the chosen note in the next octave that way */
+            /* fine steps a click, a detent on each note (a hit a second); one held a click before a fine step leaves it
+             * (PULL); turning fast, an octave a click */
             const int c = clicks > 0 ? 1 : -1;
             float m = s_w->midi;
             for (int q = 0; q < abs(clicks); q++) {
-                m += (float)c;
-                if (fast) while (mod12((int)lrintf(m)) != s_w->pc) m += (float)c;
+                float to = m + 12.f * c;
+                const bool octave = fast && clamp_midi(to) == to;
+                if (!octave) {
+                    to = step_pitch(m, c);
+                    if (detent(m) && !detent(to)) {
+                        if (s_w->pull * c < 0) s_w->pull = 0;   /* (a turn back starts afresh) */
+                        s_w->pull += c;
+                        if (abs(s_w->pull) <= PULL) continue;
+                    }
+                }
+                to = clamp_midi(to);
+                s_w->pull = 0;
+                if (to == m) continue;                   /* (at its end) */
+                m = to;
+                const int k = octave ? WAVE_TURN_OCTAVE : detent(m) ? WAVE_TURN_NOTE : WAVE_TURN_STEP;   /* (the strongest felt) */
+                if (moved != WAVE_TURN_OCTAVE && !(k == WAVE_TURN_STEP && moved == WAVE_TURN_NOTE)) moved = k;
             }
-            m = clamp_midi(m);
-            if (m != s_w->midi) {
-                moved = mod12((int)lrintf(m)) == s_w->pc && wav_hz(m) >= WAVE_NOTE_HZ ? 2 : 1;
-                if (moved == 2) s_w->land = 1.f;
-                s_w->midi = m;
-                wav_set_root(&s_w->p, wav_hz(m));
-            }
+            if (moved == WAVE_TURN_OCTAVE) s_w->land = 1.f;
+            if (m != s_w->midi) { s_w->midi = m; wav_set_root(&s_w->p, wav_hz(m)); }
         }
     }
     rhythm_unlock();
@@ -405,15 +434,9 @@ int wave_local_turn(int clicks, bool fast) {
 void wave_local_centre(void) {
     rhythm_lock();
     if (on()) {
-        if (s_w->level == WAVE_AT_NOTES) { s_w->level = WAVE_AT_CHORDS; preview(true); }
-        else if (s_w->level == WAVE_AT_CHORDS) { enter((float)(PREVIEW + s_w->pc)); push_state("playing"); }   /* the pitch just heard */
+        if (s_w->level == WAVE_AT_CHORDS) { enter(s_w->midi); push_state("playing"); }   /* (the pitch just heard) */
         else { rest(); push_state("paused"); }
     }
-    rhythm_unlock();
-}
-void wave_local_up(void) {
-    rhythm_lock();
-    if (on() && s_w->level == WAVE_AT_CHORDS) { s_w->level = WAVE_AT_NOTES; preview(false); }
     rhythm_unlock();
 }
 void wave_local_mute(int voice, float x, float y) {

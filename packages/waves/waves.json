@@ -1,1 +1,1 @@
-{"v":"molty-pkg/1","id":"waves","name":"Waves","version":"1.0.0","kind":"scenes","layouts":{"scope":{"dur":0,"items":[{"k":"wave","r":0.5},{"k":"dial","id":"pitch","sets":"pitch","step":12},{"k":"dial","id":"chord","sets":"pick","step":30,"face":1},{"k":"centre","r":0.26}]}}}
+{"v":"molty-pkg/1","id":"waves","name":"Waves","version":"1.1.0","kind":"scenes","layouts":{"scope":{"dur":0,"items":[{"k":"wave","r":0.5},{"k":"dial","id":"pitch","sets":"pitch","step":6,"tick_ms":15,"tick":50},{"k":"dial","id":"chord","sets":"pick","step":30,"face":1},{"k":"centre","r":0.26}]}}}

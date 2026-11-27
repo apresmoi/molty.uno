@@ -59,6 +59,7 @@ bool mole_fluid_scene_event(mole_scene_evt_t *out) { (void)out; return false; }
 static int zone_hit;            /* the press lands on a scene's wheel (1), its centre (2), a beat's dot (3); 0 none */
 int mole_fluid_zone(int px, int py) { (void)px; (void)py; return zone_hit; }
 int mole_fluid_take_ticks(int *ms, int *strength) { *ms = *strength = 0; return 0; }
+bool mole_fluid_ticks_waiting(void) { return false; }
 bool mole_fluid_scene_up(void) { return false; }
 void mole_fluid_scene_close(void) { }
 int mole_fluid_take_closed(void) { return 0; }

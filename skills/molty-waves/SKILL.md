@@ -30,16 +30,17 @@ C#, Db, D ... B (a flat is a lowercase b). Chords: `list`, or [data/chords.json]
 
 ## What your human can do on Molty
 
-- **Turn the rim, stopped**: choose what plays on the note (alone, octave, fifth, fourth, the thirds, tritone, major,
-  minor, sus, diminished, augmented, the sevenths, sixths, ninths, seven sharp nine, fourths, a cluster). Each choice
-  plays once, plucked, in the middle of the piano.
-- **Tap the note above the name**: up to the twelve notes; the rim steps through them, each playing once; the middle
-  opens one.
-- **Tap the middle** (or the accept button): it plays, at the pitch they just heard; again: it stops.
-- **Turn the rim, playing**: a semitone a click, from 1 a second to 5.6 kHz; turning fast it jumps to the chosen
-  note's next octave, with a longer tick. Down: the hits slow until they can be counted. Up: past about 20 a second
-  they fuse into a note and the outline becomes the wave. The middle reads hits a second, then hertz and the note
-  with its octave (A1, A2, A3).
+- **Turn the rim, stopped**: choose what plays (alone, octave, fifth, fourth, the thirds, tritone, major, minor, sus,
+  diminished, augmented, the sevenths, sixths, ninths, seven sharp nine, fourths, a cluster). Each choice plays once,
+  plucked, at the pitch it last played (middle C at first). The note up top is wherever that pitch is.
+- **Tap the middle** (or the accept button): it plays, at the pitch they just heard; again: it stops, back to the
+  choice, at the same pitch.
+- **Turn the rim, playing**: the pitch moves in fine steps (a quarter of a semitone a click), with a firmer tick and
+  a slight hold on each note, so a note is easy to find by feel; from C5 a semitone a click, from C6 a whole tone.
+  Under about 20 a second it moves in tenths of a hit a second, then fifths, then whole ones. Turning fast it jumps
+  an octave a click, with the strongest tick. Down: the hits slow until they can be counted. Up: past about 20 a
+  second they fuse into a note and the outline becomes the wave. The middle reads hits a second, then hertz and the
+  note with its octave (A1, A2, A3), and between notes how far off it is ("+25").
 - **Tap a number up top** (or a drum's dots while slow): mute that drum; again to bring it back.
 - **Close it**: the other button, or a finger held still on the glass for a second.
 

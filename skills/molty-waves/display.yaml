@@ -5,7 +5,7 @@ molty: display/2
 package:
   id: waves
   name: Waves
-  version: 1.0.0
+  version: 1.1.0
   about: A chord Molty plays with one drum and draws on one circle, its outline the wave. Tap the middle to play or stop; turn the rim to choose or for the pitch.
   fallback: speech
 screens:

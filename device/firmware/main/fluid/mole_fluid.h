@@ -268,6 +268,8 @@ int  mole_fluid_take_closed(void);
 /** Clicks of a scene's wheel since the last call (sense.c ticks the motor for them, haptic_wheel_due), and its dial's
  *  tick: *ms, *strength (0: haptic_plan.h HAPTIC_WHEEL_*). */
 int mole_fluid_take_ticks(int *ms, int *strength);
+/** A wheel's clicks wait (taken when the motor's gap allows: clicks in the gap share one tick, the strongest's). */
+bool mole_fluid_ticks_waiting(void);
 /** A wheel settled (the finger left it, or a choice was made): evt `ring` (link_protocol.h link_evt_ring_frame). index
  *  -1: a number (value); id: the beat player's rhythm a pick chose. False: none since the last call. */
 typedef struct { char spot[41], label[25], id[25]; double value; int index; } mole_ring_evt_t;

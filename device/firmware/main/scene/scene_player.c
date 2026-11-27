@@ -910,12 +910,15 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         switch (it->k) {
         case PK_RING:  ring(c, it, false); break;
         case PK_ARC:   ring(c, it, true); break;
-        case PK_TICKS:
+        case PK_TICKS: {
+            const int n0 = c->hd && c->hd->n >= 0 ? c->hd->n : 0;
             for (int q = 0; q < it->n; q++) {
                 const float a0 = (it->a0 + q * 360.f / it->n) * DEG, cx = cosf(a0), cy = sinf(a0);
                 segment(c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
             }
+            for (int q = n0; it->lead && c->hd && q < c->hd->n; q++) c->hd->shapes[q].tag = FLUID_TAG_LEAD;
             break;
+        }
         case PK_LINE:  path(c, pts, it->npts, false, it->w * 0.5f, it->rgb); break;
         case PK_CURVE: path(c, pts, it->npts, true, it->w * 0.5f, it->rgb); break;
         case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
@@ -1456,9 +1459,10 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
         }
     } else {   /* fine ticks at the top of the rim, still: they never slide with the finger (a sliding tick redraws its cells
                 * every frame, and a turn's frames then owed the middle's cells to the next: the hand a frame late) */
-        const int ticks = (int)lrintf(360.f / step);
+        const float every = step * ceilf(12.f / step - 1e-3f);   /* (at most one every 12 degrees: a finer dial's clicks are felt) */
+        const int ticks = (int)lrintf(360.f / every);
         for (int q = -ticks / 2; q <= ticks / 2; q++) {
-            const float a = q * step;
+            const float a = q * every;
             if (fabsf(a) <= SCENE_WHEEL_SCALE) beat_spoke(sc, 90.f + a, r - 0.015f, 0.03f, BEAT_HAIR, BEAT_GRID, true);
         }
     }
@@ -1487,13 +1491,16 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
 #define WAVE_SWELL_S 0.25f
 #define WAVE_MUTED  0.3f                /* a muted voice: this much of its colour                                  */
 #define WAVE_TOL    1.0f                /* px: the outline's strokes stay this close to its points, at first        */
-#define WAVE_RUN    30                  /* ... and never cross a multiple of this many (a change stays where it is)  */
+#define WAVE_SWELLS 2                   /* dots that swell or settle a frame (a hit's bounce, at most a frame late)     */
+#define WAVE_SWELL_DOTS 64
+#define WAVE_RUN    15                  /* ... and never cross a multiple of this many (a change stays where it is:
+                                         * 7.5 degrees, what the drawer remakes in a frame beside the rest)            */
 #define WAVE_STILL  1.5f                /* px: a point that moved less than this stays where it was drawn (a hit's tail
                                          * settles in steps: the strokes the screen sends again a frame stay few)       */
 #define WAVE_SNAP   0.6f                /* px: this near the circle it is the circle                                 */
-#define WAVE_RUNS   1                   /* stretches of the outline that move a frame for the most moved (a 24th of it) */
 #define WAVE_STROKE 0.018f              /* the outline's and the shapes' width: 4 px on the 1.75C (a thinner one is drawn as
                                          * the grid's hairline, 1 px, which the glass barely shows)                     */
+#define WAV_MAX_CORNERS 48               /* a voice's hits a turn, at most (wave_player.h WAV_MAX_N)                  */
 #define WAVE_PX     233.f               /* px a glass unit on the 1.75C (466 px across), for that tolerance         */
 static inline float wsmooth(float u) { u = u < 0.f ? 0.f : u > 1.f ? 1.f : u; return u * u * (3.f - 2.f * u); }
 static inline float wfrac(float v) { return v - floorf(v); }
@@ -1545,13 +1552,57 @@ static int wave_outline(scene_t *sc, const float (*p)[2], int16_t *keep, uint32_
     return n - 1;
 }
 
+/* the part of segment a..b inside box {x0, x1, y0, y1}: t0..t1 of it (Liang-Barsky); false: none */
+static bool clip_box(const float *a, const float *b, const float *box, float *t0, float *t1) {
+    const float dx = b[0] - a[0], dy = b[1] - a[1], p[4] = { -dx, dx, -dy, dy }, q[4] = { a[0] - box[0], box[1] - a[0], a[1] - box[2], box[3] - a[1] };
+    *t0 = 0.f; *t1 = 1.f;
+    for (int i = 0; i < 4; i++) {
+        if (p[i] == 0.f) { if (q[i] < 0.f) return false; continue; }
+        const float r = q[i] / p[i];
+        if (p[i] < 0.f) { if (r > *t1) return false; if (r > *t0) *t0 = r; }
+        else { if (r < *t0) return false; if (r < *t1) *t1 = r; }
+    }
+    return *t1 > *t0;
+}
+/* a voice's shape, corner to corner (two corners: one line), drawn in runs; what crosses the readout's clear box drawn
+ * dim, so the words over it stay legible */
+static void wave_shape(scene_t *sc, const float (*c)[2], int n, float (*run)[2], uint32_t rgb, uint32_t dim, const float *box) {
+    int nr = 0;
+    #define FLUSH(col) do { scene_item_t *o_ = nr >= 2 ? wave_pts(sc, col, WAVE_STROKE, nr) : NULL; \
+        for (int q_ = 0; o_ && q_ < nr; q_++) { sc->pts[o_->pts + q_][0] = run[q_][0]; sc->pts[o_->pts + q_][1] = run[q_][1]; } } while (0)
+    run[nr][0] = c[0][0]; run[nr++][1] = c[0][1];
+    for (int e = 0; e < (n == 2 ? 1 : n); e++) {
+        const float *a = c[e], *b = c[(e + 1) % n];
+        float t0, t1;
+        if (!clip_box(a, b, box, &t0, &t1)) { run[nr][0] = b[0]; run[nr++][1] = b[1]; continue; }
+        const float pa[2] = { a[0] + (b[0] - a[0]) * t0, a[1] + (b[1] - a[1]) * t0 }, pb[2] = { a[0] + (b[0] - a[0]) * t1, a[1] + (b[1] - a[1]) * t1 };
+        if (t0 > 0.f) { run[nr][0] = pa[0]; run[nr++][1] = pa[1]; }
+        FLUSH(rgb);
+        nr = 0; run[nr][0] = pa[0]; run[nr++][1] = pa[1]; run[nr][0] = pb[0]; run[nr++][1] = pb[1];
+        FLUSH(dim);
+        nr = 0; run[nr][0] = pb[0]; run[nr++][1] = pb[1];
+        if (t1 < 1.f) { run[nr][0] = b[0]; run[nr++][1] = b[1]; }
+    }
+    FLUSH(rgb);
+    #undef FLUSH
+}
+
 void scene_wave(scene_t *sc, const scene_wave_t *w) {
     if (!sc || sc->wave < 0) return;
     sc->npts = sc->npts_fixed;
     /* the outline's points, and the radii last drawn (a point that barely moved stays: a still outline stays still,
      * a slow one redraws only behind the hand): PSRAM, once */
-    static struct { float xy[SCENE_WAVE_PTS + 1][2], last[SCENE_WAVE_PTS + 1]; int16_t keep[SCENE_WAVE_PTS + 1]; unsigned look; int turn; uint32_t line; } *scr;
-    if (!scr && !(scr = SCENE_CALLOC(sizeof(*scr)))) return;
+    static struct { float xy[SCENE_WAVE_PTS + 1][2], last[SCENE_WAVE_PTS + 1], cs[SCENE_WAVE_PTS][2], sw[5][WAVE_SWELL_DOTS]; int16_t keep[SCENE_WAVE_PTS + 1];
+                    int nsw;
+                    unsigned look; int turn; unsigned tick; uint32_t line;
+                    float corner[WAV_MAX_CORNERS][2], run[2 * WAV_MAX_CORNERS + 2][2]; } *scr;
+    if (!scr) {                                          /* (with the points' angles: the same floats as sinf, cosf each frame) */
+        if (!(scr = SCENE_CALLOC(sizeof(*scr)))) return;
+        for (int q = 0; q < SCENE_WAVE_PTS; q++) {
+            const float a = (90.f - 360.f * q / SCENE_WAVE_PTS) * DEG;
+            scr->cs[q][0] = cosf(a); scr->cs[q][1] = sinf(a);
+        }
+    }
     float (*xy)[2] = scr->xy;
     const scene_item_t W = sc->items[sc->wave];
     const float k = W.r / WAVE_RC, RC = W.r;
@@ -1565,16 +1616,16 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
 
     /* the hand: crisp while it can be followed, a blur of its sweep a frame, gone once the beats are a note */
     if (playing) {
-        const float deg = 90.f - 360.f * h, gone = scene_wave_fuse(fr), crisp = (1.f - gone) * (1.f - wsmooth((fc - 2.5f) / 2.5f));
+        const float deg = 90.f - 360.f * w->hand, gone = scene_wave_fuse(fr), crisp = (1.f - gone) * (1.f - wsmooth((fc - 2.5f) / 2.5f));
         const float fan = (1.f - gone) * wsmooth((fc - 2.f) / 3.f), sweep = fminf(360.f, 360.f * fc / 30.f), len = (RC * 0.97f - WAVE_HAND0 * k);
         /* its trail: three hairlines over what it swept in the last frame (a blur of it, fast), fainter behind it. Never a
          * filled wedge: on the glass that is a dark sheet over the dust, and a lot of the screen sent again each frame */
-        const float trail = fan * fminf(0.6f, fmaxf(0.15f, 18.f / sweep)), span = sweep;   /* (none while it is crisp) */
+        const float trail = crisp < 0.5f ? fan * fminf(0.6f, fmaxf(0.15f, 18.f / sweep)) : 0.f, span = sweep;   /* (none while it is crisp) */
         if (trail > 0.01f) {
             for (int q = 3; q >= 1; q--) beat_spoke(sc, deg + span * q / 3.f, WAVE_HAND0 * k, len, BEAT_HAIR, scale_rgb(0xffffffu, trail * (1.f - q / 4.f)), true);
             budget -= 3;
         }
-        if (crisp > 0.01f) { beat_spoke(sc, deg, WAVE_HAND0 * k, len, 0.03f, scale_rgb(0xffffffu, crisp), true); budget--; }
+        if (crisp > 0.01f) { beat_spoke(sc, deg, WAVE_HAND0 * k, len, 0.03f, scale_rgb(0xffffffu, crisp), true); budget--; sc->items[sc->nitems - 1].lead = true; }
     } else { beat_spoke(sc, 90.f, WAVE_HAND0 * k, RC * 0.97f - WAVE_HAND0 * k, 0.012f, BEAT_GRID, true); budget--; }
     scene_item_t *ring = beat_item(sc, PK_RING, true);
     if (ring) { ring->r = RC; ring->rgb = BEAT_GRID; }
@@ -1584,7 +1635,7 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
     char ratio[32] = "";
     for (int j = 0, o = 0; playing && nv > 1 && j < nv; j++) o += snprintf(ratio + o, sizeof ratio - (size_t)o, j ? ":%d" : "%d", w->count[j] % 100);
     const bool mark = w->on && (!playing || w->mark);
-    budget -= (mark ? (w->level == SCENE_WAVE_NOTES ? 9 : w->level == SCENE_WAVE_CHORDS ? 10 : 9) : 0) + letters(name) + letters(top) + letters(big) + letters(unit) + letters(ratio);
+    budget -= (mark ? (playing ? 9 : 10) : 0) + letters(name) + letters(top) + letters(big) + letters(unit) + letters(ratio);
 
     /* the hits: each voice's dots, joined as its shape (the densest voices' give way first when the room is short) */
     float level = 0.f;
@@ -1598,7 +1649,7 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
             const int n = w->count[j] ? w->count[j] : 1;
             if (show < 0.01f) continue;
             if (!pass && used + n <= room) { dots[j] = true; used += n; }
-            else if (pass && dots[j] && n >= 2 && used + n <= room) { shape[j] = true; used += n; }
+            else if (pass && dots[j] && n >= 2 && used + n + 2 <= room) { shape[j] = true; used += n + 2; }   /* (+2: its pieces dim through the readout) */
         }
     /* the outline: what the hand drew, the sound's own wave (still while the beats are a note in whole numbers) */
     const bool one = nv == 1;
@@ -1607,8 +1658,8 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
                                                              * a new colour is the whole outline drawn again) */
     scr->line = line;
     #define RAT(x) (scr->last[(int)lrintf(wfrac(x) * SCENE_WAVE_PTS)])   /* (the outline as drawn: a dot moves with it, never by less) */
-    /* what moves this frame: the outline's stretches (WAVE_RUN points, which no stroke crosses) that moved most, WAVE_STILL
-     * px or more, WAVE_RUNS of them, and the next one in turn that moved; the rest keep what was drawn and follow. What the screen
+    /* what moves this frame: the outline's stretch (WAVE_RUN points, which no stroke crosses) that moved most, WAVE_STILL
+     * px or more, or one frame in four the next one in turn that moved; the rest keep what was drawn and follow. What the screen
      * draws again a frame stays inside what its drawer makes in one (fluid_draw.c GLASS_CACHE_US) */
     const bool fresh = scr->look != sc->look;
     scr->look = sc->look;
@@ -1619,65 +1670,80 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
         most[g] = 0.f;
         for (int q = g * WAVE_RUN; q < (g + 1) * WAVE_RUN; q++) most[g] = fmaxf(most[g], fabsf(TARGET(q) - scr->last[q]));
     }
-    for (int pick = 0; pick < (fresh ? RUNS : w->still ? 0 : WAVE_RUNS + 1); pick++) {
+    const bool turn = (++scr->tick & 3) == 0;            /* (one frame in four: the next in turn, so none waits for long) */
+    for (int pick = 0; pick < (fresh ? RUNS : w->still ? 0 : 1); pick++) {
         int g = 0;
-        if (pick < WAVE_RUNS || fresh) for (int c = 1; c < RUNS; c++) { if (most[c] > most[g]) g = c; }
-        else for (int c = 0; c < RUNS; c++) { g = (scr->turn + c) % RUNS; if (most[g] >= WAVE_STILL / WAVE_PX) break; }   /* (and one in turn: none waits for long) */
+        if (!turn || fresh) for (int c = 1; c < RUNS; c++) { if (most[c] > most[g]) g = c; }
+        else for (int c = 0; c < RUNS; c++) { g = (scr->turn + c) % RUNS; if (most[g] >= WAVE_STILL / WAVE_PX) break; }
         if (most[g] < 0.f || (!fresh && most[g] < WAVE_STILL / WAVE_PX)) continue;
         for (int q = g * WAVE_RUN; q < (g + 1) * WAVE_RUN; q++) scr->last[q] = TARGET(q);
         most[g] = -1.f;
-        if (pick == WAVE_RUNS) scr->turn = (g + 1) % RUNS;
+        if (turn) scr->turn = (g + 1) % RUNS;
     }
-    for (int q = 0; q < SCENE_WAVE_PTS; q++) {
-        const float a = (90.f - 360.f * q / SCENE_WAVE_PTS) * DEG;
-        xy[q][0] = scr->last[q] * cosf(a); xy[q][1] = scr->last[q] * sinf(a);
-    }
+    for (int q = 0; q < SCENE_WAVE_PTS; q++) { xy[q][0] = scr->last[q] * scr->cs[q][0]; xy[q][1] = scr->last[q] * scr->cs[q][1]; }
     #undef TARGET
     scr->last[SCENE_WAVE_PTS] = scr->last[0];
     xy[SCENE_WAVE_PTS][0] = xy[0][0]; xy[SCENE_WAVE_PTS][1] = xy[0][1];
     wave_outline(sc, (const float (*)[2])xy, scr->keep, line, WAVE_STROKE, budget - used);
+    /* the readout's clear box: the shapes' strokes cross it dim (a fifth's line, a triangle's base through the number and
+     * the name). Its size by the level's words, never by the number's (it would move the shapes' pieces as it counts) */
+    float box[4];
+    {
+        const float wide = 0.6f * (playing ? (nv > 1 ? fit(name, 0.05f, 0.5f) : 0.f) : fit(name, 0.09f, 0.62f)) * (float)strlen(name);
+        const float half = fmaxf(playing ? 0.22f : 0.10f, 0.5f * wide + 0.02f) + 0.5f * WAVE_STROKE;
+        const float low = playing ? (nv > 1 ? -0.265f : -0.165f) : -0.08f;
+        box[0] = -half * k; box[1] = half * k; box[2] = (low - 0.5f * WAVE_STROKE) * k; box[3] = (0.23f + 0.5f * WAVE_STROKE) * k;
+    }
+    scr->nsw = fresh ? -(5 * WAVE_SWELL_DOTS) : 0;       /* (a new look: every dot as it is) */
     for (int j = 0; j < nv; j++) {
         if (!dots[j]) continue;
         const int n = w->count[j] ? w->count[j] : 1;
         const float show = 1.f - (playing ? scene_wave_fuse(w->f[j]) : 0.f), ph = playing ? w->ph[j] : 0.f;
-        scene_item_t *poly = shape[j] ? wave_pts(sc, scale_rgb(col[j], 0.9f * show), WAVE_STROKE, n + 1) : NULL;
+        const bool poly = shape[j] && n <= WAV_MAX_CORNERS;
+        #define HIT_X(q, x, at) do { x = playing ? wfrac(h + ((q) - ph) / n) : (float)(q) / n; at = (int)lrintf(x * n); \
+            if (fabsf(x * n - at) < 1e-3f) { x = (float)(at % n) / n; } at = (at % n + n) % n; } while (0)
+        for (int q = 0; poly && q < n; q++) {   /* its shape first, under its dots: corners on the circle (it stays still while
+                                                 * its dots ride the wave; the screen never redraws its long edges for a shiver) */
+            float x; int at;
+            HIT_X(q, x, at);
+            scr->corner[at][0] = RC * cosf((90.f - 360.f * x) * DEG); scr->corner[at][1] = RC * sinf((90.f - 360.f * x) * DEG);
+        }
+        if (poly) wave_shape(sc, (const float (*)[2])scr->corner, n, scr->run, scale_rgb(col[j], 0.9f * show), scale_rgb(col[j], 0.2f * show), box);
         const float size = fminf(WAVE_DOT * k, 0.42f * (6.2831853f * RC / n / 2.f)) * (0.35f + 0.65f * show);
         for (int q = 0; q < n; q++) {
             /* where the hand is when it hits: in whole numbers exactly a k / n (snapped, so its dot and its shape's corner
              * are the same floats frame after frame, the k-th corner the k-th point: nothing drawn again for a rounding) */
-            float x = playing ? wfrac(h + (q - ph) / n) : (float)q / n;
-            int at = (int)lrintf(x * n);
-            if (fabsf(x * n - at) < 1e-3f) x = (float)(at % n) / n;
-            at = (at % n + n) % n;
+            float x;
+            int at;
+            HIT_X(q, x, at);
             const float r = playing ? RAT(x) : RC, a = (90.f - 360.f * x) * DEG;
             float sw = 0.f;
             if (playing && !MUTED(j)) {
                 const float since = wfrac(h - x) / fc, inst = since < WAVE_SWELL_S ? (1.f - since / WAVE_SWELL_S) * (1.f - since / WAVE_SWELL_S) : 0.f;
                 const float P = 1.f / fc, m = fminf(P, WAVE_SWELL_S), u = 1.f - m / WAVE_SWELL_S, mean = WAVE_SWELL_S / (3.f * P) * (1.f - u * u * u);
-                sw = inst + (mean - inst) * wsmooth((fc - 2.f) / 4.f);
+                sw = inst + (mean - inst) * wsmooth((fc - 1.5f) / 1.5f);   /* (steady by 3 turns a second: past that a swell a hit is a redraw a frame) */
             } else if (!playing) sw = 0.8f * (w->pluck[j] ? w->env[j] : 0.f);
             sw = roundf(fminf(1.f, fmaxf(0.f, sw)) * 2.f) / 2.f;   /* (in two steps: a swelling dot is drawn again twice, not each frame) */
+            if (at < WAVE_SWELL_DOTS) {                  /* (WAVE_SWELLS change a frame, the rest the next: never a frame of them all) */
+                if (sw != scr->sw[j][at] && (w->still || scr->nsw >= WAVE_SWELLS)) sw = scr->sw[j][at];
+                else if (sw != scr->sw[j][at]) scr->nsw++;
+                scr->sw[j][at] = sw;
+            }
             beat_disc(sc, r * cosf(a), r * sinf(a), size * (1.f + 0.9f * sw), scale_rgb(col[j], fminf(1.f, show * 1.4f)),
                       true, playing && !MUTED(j) && show > 0.3f ? j : -1);
-            if (poly) { sc->pts[poly->pts + at][0] = RC * cosf(a); sc->pts[poly->pts + at][1] = RC * sinf(a); }   /* (its corners on the
-                                                                 * circle: a shape stays still while its dots ride the wave, and the
-                                                                 * screen never redraws its long edges for a shiver) */
         }
-        if (poly) { sc->pts[poly->pts + n][0] = sc->pts[poly->pts][0]; sc->pts[poly->pts + n][1] = sc->pts[poly->pts][1]; }
+        #undef HIT_X
     }
     #undef RAT
 
     /* the middle: the mark, the readout, the name; the top: the note or the whole numbers */
     const float my = 0.15f * k;
-    if (mark && w->level == SCENE_WAVE_NOTES)           /* a ring of dots round one: a tap opens the note */
-        for (int q = 0; q <= 8; q++) { const float a = q * 45.f * DEG, rr = q < 8 ? 0.062f * k : 0.f; beat_disc(sc, rr * cosf(a), rr * sinf(a) + my, (q < 8 ? 0.012f : 0.019f) * k, SCENE_NOTCH_RGB, true, -1); }
-    else if (mark && w->level == SCENE_WAVE_CHORDS)     /* the play mark: a triangle of dots pointing right */
+    if (mark && !playing)                               /* the play mark: a triangle of dots pointing right */
         for (int c = 0; c < 4; c++) for (int q = 0; q < 4 - c; q++) beat_disc(sc, (c - 1.3f) * 0.05f * 0.87f * k, ((float)q - (3 - c) * 0.5f) * 0.05f * k + my, 0.016f * k, SCENE_NOTCH_RGB, true, -1);
     else if (mark)                                      /* a small square of dots: a tap stops it */
         for (int q = 0; q < 9; q++) beat_disc(sc, (q % 3 - 1) * 0.02f * k, (q / 3 - 1) * 0.02f * k + my, 0.0065f * k, BEAT_STOP_RGB, true, -1);
     if (!w->on) return;
-    if (w->level == SCENE_WAVE_NOTES) wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.12f, 0.6f) * k, w->name_rgb, -1, 0.f);
-    else if (w->level == SCENE_WAVE_CHORDS) {
+    if (!playing) {
         wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.09f, 0.62f) * k, w->name_rgb, -1, 0.f);
         wave_text(sc, top, 0.f, SCENE_WAVE_TOP_Y * k, 0.07f * k, w->top_rgb, -1, 0.f);
     } else {
