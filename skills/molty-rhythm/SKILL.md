@@ -1,6 +1,6 @@
 ---
 name: molty-rhythm
-description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a tap in the middle to play and stop, and a rim they turn to choose a rhythm (stopped) or the tempo (playing). 67 verified rhythms in 12 regions (Argentina: chacarera, zamba, chamamé, gato, cueca and more; the Caribbean, Brazil, flamenco, West Africa, the Middle East, the Balkans, India, Ireland, the US, the basics). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave", "something from Brazil"), and they have a Molty paired through the molty skill.
+description: Play a rhythm on your human's Molty as a clock that keeps time by itself, each drum on its own ring with its own sound, a hand that walks the steps, a tap in the middle to play and stop, and a rim they turn to choose a rhythm (stopped) or the tempo (playing). 67 verified rhythms in 12 regions (Argentina with chacarera, zamba, chamamé, gato, cueca and more; the Caribbean, Brazil, flamenco, West Africa, the Middle East, the Balkans, India, Ireland, the US, the basics). Use when the human asks to see, hear, learn or practise a rhythm or a tempo ("show me chacarera at 100", "slower", "a clave", "something from Brazil"), and they have a Molty paired through the molty skill.
 ---
 
 # Molty rhythm

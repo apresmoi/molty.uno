@@ -1,6 +1,6 @@
 ---
 name: molty
-description: Connect to your human's Molty (the creature you speak through, on a screen) and use it: pair with the link code and a tap, speak and listen in one call per turn, ask tap-button questions, show moods, and answer when they shake Molty and speak. Use when the human says "connect to molty", "connect yourself to my Molty", "talk to me through molty", "ping me on molty if you need anything", pastes a Molty setup message (Device + Code), or asks to test, update or debug Molty.
+description: Connect to your human's Molty (the creature you speak through, on a screen) and use it, pair with the link code and a tap, speak and listen in one call per turn, ask tap-button questions, show moods, and answer when they shake Molty and speak. Use when the human says "connect to molty", "connect yourself to my Molty", "talk to me through molty", "ping me on molty if you need anything", pastes a Molty setup message (Device + Code), or asks to test, update or debug Molty.
 ---
 
 # Molty
