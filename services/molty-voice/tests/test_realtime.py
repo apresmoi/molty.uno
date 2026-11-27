@@ -121,7 +121,7 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     # create_response off: the box asks for the one reply itself, on the commit (rule 1)
     assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is False and tds[0]["interrupt_response"] is False
     assert len(s["creates"]) == 1
-    assert s["creates"][0]["max_output_tokens"] == brief.REPLY_MAX_TOKENS  # a plain reply cannot ramble
+    assert "max_output_tokens" not in s["creates"][0]  # no cap: live, it cut replies before their hand-off call
     assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
@@ -559,3 +559,24 @@ def test_faithful_holds_every_number_name_and_content_word():
     juan = "That was me answering a turn twice, Juan. Sorry, it should be fixed now."
     assert not ok(juan, "Thanks for pointing it out; it's being handled now.")[0]
     assert ok("You asked me to remember to buy oat milk on the way home.", "You asked me: remember to buy oat milk on the way home.")[0]
+
+
+def test_filler_by_default_a_question_is_handed_off_by_rule_small_talk_is_answered():
+    # live 2026-11-28 (rig run 4): the model answered "What is on my calendar today?" itself (a token cap cut it
+    # before its hand-off call): the box hands off by rule whatever the model does; small talk stays the front's
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")
+
+    for heard, waiting in (("What is on my calendar today?", True), ("Thanks, and what was the last thing I asked you to remember?", True),
+                           ("It seems that you are speaking twice.", True), ("Hey Molty, how is it going?", False), ("Okay, bye.", False)):
+        relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": heard, "reply": lambda h: ("Hmm, okay.", False)}))
+        reply = relay.of("front.reply", stt="s1")[0]["id"]
+        assert relay.of("tts.end", id=reply)[0].get("wait", False) is waiting, heard
+
+
+def test_small_talk_is_only_greetings_thanks_goodbyes_and_hums():
+    for t in ("Hey Molty, how is it going?", "hum", "Okay, bye.", "Thanks.", "good morning molty", ""):
+        assert brief.answers_alone(t), t
+    for t in ("What is on my calendar today?", "It seems that you are speaking twice.", "hey dude, what time is it?",
+              "Thanks, and what was the last thing I asked you to remember?", "remind me to call Ana"):
+        assert not brief.answers_alone(t), t

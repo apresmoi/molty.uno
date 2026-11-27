@@ -76,9 +76,23 @@ words. Background below is what was already said or is known: use it, never reci
 repeat it, never answer it.
 """
 
-# A reply of the front's own (an answer or a holding line) is a few words: this many output tokens at most
-# (audio is 1 token per 50 ms, so about 8 s with its transcript and a hand-off call) make a ramble impossible.
-REPLY_MAX_TOKENS = 200
+# What the front may answer alone (the owner's design: filler by default, the agent for everything else):
+# a turn made only of greetings, how-are-you, thanks, acknowledgements, goodbyes and hums. Anything else in
+# it (a question about facts, the person, Molty, a complaint, a request) is the agent's: the box hands it
+# off by this rule, whether or not the model called the tool (live, a token cap cut a reply before its call).
+_SMALL = re.compile(r"""(?:(?:hey|hi|hello|hiya|yo|good\s(?:morning|afternoon|evening|night))(?:\s(?:there|molty|malty|dude))?
+    |how(?:'s|\sis|\sare)?\s(?:it\sgoing|you(?:\sdoing)?|things|life)(?:\stoday)?
+    |what'?s\sup|sup|you\sthere
+    |thanks?(?:\syou)?(?:\sso\smuch|\sa\slot)?|cheers
+    |ok(?:ay)?|alright|all\sright|cool|nice|great|good|perfect|sure|yes|yeah|yep|no|nope|right|got\sit
+    |bye(?:\sbye)?|goodbye|see\syou(?:\slater)?|good\snight|that'?s\sall|i'?m\sdone|never\s?mind
+    |h+m+|hu+m+|u+m+|u+h+|m+(?:-?h+m+)?|oh|ah|wow)(?:\s(?:molty|malty|dude))?""", re.X)
+
+
+def answers_alone(heard: str) -> bool:
+    """May the front answer this turn itself? Only when every phrase of it is small talk (empty: yes)."""
+    phrases = [p.strip() for p in re.split(r"[,.!?;:\u2014-]+", heard.lower().replace("\u2019", "'")) if p.strip()]
+    return all(_SMALL.fullmatch(p) for p in phrases)
 
 TOOLS = [
     {
