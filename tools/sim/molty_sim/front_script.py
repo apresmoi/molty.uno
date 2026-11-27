@@ -19,6 +19,8 @@ device (both live and fake) and, with the fake provider, its own log:
                  (a reason, not none), and a last turn marked `ends` ended it with the stop phrase
   short          the front's own replies are at most MAX_REPLY_WORDS words (the agent's voiced answers may be longer)
   handoff        a turn marked `front: handoff` (a factual question) was handed to the agent
+  faithful       every voiced agent answer holds all the numbers, names and content words of the agent's text
+                 (molty_voice.brief.faithful, the box's own rule), and the box did not report it unfaithful
 """
 
 from __future__ import annotations
@@ -117,6 +119,11 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
     bad: list[str] = []
     rows: list[dict] = []
 
+    def asked_of(job: dict) -> str | None:
+        c = next((c for c in calls if c.get("job") == job.get("job")), None)
+        a = (c or {}).get("args") or {}
+        return a.get("say") or a.get("text")
+
     def turn_of(ts: float) -> int | None:
         k = None
         for i, t in enumerate(turns):
@@ -137,7 +144,8 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
         lines = [("front", r) for r in rs] + [("agent", v) for v in agents]
         rows.append({"turn": i + 1, "heard": utter.get(t.get("job"), ""), "state": ("handed off" if waiting else "answered") if rs else "NO REPLY",
                      "lines": [{"who": who, "text": e["data"].get("said", ""), "words": len(e["data"].get("said", "").split()),
-                                "s": round(_play(e["data"].get("timings") or {}) / 1000, 1)} for who, e in lines],
+                                "s": round(_play(e["data"].get("timings") or {}) / 1000, 1), "asked": asked_of(e) if who == "agent" else None}
+                               for who, e in lines],
                      "first_audio_ms": fa, "handoff": waiting})
         if len(rs) != 1:
             bad.append(f"one_reply: turn {i + 1} got {len(rs)} front responses")
@@ -156,8 +164,17 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
         bad.append("all_turns: the conversation never ended (no front.end with a reason)")
     elif script.turns and script.turns[-1].ends and ended["data"].get("reason") != "stop_phrase":
         bad.append(f"all_turns: the conversation ended by {ended['data'].get('reason')!r}, not by the last turn's goodbye")
+    from molty_voice.brief import faithful
+
     seen_waiting: set[int] = set()
     for v in voiced:
+        asked, said = asked_of(v), v["data"].get("said", "")
+        if asked:
+            ok, missing = faithful(asked, said)
+            if not ok:
+                bad.append(f"faithful: the agent said {asked[:60]!r}, the front voiced {said[:60]!r} (missing {' '.join(missing[:8])})")
+        if v["data"].get("faithful") is False:
+            bad.append(f"faithful: the box reports it did not voice {said[:50]!r} as asked")
         k = turn_of(v["ts"])
         if k is None or not turns[k]["data"].get("waiting") or k in seen_waiting:
             bad.append(f"agent_waiting: the agent's line {v['data'].get('said', '')[:50]!r} was voiced for turn {None if k is None else k + 1}, which the front did not hand off (or had answered already)")
@@ -198,5 +215,9 @@ def table(rows: list[dict]) -> str:
         fa = f"{r['first_audio_ms']} ms" if r["first_audio_ms"] is not None else "-"
         out.append(f"{r['turn']:>2}  {r['heard'][:40]:40}  {r['state']:10}  {fa:>11}  {'yes' if r['handoff'] else 'no'}")
         for ln in r["lines"]:
-            out.append(f"      {ln['who']:5} ({ln['s']} s, {ln['words']} words): {ln['text']}")
+            if ln.get("asked"):
+                out.append(f"      agent said:   {ln['asked']}")
+                out.append(f"      front voiced: {ln['text']}  ({ln['s']} s, {ln['words']} words)")
+            else:
+                out.append(f"      {ln['who']:5} ({ln['s']} s, {ln['words']} words): {ln['text']}")
     return "\n".join(out)

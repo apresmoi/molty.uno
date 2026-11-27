@@ -73,3 +73,13 @@ def test_the_script_loads_and_its_clips():
     c = fs.clip(s.turns[0], 0)
     assert abs(c.speech[0][0] - 0.5) < 1e-6 and len(c.pcm) > 16000
     assert fs.fake_script(s)[3]["handoff"] is True
+
+
+def test_a_voiced_answer_that_lost_the_agents_facts_fails():
+    # live 2026-11-27 (rig run 2, turn 4): the front said "I can't see your calendar. Sorry." over the agent's answer
+    e = good()
+    e[-2] = agent(24000, "I can't see your calendar. Sorry.")
+    e[-2]["job"] = "jx"
+    e.append({"ts": 23900, "kind": "call", "op": "talk", "job": "jx", "args": {"say": "Standup at ten.", "in_reply_to": "j3"}})
+    _, bad = fs.check(SCRIPT, e, None, next(x for x in e if x.get("ev") == "front.end"))
+    assert [b.split(":")[0] for b in bad] == ["faithful"]

@@ -68,7 +68,9 @@ hand-off) with every line Molty said for it in full (who, seconds, words), then 
 exits 1 when one fails: `all_turns` (every scripted turn happened, the conversation ended with a
 reason, and a last turn marked `ends` ended it by its goodbye; a run is given 2 minutes at most),
 `short` (the front's own replies at most 14 words), `handoff` (a turn marked `front: handoff`, a
-question only the agent can answer, was handed off), `one_reply` (exactly one front response per
+question only the agent can answer, was handed off), `faithful` (every voiced agent answer holds
+all the numbers, names and content words of what the agent said; printed "agent said" / "front
+voiced"), `one_reply` (exactly one front response per
 turn), `agent_waiting` (an agent line is voiced only for a turn the front handed off), `never_twice`
 (no agent line spoken twice), `not_over_them` (no response created while the person speaks; fake
 provider only), `not_cut` (no end while a reply is made or the front waits for an answer that comes),
