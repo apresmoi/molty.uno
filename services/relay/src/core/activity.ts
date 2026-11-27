@@ -284,7 +284,7 @@ export function jobDraft(rec: { job: string; kind: string; status: string; creat
   }
   if (Object.keys(voice).length) data.voice = voice;
   // quick: the phrase, whether its audio was cached, and Molty's own filler (relay-owned, `turn` = the human turn it filled)
-  for (const k of ["reason", "answer", "index", "outcome", "speech_ms", "duration_ms", "phrase", "cached", "filler", "turn", "category", "source"]) if (r[k] !== undefined) data[k] = r[k];
+  for (const k of ["reason", "as", "answer", "index", "outcome", "speech_ms", "duration_ms", "phrase", "cached", "filler", "turn", "category", "source"]) if (r[k] !== undefined) data[k] = r[k];
   const text = (v: unknown) => (typeof v === "string" ? clip(v, ACTIVITY_LIMITS.textMax) : undefined);
   const heard = rec.kind === "listen" ? text(r.text) : text(r.heard);
   const said = rec.kind === "say" || rec.kind === "quick" ? text(r.text) : text(r.said);

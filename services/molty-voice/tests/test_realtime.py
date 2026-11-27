@@ -349,3 +349,36 @@ def test_own_words_is_an_option():
     relay, fake, _ = asyncio.run(run(scenario, cfg_extra={"realtime_inner": "own"}))
     assert fake.sessions[0]["creates"][0]["instructions"] == brief.own_words("Build 42 passed.")
     assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Build 42 passed."
+
+
+def test_a_reply_that_waited_in_the_queue_counts_its_first_audio_from_its_creation():
+    # live 2026-11-27: a turn Molty ended (the button let go) logged its first audio 566 ms after the turn's
+    # end, but front.reply ms.created (211) + tts.end ms.first_audio (565) told the relay 776 ms
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "tts", "id": "t1", "text": "Your next meeting is at three in the afternoon.", "front": "exact"})
+        await relay.until(lambda: relay.of("tts.word", id="t1"))
+        await relay.send({"t": "stt.start", "id": "h1", "rate": 16000, "front": True, "hold": True})
+        await relay.mic("h1", speech(300))
+        await relay.send({"t": "stt.end", "id": "h1"})  # the release; the reply waits for t1 to end
+        relay.t_end = asyncio.get_running_loop().time()
+        await relay.until(lambda: relay.of("front.reply") and relay.of("tts.end", id=relay.of("front.reply")[0]["id"]), timeout=5)
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"first_audio_ms": 300}))
+    reply = relay.of("front.reply")[0]
+    created, first = reply["ms"]["created"], relay.of("tts.end", id=reply["id"])[0]["ms"]["first_audio"]
+    assert created > 300  # it waited behind t1
+    assert 280 <= first < 450  # the model's own time to its first audio, once asked
+
+
+def test_context_with_no_session_opens_none_and_reaches_the_next_one():
+    # live 2026-11-27: a late answer must never open a (billed) session by itself
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "front.context", "text": "The agent said: purring along nicely."})
+        await asyncio.sleep(0.3)
+        relay.sessions_then = len(fake.sessions)
+        await relay.send({"t": "tts", "id": "t1", "text": "hi", "front": "exact"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+
+    relay, fake, _ = asyncio.run(run(scenario))
+    assert relay.sessions_then == 0
+    assert "Inner voice context: The agent said: purring along nicely." in fake.sessions[0]["items"]

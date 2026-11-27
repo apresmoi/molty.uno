@@ -38,6 +38,9 @@ already answered the person within a fraction of a second, and you are the inner
   `exact: true` when your exact words matter.
 - **`front.waiting: false`:** it handled the turn itself. Stay quiet unless you have something to add.
 - **Your latency still counts** for a `waiting` turn: the person hears "let me check", then waits for you.
+- **One call per turn, with `in_reply_to`.** A late answer (the person spoke again) is not said but
+  given to the front as context; a retry returns the first answer's job. Never retry a turn
+  ([voice.md](voice.md#the-voice-front-you-are-the-inner-voice)).
 
 ## Weak Wi-Fi
 

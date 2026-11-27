@@ -30,6 +30,18 @@ can tell: the `utterance` carries `front: {said, waiting}`.
 - **Use `exact: true` when the wording matters** (a quote, a code, a name spelled out, a sentence you
   chose with care): it is always word for word. Inline `[cues]` apply only with `exact`.
 - **Your answer never cuts the front off.** If it is still speaking, yours plays right after.
+- **Always pass `in_reply_to`.** Your answer is said only while it still belongs to the moment. Every
+  case is a quick, truthful `200`, never an error to retry:
+
+  | When your `talk` / `say` arrives | You get back |
+  |---|---|
+  | the turn is the latest and nobody speaks (or the front handed it to you) | it is said: `status: "done"`, `said`, `reason: "spoken"`, once said; a `talk` does not listen itself (`hint`): the front listens and the person's words come as the next `utterance` |
+  | the person has spoken again since that turn | not said; the front has it as silent context: `spoken: false, as: "context", reason: "newer_turn"`. Answer the newer `utterance` instead |
+  | the turn is over a minute old, or the conversation ended and the front had answered it | not said: `spoken: false, as: "dropped", reason: "old_turn"` / `"conversation_over"` |
+  | you answered that turn already (a retry) | the first answer's `job` and result, `repeated: true`; nothing is said again (a retry of one that failed is tried again) |
+
+  So never retry a turn: one call per turn. A second, different thing to say for the same turn goes
+  without `in_reply_to` (you keep the floor). Without `in_reply_to` an answer is always said.
 - **Background, said only if asked:** `molty_front {context: "…"}`. **End the conversation:**
   `molty_front {end: true}`. Molty listens again by itself after each answer (hands-free) until the
   person stops, says bye, or taps.
