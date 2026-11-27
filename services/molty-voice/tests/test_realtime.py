@@ -121,7 +121,7 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     # create_response off: the box asks for the one reply itself, on the commit (rule 1)
     assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is False and tds[0]["interrupt_response"] is False
     assert len(s["creates"]) == 1
-    assert s["creates"][0]["max_output_tokens"] == brief.REPLY_MAX_TOKENS  # a plain reply cannot ramble
+    assert "max_output_tokens" not in s["creates"][0]  # no cap: live, it cut replies before their hand-off call
     assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
@@ -385,11 +385,12 @@ def test_a_question_it_cannot_answer_is_a_filler_naming_it_then_the_agents_answe
     assert relay.of("tts.end", id=reply)[0]["wait"] is True
     assert "new emails" in relay.of("tts.text", id=reply)[-1]["text"]  # the holding line names the task
     creates = fake.sessions[0]["creates"]
-    assert "naming the task" in creates[1]["instructions"]  # the "still on it" filler, once
-    said = creates[2]["input"][0]["content"][0]["text"]
+    # the answer came while "still on it" was being made: that filler never plays, the answer does at once
+    assert relay.of("tts.end", id="w1")[0].get("absorbed") is True and "w1" not in relay.audio
+    said = creates[-1]["input"][0]["content"][0]["text"]
     assert said.endswith(" You have two new emails, both from Ana.") and said.split(" You have")[0] in brief.BRIDGES  # the box's own bridge
     assert relay.of("tts.text", id="t1")[-1]["text"] == said
-    assert relay.of("tts.end", id="t2")[0].get("absorbed") is True and len(creates) == 3  # no longer waiting: context
+    assert relay.of("tts.end", id="t2")[0].get("absorbed") is True  # no longer waiting: context
 
 
 def test_a_new_turn_wins_the_answer_to_the_turn_before_is_context():
@@ -559,3 +560,65 @@ def test_faithful_holds_every_number_name_and_content_word():
     juan = "That was me answering a turn twice, Juan. Sorry, it should be fixed now."
     assert not ok(juan, "Thanks for pointing it out; it's being handled now.")[0]
     assert ok("You asked me to remember to buy oat milk on the way home.", "You asked me: remember to buy oat milk on the way home.")[0]
+
+
+def test_filler_by_default_a_question_is_handed_off_by_rule_small_talk_is_answered():
+    # live 2026-11-28 (rig run 4): the model answered "What is on my calendar today?" itself (a token cap cut it
+    # before its hand-off call): the box hands off by rule whatever the model does; small talk stays the front's
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")
+
+    for heard, waiting in (("What is on my calendar today?", True), ("Thanks, and what was the last thing I asked you to remember?", True),
+                           ("It seems that you are speaking twice.", True), ("Hey Molty, how is it going?", False), ("Okay, bye.", False)):
+        relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": heard, "reply": lambda h: ("Hmm, okay.", False)}))
+        reply = relay.of("front.reply", stt="s1")[0]["id"]
+        assert relay.of("tts.end", id=reply)[0].get("wait", False) is waiting, heard
+
+
+def test_small_talk_is_only_greetings_thanks_goodbyes_and_hums():
+    for t in ("Hey Molty, how is it going?", "hum", "Okay, bye.", "Thanks.", "good morning molty", ""):
+        assert brief.answers_alone(t), t
+    for t in ("What is on my calendar today?", "It seems that you are speaking twice.", "hey dude, what time is it?",
+              "Thanks, and what was the last thing I asked you to remember?", "remind me to call Ana"):
+        assert not brief.answers_alone(t), t
+
+
+def test_still_on_it_is_a_fixed_line_naming_the_task_never_free_words():
+    # live 2026-11-28 (rig run 6): the free "still waiting" line said "Sorry, I'm still hearing double. Please continue."
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")
+        await relay.send({"t": "tts", "id": "w1", "text": "", "front": "wait"})
+        await relay.until(lambda: relay.of("tts.end", id="w1"))
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "what is on my calendar today?"}))
+    c = fake.sessions[0]["creates"][-1]
+    assert c["instructions"] == brief.READ_ALOUD and c["conversation"] == "none"
+    assert relay.of("tts.text", id="w1")[-1]["text"] in ("Still checking your calendar.", "Still on your calendar, one moment.")
+    assert brief.still_line("hmm, are you there?") in ("Still on it, one moment.", "Still checking, one moment.")
+
+
+def test_a_handed_off_reply_that_said_nothing_is_followed_at_once_by_a_holding_line():
+    # live 2026-11-28 (rig run 6, turn 2): the model called hand_to_agent and said nothing: 8 s of silence
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1")
+
+    for hold, expect in ((None, "Okay, it seems that, let me check."), (lambda h: "", None)):
+        relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "it seems that you are speaking twice",
+                                                            "reply": lambda h: ("", True), **({"hold": hold} if hold else {})}))
+        rid = relay.of("front.reply", stt="s1")[0]["id"]
+        assert len(relay.of("front.reply")) == 1  # one reply, one stream: the holding line rides in it
+        end = relay.of("tts.end", id=rid)[0]
+        assert end["wait"] is True and "error" not in end and rid in relay.audio
+        text = relay.of("tts.text", id=rid)[-1]["text"]
+        assert text == expect if expect else text in brief.HOLD_LINES  # a fixed line when that is empty too
+
+
+def test_a_bare_hum_gets_a_minimal_acknowledgement():
+    # live 2026-11-28: "hum" got "That sounds like a thought, go ahead when you're ready."
+    async def scenario(relay, fake, bridge):
+        await _turn(relay, "s1", ms=300)
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "hum", "reply": lambda h: ("That sounds like a thought, go ahead when you're ready.", False)}))
+    rid = relay.of("front.reply", stt="s1")[0]["id"]
+    assert relay.of("tts.text", id=rid)[-1]["text"] == brief.ACK
+    assert brief.is_hum("Hmm.") and brief.is_hum("okay") and not brief.is_hum("okay, bye") and not brief.is_hum("what?")

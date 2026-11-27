@@ -831,7 +831,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       openTurn: () => this.openTurn?.id,
       prepare: async (t, e, turn) => {
         const pick = await this.pickVoice("tts");
-        if (!this.liveSocket() || !pick.ok || !pick.box) return undefined; // offline: no session
+        if (!this.liveSocket() || !pick.ok || !pick.box) return undefined;
         const sp = this.box.frontSpeak(t, "inner", e, turn);
         return { pick, feed: sp.feed, at: this.clock.now(), front: sp };
       },
@@ -2264,7 +2264,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.client_timing) timings.client = args.client_timing;
     // the human turn this talk answers, in that turn's trace (an `ev:"reply"` entry), once the say is over
     if (reply.turn) await this.replyTrace(id, "talk", reply, timings);
-    // with the front, its listen follows
+    // the front listens next
     if (args.listen && !off && !front) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
@@ -2512,11 +2512,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         throw feed.error ?? new Error("tts returned no audio");
       }
       const tFirst = this.clock.now();
+      const caps = this.liveSocket()?.getMeta()?.caps;
       if (ready.front) {
-        text = (await frontText(ready.front, this.clock, tFirst)) || text;
+        text = (await frontText(ready.front, this.clock, tFirst, caps)) || text;
         textWait = this.clock.now() - tFirst;
         absorb();
-        frontWords = frontFollow(ready.front, this.liveSocket()?.getMeta()?.caps, text, this.clock, id, this.sayActive, (n, a) => this.sendCmd(n, a)) ? undefined : speechWords(text).length;
+        frontWords = frontFollow(ready.front, caps, text, this.clock, id, this.sayActive, (n, a) => this.sendCmd(n, a)) ? undefined : speechWords(text).length;
       }
       if (!early) {
         sock = this.liveSocket();

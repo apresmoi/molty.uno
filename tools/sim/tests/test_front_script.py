@@ -83,3 +83,15 @@ def test_a_voiced_answer_that_lost_the_agents_facts_fails():
     e.append({"ts": 23900, "kind": "call", "op": "talk", "job": "jx", "args": {"say": "Standup at ten.", "in_reply_to": "j3"}})
     _, bad = fs.check(SCRIPT, e, None, next(x for x in e if x.get("ev") == "front.end"))
     assert [b.split(":")[0] for b in bad] == ["faithful"]
+
+
+def test_a_reply_cut_or_never_ended_fails():
+    log = """INFO front f1 (reply): response created
+INFO front f1 (reply): response completed, said 'Hey!'
+INFO front f2 (reply): response created
+WARNING front f2 (reply): response incomplete (max_output_tokens), said 'Checking your'
+INFO front f3 (reply): response created
+"""
+    assert fs.reply_ends(log) == ["reply_end: reply f2 ended incomplete (max_output_tokens)", "reply_end: reply f3 never ended (no end in the box's log)"]
+    # the live run 4 log, as it was written then: "response incomplete" with no reason
+    assert fs.reply_ends("INFO front f9 (reply): response created\nINFO front f9 (reply): response incomplete, said 'x'\n") == ["reply_end: reply f9 ended incomplete"]

@@ -6,7 +6,8 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/events.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { FRONT_ROLE, FrontTalk, frontTurnSummary, stopPhrase } from "../src/core/front.js";
+import { FRONT_ROLE, FrontTalk, frontText, frontTurnSummary, stopPhrase } from "../src/core/front.js";
+import { realClock } from "../src/core/store.js";
 import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom } from "./helpers.js";
 
 const FAST = { cmdTimeoutMs: 300, pairWindowMs: 400, sayChunkSamples: 1600, sayLeadFrames: 2, listenGraceMs: 200, sayDoneGraceMs: 300, boxSttFinalMs: 400, frontWaitMs: 150, frontSaidWaitMs: 300 };
@@ -644,6 +645,17 @@ describe("voice front: every spoken word shown (cap say_text)", () => {
 });
 
 describe("voice front: helpers", () => {
+  it("a front say's first text waits for its sentence only on a device that cannot take the rest later (cap say_text)", async () => {
+    // live 2026-11-28 (rig run 4): every reply's first audio waited the whole 150 ms text hold
+    const sp = { final: false, feed: { done: false }, said: "Got", changed: () => new Promise(() => {}) } as any;
+    let t0 = Date.now();
+    expect(await frontText(sp, realClock, t0, ["say", "say_text"])).toBe("Got");
+    expect(Date.now() - t0).toBeLessThan(20);
+    t0 = Date.now();
+    await frontText(sp, realClock, t0, ["say"]);
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(140);
+  });
+
   it("stop phrases are only the whole utterance", () => {
     for (const t of ["bye", "Bye bye, Molty!", "that's all", "Okay, stop.", "thanks, bye"]) expect(stopPhrase(t)).toBe(true);
     for (const t of ["stop the build", "say bye to Ana", "what's all this"]) expect(stopPhrase(t)).toBe(false);

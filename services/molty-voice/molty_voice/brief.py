@@ -69,6 +69,7 @@ let me look"), and call hand_to_agent with what they asked in one line. Vary it 
 a bare "one moment" when you can name the thing. Never a guess.
 - Never invent a result, a number, a name, a date, a status or a promise. Never say something \
 was done.
+- If the person only hums or says a bare "okay", say one or two words ("Mm-hm?") and nothing more.
 - If the person says goodbye or that they are done, say a short goodbye, nothing more.
 
 When the agent answers a turn you handed it, you are told what to say: say it then, as your own \
@@ -76,9 +77,48 @@ words. Background below is what was already said or is known: use it, never reci
 repeat it, never answer it.
 """
 
-# A reply of the front's own (an answer or a holding line) is a few words: this many output tokens at most
-# (audio is 1 token per 50 ms, so about 8 s with its transcript and a hand-off call) make a ramble impossible.
-REPLY_MAX_TOKENS = 200
+# What the front may answer alone (the owner's design: filler by default, the agent for everything else):
+# a turn made only of greetings, how-are-you, thanks, acknowledgements, goodbyes and hums. Anything else in
+# it (a question about facts, the person, Molty, a complaint, a request) is the agent's: the box hands it
+# off by this rule, whether or not the model called the tool (live, a token cap cut a reply before its call).
+_SMALL = re.compile(r"""(?:(?:hey|hi|hello|hiya|yo|good\s(?:morning|afternoon|evening|night))(?:\s(?:there|molty|malty|dude))?
+    |how(?:'s|\sis|\sare)?\s(?:it\sgoing|you(?:\sdoing)?|things|life)(?:\stoday)?
+    |what'?s\sup|sup|you\sthere
+    |thanks?(?:\syou)?(?:\sso\smuch|\sa\slot)?|cheers
+    |ok(?:ay)?|alright|all\sright|cool|nice|great|good|perfect|sure|yes|yeah|yep|no|nope|right|got\sit
+    |bye(?:\sbye)?|goodbye|see\syou(?:\slater)?|good\snight|that'?s\sall|i'?m\sdone|never\s?mind
+    |h+m+|hu+m+|u+m+|u+h+|m+(?:-?h+m+)?|oh|ah|wow)(?:\s(?:molty|malty|dude))?""", re.X)
+
+
+_HUM = re.compile(r"h+m+|hu+m+|u+m+|u+h+|m+(?:-?h+m+)?|mhm|uh-?huh|huh|oh|ah|ok(?:ay)?|hm+")
+
+
+def is_hum(heard: str) -> bool:
+    """A turn with no real words (a hum, a bare "okay"): not one that needs a sentence."""
+    phrases = [p.strip() for p in re.split(r"[\s,.!?;:\u2014]+", heard.lower()) if p.strip()]
+    return bool(phrases) and all(_HUM.fullmatch(p) for p in phrases)
+
+
+# The front's own fixed lines, read aloud (never generated): a hum's acknowledgement, the last-resort holding line,
+# and "still on it" while the agent thinks.
+ACK = "Mm-hm?"
+HOLD_LINES = ("Okay, let me check.", "One moment, checking that.")
+HOLDING = ("Say ONE short holding line, at most 8 words, that echoes a few of the words of the user's message and says you "
+           "are checking it, for example \"Okay, your calendar, let me check.\" Nothing else: no answer, no explanation, no question.")
+
+
+def still_line(heard: str, n: int = 0) -> str:
+    """The "still on it" line, naming the task in the person's words when that is easy ("my calendar" -> "your calendar")."""
+    m = re.search(r"\bmy ([a-z]{3,})\b", heard.lower())
+    if m:
+        return (f"Still checking your {m.group(1)}.", f"Still on your {m.group(1)}, one moment.")[n % 2]
+    return ("Still on it, one moment.", "Still checking, one moment.")[n % 2]
+
+
+def answers_alone(heard: str) -> bool:
+    """May the front answer this turn itself? Only when every phrase of it is small talk (empty: yes)."""
+    phrases = [p.strip() for p in re.split(r"[,.!?;:\u2014-]+", heard.lower().replace("\u2019", "'")) if p.strip()]
+    return all(_SMALL.fullmatch(p) for p in phrases)
 
 TOOLS = [
     {
@@ -147,10 +187,3 @@ def instructions(persona: str, known: list[str]) -> str:
     if known:
         out += "\nBackground, already said or known (never say it again, never recite it):\n" + "\n".join(f"- {k}" for k in known)
     return out
-
-
-STILL_WAITING = (
-    "The inner voice is still working on the person's request. Tell them in a few words that you are still on it, "
-    "naming the task in their words (\"still looking through your emails\"), different from your last line. "
-    "Do not guess the answer. Do not call any tool."
-)

@@ -26,7 +26,7 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
                  reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True,
-                 commit_event_ms: int = 0, ends_together: bool = False, misread=None):
+                 commit_event_ms: int = 0, ends_together: bool = False, misread=None, hold=None):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -50,6 +50,8 @@ class FakeRealtime:
         self.ends_together = ends_together
         # a read-aloud request (out of band, its own input): what the model says for the text (live: it changed facts)
         self.misread = misread or (lambda text: text)
+        # a holding line asked for on the person's words (out of band): what the model says
+        self.hold = hold or (lambda heard: f"Okay, {' '.join(heard.split()[:3])}, let me check.")
         self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
         self.threshold = threshold
         self.sessions: list[dict] = []
@@ -139,7 +141,9 @@ class FakeRealtime:
             self.log.append({"t": time.monotonic(), "ev": "create", "kind": kind, "speaking": st["speech"]})
             m = re.search(r"word for word, and nothing else: (.*)$", instr, re.S)
             tool = False
-            if given:
+            if given and "holding line" in instr:
+                words = self.hold(" ".join(given).strip())
+            elif given:
                 words = self.misread(" ".join(given).strip())
             elif m:
                 words = m.group(1).strip()
