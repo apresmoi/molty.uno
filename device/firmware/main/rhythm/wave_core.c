@@ -42,7 +42,8 @@ typedef struct {
     int nev;
 } wave_state_t;
 static wave_state_t *s_w;                   /* PSRAM, once                                                        */
-static wav_tables_t *s_tab;                 /* PSRAM while a chord is loaded: made by wave_play, freed by wave_orphan */
+static wav_tables_t *s_tab;                 /* PSRAM while a chord is loaded: room made by wave_play, freed by wave_orphan */
+static bool s_building;                     /* wave_build_run is making them (locked)                             */
 
 static inline int mod12(int m) { return ((m % 12) + 12) % 12; }
 static inline const wave_kind_t *kind_of(void) { return &s_w->lib[s_w->kind]; }
@@ -196,19 +197,36 @@ static bool ready(void) {
     if (!s_w && (s_w = WAVE_CALLOC(sizeof(wave_state_t)))) wav_init(&s_w->p, NULL);
     return s_w != NULL;
 }
-/* the tables, made once (outside the lock: about 0.4 s on the device) */
+/* the tables: room for them now (a few ms), made off this task (wave_build_spawn); false: no memory. (Tables told to quit
+ * but not freed yet are taken back, and made on.) */
 static bool tables(void) {
     rhythm_lock();
+    bool spawn = false;
+    if (s_tab) { atomic_store(&s_tab->quit, false); if (!s_building) s_building = spawn = true; }
     const bool have = s_tab != NULL;
     rhythm_unlock();
-    if (have) return true;
-    wav_tables_t *t = wav_tables_make();
+    if (have) { if (spawn) wave_build_spawn(); return true; }
+    wav_tables_t *t = wav_tables_new();
     if (!t) return false;
     rhythm_lock();
-    if (!s_tab) { s_tab = t; t = NULL; }
+    if (!s_tab) { s_tab = t; t = NULL; s_building = spawn = true; }
     rhythm_unlock();
-    wav_tables_free(t);
+    if (spawn) wave_build_spawn();
+    wav_tables_free(t);                                  /* (another got there first) */
     return true;
+}
+void wave_build_run(void) {
+    for (;;) {
+        rhythm_lock();
+        wav_tables_t *t = s_tab;
+        rhythm_unlock();
+        while (t && wav_tables_step(t)) {}               /* (only the fluid task frees them, and not while this runs) */
+        rhythm_lock();
+        const bool more = t && t == s_tab && !atomic_load(&t->quit) && !wav_tables_made(t);   /* (a quit taken back) */
+        if (!more) s_building = false;
+        rhythm_unlock();
+        if (!more) return;
+    }
 }
 
 const char *wave_play(const cJSON *args, cJSON **out) {
@@ -421,9 +439,13 @@ void wave_orphan(bool shown, float dt) {
         s_w->land = fmaxf(0.f, s_w->land - dt / LAND_S);
         s_w->orphan = shown || !s_w->on ? 0.f : s_w->orphan + dt;
         if (s_w->orphan >= WAVE_ORPHAN_S) { wav_silence(&s_w->p); s_w->on = false; push_state("stopped"); s_w->orphan = 0.f; }
-        if (!s_w->on && !shown && s_tab && !wav_active(&s_w->p)) { gone = s_tab; s_tab = NULL; s_w->p.t = NULL; }   /* nothing plays them */
+        if (!s_w->on && !shown && s_tab && !wav_active(&s_w->p)) {   /* nothing plays them: the maker stops, then they go */
+            atomic_store(&s_tab->quit, true);
+            if (!s_building) { gone = s_tab; s_tab = NULL; s_w->p.t = NULL; }
+        }
     }
     rhythm_unlock();
+    wave_build_reap();
     wav_tables_free(gone);
 }
 

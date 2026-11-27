@@ -140,6 +140,39 @@ esp_err_t rhythm_cmd_stop(const cJSON *args, cJSON **out) {
     if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
     return answer(rhythm_stop());
 }
+/* The tone player's tables are made here, off the link task: a task under the screen's and the speaker's (priority 1,
+ * its 4 KB stack in PSRAM: nothing on it touches the flash), about 1 s of a core's idle time all told, a voice's own
+ * cycles first. Done, it waits suspended for the fluid task to delete it (wave_build_reap). On the host: at once. */
+#ifdef ESP_PLATFORM
+#define WAVE_BUILD_STACK 4096
+#define WAVE_BUILD_PRIO  1
+static TaskHandle_t s_build;
+static atomic_bool s_built;
+static void build_task(void *arg) {
+    (void)arg;
+    const int64_t t0 = esp_timer_get_time();
+    wave_build_run();
+    mole_diag_event(false, "wave.tables %ums", (unsigned)((esp_timer_get_time() - t0) / 1000));
+    atomic_store(&s_built, true);
+    vTaskSuspend(NULL);
+}
+void wave_build_reap(void) {
+    if (s_build && atomic_load(&s_built)) { vTaskDeleteWithCaps(s_build); s_build = NULL; }
+}
+void wave_build_spawn(void) {
+    while (s_build && !atomic_load(&s_built)) vTaskDelay(1);   /* (the one before has ended its work: a moment to suspend) */
+    wave_build_reap();
+    atomic_store(&s_built, false);
+    if (xTaskCreatePinnedToCoreWithCaps(build_task, "wave_tab", WAVE_BUILD_STACK, NULL, WAVE_BUILD_PRIO, &s_build, tskNO_AFFINITY, MALLOC_CAP_SPIRAM) != pdPASS) {
+        s_build = NULL;
+        wave_build_run();                             /* no memory for the task: made here, as before */
+    }
+}
+#else
+void wave_build_spawn(void) { wave_build_run(); }
+void wave_build_reap(void) {}
+#endif
+
 esp_err_t wave_cmd_play(const cJSON *args, cJSON **out) {
     if (!molty_board_has(MOLTY_CAP_SPEAKER)) return ESP_ERR_NOT_SUPPORTED;
     return answer(wave_play(args, out));

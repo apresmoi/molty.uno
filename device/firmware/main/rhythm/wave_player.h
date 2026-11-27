@@ -21,8 +21,10 @@
  *             plucked for a preview (5 ms in, a 0.45 s fall, strummed 18 ms a voice). A restart, a tuning switch or a
  *             pluck over a ringing one ducks the sum to silence first (about 12 ms).
  *   mix       summed, times 1.25 / voices, the beat player's soft knee, int16 at 32000 full scale.
- *   tables    wav_tables_make: the hit and the cycles, about 430 KB, PSRAM on the device, made once when a chord is
- *             first sent (about 0.4 s) and freed when nothing plays them (wave_core.c).
+ *   tables    the hit and the cycles, about 257 KB (each cycle int16), PSRAM on the device, made a piece at a time
+ *             (wav_tables_step) off the link task once a chord is first sent, the ones a voice needs first, and freed
+ *             when nothing plays them (wave_core.c). Before its cycles exist a voice plays the hit itself (the same
+ *             wave, not band-limited past the choke) and slides to them as they come; before the hit, nothing.
  *   view      wav_view: the clock, each voice's phase, pitch and level at an output sample (the one the speaker plays
  *             now), from snapshots the fill keeps; wav_trace: what the hand drew round the circle from it (the picture).
  */
@@ -30,6 +32,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -54,10 +57,20 @@ extern "C" {
 
 typedef struct {
     float hit[WAV_HIT_LEN + 2], hit_peak;
-    float tab[WAV_TABS][WAV_TAB_N + 1], peak[WAV_TABS];
+    int16_t tab[WAV_TABS][WAV_TAB_N + 1];   /* a cycle a semitone, unit[c] a step                              */
+    float unit[WAV_TABS], peak[WAV_TABS];
+    _Atomic bool hit_ready;             /* the hit is made: the player sounds                                  */
+    _Atomic bool quit;                  /* the maker stops at its next table                                   */
+    _Atomic uint32_t ready[4], want[4]; /* cycles made; cycles a voice or the picture waits for (a bit each)   */
+    float scratch[WAV_HIT_LEN + 128];   /* the maker's (the hit's taps and source, a cycle's spectrum)         */
 } wav_tables_t;
-/** The hit and the cycles (PSRAM on the device); NULL without memory. */
-wav_tables_t *wav_tables_make(void);
+/** Room for the hit and the cycles (PSRAM on the device), none made yet: a few ms; NULL without memory. */
+wav_tables_t *wav_tables_new(void);
+/** Makes the next of them: the hit first, then the cycle a voice waits for, then the lowest left (about 10 ms of a
+ *  core each on the device: run it off the link task, wave.h wave_build_run). False once all are made or quit. */
+bool wav_tables_step(wav_tables_t *t);
+/** All of them made. */
+bool wav_tables_made(wav_tables_t *t);
 void wav_tables_free(wav_tables_t *t);
 
 /** Pitch: equal temperament, A4 = 440 Hz. */
@@ -70,12 +83,14 @@ typedef struct {
     uint8_t n, mode;                    /* its whole number; WAV_HOLD or WAV_PLUCK                             */
     int8_t semi;                        /* semitones over the root (equal tuning)                              */
     bool mute;
+    bool gate;                          /* a start waits for its cycles (until they exist: silent, its clock on) */
     uint32_t ph, lastph, dph;           /* phase (2^32 a cycle), the last sample's, a sample's step            */
     float s, sp, pg;                    /* samples since its hit, since the hit it chokes, that one's level    */
     float lf, lft, f;                   /* log2 of its pitch now and where it glides; its pitch                */
     float env, envT;
     int t, wait;                        /* a pluck: samples since it began, still to wait (the strum)          */
     float g, wt, d, tu;                 /* control rate: gain, the cycles' share, the choke, the cycles' blend */
+    float tw;                           /* ... the cycles' share as played: glides to wt once they exist      */
     int tm;                             /* ... and which cycle                                                 */
 } wav_voice_t;
 
@@ -88,7 +103,7 @@ typedef struct {
 typedef struct { uint64_t n; uint32_t H; float fc; uint32_t ph[WAV_VOICES]; float f[WAV_VOICES], env[WAV_VOICES]; } wav_snap_t;
 
 typedef struct {
-    const wav_tables_t *t;              /* NULL: silent                                                        */
+    wav_tables_t *t;                    /* NULL: silent                                                        */
     wav_voice_t v[WAV_VOICES];
     wav_chord_t ch;
     uint8_t tuning;
@@ -102,7 +117,7 @@ typedef struct {
     int nsnap;
 } wav_player_t;
 
-void wav_init(wav_player_t *p, const wav_tables_t *t);
+void wav_init(wav_player_t *p, wav_tables_t *t);
 /** Chord ch from root (Hz, clamped), held or plucked. fresh: from its hit, after the sum ducks to silence (a pluck
  *  always is); else the voices glide to it. */
 void wav_chord(wav_player_t *p, const wav_chord_t *ch, float root, int mode, int tuning, bool fresh);
@@ -143,7 +158,7 @@ void wav_view(const wav_player_t *p, uint64_t n, wav_view_t *out);
  *  (out[npts] = out[0]), the circle's own radius rc pushed out by amp times the sound (each voice's real cycle at the
  *  pitch it glides to, at the phase it had when the hand passed), fading behind the hand over persist s. held (0..1):
  *  how far the beats are a note (the afterglow holds whole from 1). Not held (a preview): each voice's cycle, still. */
-void wav_trace(const wav_tables_t *t, const wav_view_t *v, float held, float rc, float amp, float persist, float *out, int npts);
+void wav_trace(wav_tables_t *t, const wav_view_t *v, float held, float rc, float amp, float persist, float *out, int npts);
 
 #ifdef __cplusplus
 }

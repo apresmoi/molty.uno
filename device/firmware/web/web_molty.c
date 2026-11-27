@@ -241,6 +241,10 @@ static void rhythm_pump(uint32_t dt_us) {
     s_npcm = (int)rhythm_fill(s_pcm, (size_t)n);
 }
 
+/* the tone player's tables (wave.h): made at once here, one thread */
+void wave_build_spawn(void) { wave_build_run(); }
+void wave_build_reap(void) {}
+
 /** One frame, dt_us after the last: the sim task's pass, then the drawer's. The panel is then wm_pixels. */
 WM_API void wm_frame(uint32_t dt_us) {
     if (!s_up) return;
