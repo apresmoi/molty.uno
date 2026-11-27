@@ -174,7 +174,7 @@ export interface RoomTimings {
   jobTtlMs: number;
   /** say streaming: samples per frame (<= 8192 for the 16 KB payload cap). */
   sayChunkSamples: number;
-  /** say streaming: frames sent ahead of real time to fill the device ring buffer. */
+  /** say streaming: frames ahead of the device's playback (its TCP window: 32 KB). */
   sayLeadFrames: number;
   /** talk: after the stream's playback end, how long to wait for the device's say.done before opening the mic. */
   sayDoneGraceMs: number;
@@ -221,7 +221,7 @@ export const DEFAULT_TIMINGS: RoomTimings = {
   listenGraceMs: 5000,
   jobTtlMs: 15 * 60 * 1000,
   sayChunkSamples: 5120, // 320 ms, 10240 B
-  sayLeadFrames: 3,
+  sayLeadFrames: 1, // <= 2 frames (20 KB) in flight
   sayDoneGraceMs: 2500,
   resumeWindowMs: 20000, // the device gives up at LINK_RESUME_WINDOW_MS (15 s), and the relay may notice later
   resumeMaxAgeMs: 20000,
@@ -2507,8 +2507,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         text = (await frontText(ready.front, this.clock, tFirst)) || text;
         textWait = this.clock.now() - tFirst;
         absorb();
-        // cap say_text: the rest as it comes, every word cued
-        frontWords = frontFollow(ready.front, this.liveSocket()?.getMeta()?.caps, text, this.clock, () => this.sayActive.has(id), (t) => this.sendCmd("say_text", { job: id, text: t })) ? undefined : speechWords(text).length;
+        frontWords = frontFollow(ready.front, this.liveSocket()?.getMeta()?.caps, text, this.clock, id, this.sayActive, (n, a) => this.sendCmd(n, a)) ? undefined : speechWords(text).length;
       }
       if (!early) {
         sock = this.liveSocket();
@@ -2583,6 +2582,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (seq > 0) {
           const w = playEnd - lead - this.clock.now();
           if (w > 0) await sleep(this.clock, w);
+          if (feed.error) throw feed.error;
         }
         const live = await liveNow();
         absorbCues(cues);

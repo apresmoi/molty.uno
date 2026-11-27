@@ -471,22 +471,22 @@ const TEXT_MAX_BYTES = 4096;
 /**
  * The text of front say `sp` as the model speaks it (docs/AGENT-LINK.md "Text in pieces"), when the
  * device has the cap (false: it does not, nothing is sent). After the `cmd say` that carried `first`,
- * `send` gets the say's whole text so far, whole words only, each one continuing the last byte for
- * byte: at most every FRONT.textEveryMs, the final text always. It stops at the final text, when the
- * device does not take it (taken:false, an error), when the say is over (`active`), or when the
- * model's transcript changed words already sent (a diverging text is never sent).
+ * `cmd say_text {job, text}` gets the say's whole text so far, whole words only, each continuing the
+ * last byte for byte: at most every FRONT.textEveryMs, the final text always. It stops at the final
+ * text, when the device does not take it (taken:false, an error), when the say is over (`job` is not
+ * `saying`), or when the model's transcript changed words already sent (a diverging text is never sent).
  */
-export function frontFollow(sp: FrontSpeech, caps: string[] | undefined, first: string, clock: Clock, active: () => boolean, send: (text: string) => Promise<Outcome<JsonObject>>): boolean {
+export function frontFollow(sp: FrontSpeech, caps: string[] | undefined, first: string, clock: Clock, job: string, saying: Set<string>, cmd: (name: string, args: JsonObject) => Promise<Outcome<JsonObject>>): boolean {
   if (!caps?.includes(SAY_TEXT_CAP)) return false;
   void (async () => {
     let sent = first;
     await sleep(clock, FRONT.textEveryMs); // after the cmd say, the latest text of the window
     for (;;) {
       const text = sp.final ? sp.said.trim() : sp.said.replace(/\S*$/, "").trim();
-      if (!active()) return;
+      if (!saying.has(job)) return;
       if (text !== sent) {
         if (!text.startsWith(sent) || !/\s/.test(text[sent.length] ?? "") || new TextEncoder().encode(text).length > TEXT_MAX_BYTES) return;
-        const r = await send(text);
+        const r = await cmd("say_text", { job, text });
         if (!r.ok || r.result.taken === false) return;
         sent = text;
       }

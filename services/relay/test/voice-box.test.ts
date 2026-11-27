@@ -4,7 +4,7 @@
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
-import type { DeviceRoom } from "../src/core/room.js";
+import { DEFAULT_TIMINGS, type DeviceRoom } from "../src/core/room.js";
 import { handleMcp } from "../src/surfaces/mcp.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom, spoken } from "./helpers.js";
@@ -77,7 +77,7 @@ interface BoxOpts {
   /** TTS: first audio this long after the request (default 5 ms). */
   delayMs?: number;
   /** TTS: stream like Kyutai — `frames` frames of 1280 samples (80 ms), one every `everyMs`, instead of one 3200-sample frame. */
-  stream?: { frames: number; everyMs: number };
+  stream?: { frames: number; everyMs: number; samples?: number; failAfterMs?: number };
 }
 
 /** A voice box on the relay's voice socket: synthesises 3200 samples per tts, transcribes by counting the chunks it got. */
@@ -99,13 +99,14 @@ function box(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
         if (o.words) for (const bad of [{ i: 0, start_s: -1 }, { i: 0, start_s: 9999 }, { i: 0, start_s: "x" }, { i: 0.5, start_s: 0 }, { i: -1, start_s: 0 }]) say({ t: "tts.word", id: f.id, ...bad });
         if (o.words) f.text.split(" ").slice(0, -1).forEach((_: string, i: number) => say({ t: "tts.word", id: f.id, i, text: "x", start_s: 0.05 + 0.1 * i }));
         if (o.stream) {
-          const { frames, everyMs } = o.stream;
+          const { frames, everyMs, samples = 1280, failAfterMs } = o.stream;
           for (let k = 0; k < frames; k++)
             setTimeout(() => {
               if (sock.closed) return;
-              void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: k, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(1280).fill(500).buffer)));
-              if (k === frames - 1) say({ t: "tts.end", id: f.id });
+              void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: k, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(samples).fill(500).buffer)));
+              if (k === frames - 1 && failAfterMs === undefined) say({ t: "tts.end", id: f.id });
             }, k * everyMs);
+          if (failAfterMs !== undefined) setTimeout(() => say({ t: "tts.end", id: f.id, error: "cancelled" }), failAfterMs);
           return;
         }
         void room.socketMessage(sock, encodeAudioFrame({ s: f.id, seq: 0, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(3200).fill(500).buffer)));
@@ -481,6 +482,49 @@ describe("box drops mid-job", () => {
     const bytes = frames.map((f) => f.bytes!);
     expect(bytes[0]).toBe(2560 * 2);
     expect(bytes.reduce((a, b) => a + b, 0)).toBe(12 * 1280 * 2); // nothing lost
+  });
+});
+
+describe("say pacing to the device (live 2026-11-27: a front reply's burst stalled the device's TLS reads)", () => {
+  // the production lead (DEFAULT_TIMINGS) on 100 ms frames: the same rule as 320 ms ones, ten times faster
+  const PACED = { sayChunkSamples: 1600, sayLeadFrames: DEFAULT_TIMINGS.sayLeadFrames };
+  const sent = (w: Awaited<ReturnType<typeof setup>>, job: string) => w.dev.log.filter((l) => l.kind === "frame" && l.args.s === job);
+
+  it("a burst (15 frames in 45 ms) goes out at most 2 frames ahead of playback; the first at once; the whole of it about its length", async () => {
+    const w = await setup({ timings: PACED, box: { delayMs: 5, stream: { frames: 15, everyMs: 3, samples: 1600 } } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hey there, all good here." })) as any).result.job;
+    await w.room.job(w.token, job, 4000);
+    const frames = sent(w, job);
+    const t0 = frames[0].at;
+    expect(t0 - (w.box!.tts[0].at + 5)).toBeLessThan(20); // first sound as fast as before
+    let audio = 0;
+    for (const f of frames) {
+      audio += (f.bytes! / 2 / 16000) * 1000;
+      expect(audio - (f.at - t0)).toBeLessThanOrEqual(2 * 100 + 25); // never more than 2 frames in flight
+    }
+    expect(audio).toBe(1500);
+    expect(frames.at(-1)!.at - t0).toBeGreaterThan(1500 - 2 * 100 - 50); // paced over its length, less the lead
+    expect(frames.at(-1)!.at - t0).toBeLessThan(1500);
+  });
+
+  it("audio arriving at real time (the cloud's pace) is forwarded as it comes, no delay added", async () => {
+    const w = await setup({ timings: PACED, box: { delayMs: 5, stream: { frames: 8, everyMs: 100, samples: 1600 } } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hello there." })) as any).result.job;
+    await w.room.job(w.token, job, 4000);
+    const frames = sent(w, job).filter((f) => f.bytes! > 0);
+    const t1 = w.box!.tts[0].at + 5;
+    frames.forEach((f, k) => expect(f.at - (t1 + 100 * k)).toBeLessThan(30));
+  });
+
+  it("a cancel mid stream flushes what is still queued: the end frame at once, no more audio", async () => {
+    const w = await setup({ timings: PACED, box: { delayMs: 5, stream: { frames: 15, everyMs: 3, samples: 1600, failAfterMs: 400 } } });
+    const job = ((await w.room.command(w.token, "say", { text: "Hey there, all good here." })) as any).result.job;
+    await w.room.job(w.token, job, 3000);
+    const failAt = w.box!.tts[0].at + 400;
+    const after = sent(w, job).filter((f) => f.at > failAt + 5);
+    expect(after.filter((f) => f.bytes! > 0)).toEqual([]);
+    expect(after.length).toBe(1); // the header-only end frame, so the device frees its speaker
+    expect(after[0].at - failAt).toBeLessThan(60);
   });
 });
 
