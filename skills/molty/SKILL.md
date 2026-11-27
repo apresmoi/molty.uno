@@ -99,8 +99,7 @@ relay unless the message also names a **Relay** (a private one, see
 - [talking-fast.md](references/talking-fast.md) — drafts, end of turn, the ack chirp, latency rules.
 - [personalize.md](references/personalize.md) — learning your human; what they can customise.
 - [etiquette.md](references/etiquette.md) — when to speak, emotes, your ledger.
-- [voice.md](references/voice.md): how Molty gets a voice, or text only: what each means for you; with
-  the voice front on (an `utterance` with `front`), you are its inner voice.
+- [voice.md](references/voice.md): how Molty gets a voice, or text only; the voice front.
 - [voice-box.md](references/voice-box.md) — the owner's own GPU voice box.
 - [CHANGES.md](CHANGES.md) — what is new, by skill version.
 - [updates.md](references/updates.md) — firmware updates, `api_version`, updating this skill.
