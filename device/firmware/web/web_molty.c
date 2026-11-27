@@ -546,13 +546,14 @@ WM_API int wm_scene(const char *layout, const char *params, float ttl_s) {
     wm_ask_end();                      /* it took the screen (pkg_cmd.c) */
     return 0;
 }
-/** The beat player's commands (docs/AGENT-LINK.md "Rhythm"): name "rhythm.play", "rhythm.set" or "rhythm.stop", args
- *  its JSON. 0, or -1 (its error: bad args, not playing). */
+/** The speaker's players' commands (docs/AGENT-LINK.md "Rhythm", "Waves"): name "rhythm.play", "rhythm.set",
+ *  "rhythm.stop", "wave.play", "wave.set" or "wave.stop", args its JSON. 0, or -1 (its error: bad args, not playing). */
 WM_API int wm_rhythm(const char *name, const char *args) {
     if (!s_up || !name) return -1;
     cJSON *a = args ? cJSON_Parse(args) : NULL, *out = NULL;
     const char *err = !strcmp(name, "rhythm.play") ? rhythm_play(a, &out) : !strcmp(name, "rhythm.set") ? rhythm_set(a, &out)
-                    : !strcmp(name, "rhythm.stop") ? rhythm_stop() : "unknown_command";
+                    : !strcmp(name, "rhythm.stop") ? rhythm_stop() : !strcmp(name, "wave.play") ? wave_play(a, &out)
+                    : !strcmp(name, "wave.set") ? wave_set(a, &out) : !strcmp(name, "wave.stop") ? wave_stop() : "unknown_command";
     cJSON_Delete(a); cJSON_Delete(out);
     return err ? -1 : 0;
 }

@@ -263,11 +263,11 @@ static void sense_tick(uint32_t now) {
     imu_feed(now);
     if (pair) gesture_reset(&s_g);
     if (s_lis.on && s_voice_in >= 0.05f) s_lis.speech_ms += (uint32_t)(s_fi[FI_FRAME_MS] + 0.5f);   /* the VAD hears it */
-    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && rhythm_active();
+    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active());
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
-        if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept plays and stops a rhythm */
-            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) rhythm_local_play(); else mole_fluid_scene_close(); }
+        if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept is a rhythm's or a chord's centre */
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else wave_local_centre(); } else mole_fluid_scene_close(); }
             s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
             s_btn_prev[b] = on;
             continue;
@@ -323,6 +323,8 @@ static void sense_tick(uint32_t now) {
     if (mole_fluid_ring_event(&re)) ws_emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));
     rhythm_ev_t rv;                    /* the beat player's own: a mute, a pause, a stop */
     while (rhythm_take_event(&rv)) ws_emit(rhythm_event_frame(&rv));
+    wave_ev_t wv;                      /* the tone player's own: a mute, a play, a stop */
+    while (wave_take_event(&wv)) ws_emit(wave_event_frame(&wv));
     if (s_dl.on) {                     /* pkg_cmd.c download_task: the ring follows the bytes, then full and into the water */
         const float got = (float)(now - s_dl.t0) / (float)(s_dl.ms ? s_dl.ms : 1u);
         if (got < 1.f) mole_fluid_progress(DL_RING_PCT * got, false);
