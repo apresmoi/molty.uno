@@ -16,3 +16,7 @@ void rhythm_dev_play(bool (*job_waiting)(void));
 esp_err_t rhythm_cmd_play(const cJSON *args, cJSON **out);
 esp_err_t rhythm_cmd_set(const cJSON *args, cJSON **out);
 esp_err_t rhythm_cmd_stop(const cJSON *args, cJSON **out);
+/* the tone player's (wave.h; cap "wave": boards with a speaker), on the same speaker */
+esp_err_t wave_cmd_play(const cJSON *args, cJSON **out);
+esp_err_t wave_cmd_set(const cJSON *args, cJSON **out);
+esp_err_t wave_cmd_stop(const cJSON *args, cJSON **out);

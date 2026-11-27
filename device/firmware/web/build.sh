@@ -33,7 +33,7 @@ SRCS=(
   "$MAIN/creature/creature_player.c" "$MAIN/creature/creature_body.c" "$MAIN/creature/creature_pkg.c"
   "$HERE/web_cat.c" "$MAIN/creature/creature_dots.c" "$MAIN/creature/creature_ring.c" "$MAIN/creature/sky.c" "$MAIN/creature/weather.c"
   "$MAIN/pkg/pkg_parse.c" "$MAIN/scene/scene_player.c" "$MAIN/link/link_protocol.c" "$MAIN/sense/gesture.c" "$MAIN/sense/ring_input.c"
-  "$MAIN/rhythm/rhythm_player.c" "$MAIN/rhythm/rhythm_wire.c" "$MAIN/rhythm/rhythm_core.c" "$MAIN/haptic/haptic_plan.c"
+  "$MAIN/rhythm/rhythm_player.c" "$MAIN/rhythm/rhythm_wire.c" "$MAIN/rhythm/rhythm_core.c" "$MAIN/rhythm/wave_player.c" "$MAIN/rhythm/wave_core.c" "$MAIN/haptic/haptic_plan.c"
   "$IDF_JSON/cJSON.c"
 )
 INCS=(-I"$OUT" -I"$HERE/sdk" -I"$MAIN/fluid" -I"$MAIN/creature" -I"$MAIN/scene" -I"$MAIN/pkg" -I"$MAIN/link"
