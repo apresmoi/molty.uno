@@ -1077,13 +1077,17 @@ each voice the beat player's own low drum with a beater's click on it, hit once 
   The speaker is shared and synced exactly as the rhythm's (its delay, its `sync` trim, its yield to a say or a listen).
 - **The scope** is the waves package's screen (a `wave` item, [PACKAGES.md](PACKAGES.md#layouts)): with none on screen
   for 2 s the chord stops; stopped, the scope goes.
-- **On Molty itself:** three levels. The chord kinds on the rim, stopped (each plucked as the rim reaches it, root in the
-  middle of the piano); a tap on the note above the kind's name goes up to the twelve notes (each plucked), the middle
-  comes back down; the middle again plays it at the pitch just heard. Playing, the rim is the pitch, a semitone a click,
-  turning fast the chosen note's next octave (a longer tick); a tap on a whole number up top (or a voice's dots while
-  slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the middle stops it on the note it stopped at. `ring`
-  events as the rhythm's (`pitch` value, `chord` index and id, `note` index); a `wave` event `{state, chord, note, hz}`
-  when the human plays or stops it (opt-in for a webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
+- **On Molty itself:** two faces. Stopped, the chooser: the chord kinds on the rim, each plucked as the rim reaches it
+  at the pitch it last played (middle C before any); the note up top is that pitch's, a readout. The middle plays it
+  there. Playing, the rim is the pitch, 6 degrees a click: a quarter semitone a click to C5, with a detent on each note
+  (a firmer tick, 30 ms at 90 percent against the fine step's 15 at 50, and one click's hold before a fine step leaves
+  it), a semitone a click to C6, a whole tone above; under 20 hits a second tenths of a hit a second to 4, fifths to 10,
+  then whole ones (each whole one a detent); turning fast an octave a click (the strongest tick). The chord stays in
+  whole numbers on the root between notes too; the readout names the nearest note and its cents off ("HZ A4 +25"). A
+  tap on a whole number up top (or a voice's dots while slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the
+  middle stops it back to the chooser at the same pitch. `ring` events as the rhythm's (`pitch` value, `chord` index
+  and id); a `wave` event `{state, chord, note, hz}` when the human plays or stops it (`note` the nearest; opt-in for a
+  webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
 
 ## Closing a screen
 

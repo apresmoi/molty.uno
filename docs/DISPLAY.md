@@ -209,8 +209,8 @@ draw:
   plays (or with no clock), `face: 1` while it is stopped.
 - `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` (or a `wave_ring`) on the screen.
 - `wave_ring` draws the chord `wave.play` sent (the molty-waves skill): each voice's hits as dots joined as its shape,
-  the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch, its `sets: pick` wheel the chord
-  kinds (one level up, the notes), its `centre_tap` goes down a level and plays and stops.
+  the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch (fine steps, a detent on each
+  note; its own tick the fine step's), its `sets: pick` wheel the chord kinds, its `centre_tap` plays and stops.
 - Sent with regions (`rhythm.play`'s `regions`), a `sets: pick` wheel shows one region's rhythms, the region's name small
   above: a tap on it goes up to the regions, and `centre_tap` there opens the one chosen.
 

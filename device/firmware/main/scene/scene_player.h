@@ -202,7 +202,7 @@ bool scene_wheel_words(const scene_t *sc, const scene_wheel_t *w);
 #define SCENE_WAVE_AFTERGLOW 0.12f      /* s: the outline keeps what the hand drew this long, while slow        */
 #define SCENE_WAVE_MIN_SEGS 48
 #define SCENE_WAVE_TOP_Y    0.73f       /* the note (chords) or the whole numbers (playing) up top              */
-enum { SCENE_WAVE_NOTES, SCENE_WAVE_CHORDS, SCENE_WAVE_PLAYING };
+enum { SCENE_WAVE_CHORDS, SCENE_WAVE_PLAYING };   /* wave.h WAVE_AT_*: the chooser, playing */
 typedef struct {
     bool on;
     int level;                          /* SCENE_WAVE_*                                                          */

@@ -1459,9 +1459,10 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
         }
     } else {   /* fine ticks at the top of the rim, still: they never slide with the finger (a sliding tick redraws its cells
                 * every frame, and a turn's frames then owed the middle's cells to the next: the hand a frame late) */
-        const int ticks = (int)lrintf(360.f / step);
+        const float every = step * ceilf(12.f / step - 1e-3f);   /* (at most one every 12 degrees: a finer dial's clicks are felt) */
+        const int ticks = (int)lrintf(360.f / every);
         for (int q = -ticks / 2; q <= ticks / 2; q++) {
-            const float a = q * step;
+            const float a = q * every;
             if (fabsf(a) <= SCENE_WHEEL_SCALE) beat_spoke(sc, 90.f + a, r - 0.015f, 0.03f, BEAT_HAIR, BEAT_GRID, true);
         }
     }
@@ -1634,7 +1635,7 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
     char ratio[32] = "";
     for (int j = 0, o = 0; playing && nv > 1 && j < nv; j++) o += snprintf(ratio + o, sizeof ratio - (size_t)o, j ? ":%d" : "%d", w->count[j] % 100);
     const bool mark = w->on && (!playing || w->mark);
-    budget -= (mark ? (w->level == SCENE_WAVE_NOTES ? 9 : w->level == SCENE_WAVE_CHORDS ? 10 : 9) : 0) + letters(name) + letters(top) + letters(big) + letters(unit) + letters(ratio);
+    budget -= (mark ? (playing ? 9 : 10) : 0) + letters(name) + letters(top) + letters(big) + letters(unit) + letters(ratio);
 
     /* the hits: each voice's dots, joined as its shape (the densest voices' give way first when the room is short) */
     float level = 0.f;
@@ -1688,10 +1689,9 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
      * the name). Its size by the level's words, never by the number's (it would move the shapes' pieces as it counts) */
     float box[4];
     {
-        const float wide = 0.6f * (w->level == SCENE_WAVE_PLAYING ? (nv > 1 ? fit(name, 0.05f, 0.5f) : 0.f) * (float)strlen(name)
-                                                                     : (w->level == SCENE_WAVE_CHORDS ? fit(name, 0.09f, 0.62f) : fit(name, 0.12f, 0.6f)) * (float)strlen(name));
+        const float wide = 0.6f * (playing ? (nv > 1 ? fit(name, 0.05f, 0.5f) : 0.f) : fit(name, 0.09f, 0.62f)) * (float)strlen(name);
         const float half = fmaxf(playing ? 0.22f : 0.10f, 0.5f * wide + 0.02f) + 0.5f * WAVE_STROKE;
-        const float low = playing ? (nv > 1 ? -0.265f : -0.165f) : w->level == SCENE_WAVE_CHORDS ? -0.08f : -0.095f;
+        const float low = playing ? (nv > 1 ? -0.265f : -0.165f) : -0.08f;
         box[0] = -half * k; box[1] = half * k; box[2] = (low - 0.5f * WAVE_STROKE) * k; box[3] = (0.23f + 0.5f * WAVE_STROKE) * k;
     }
     scr->nsw = fresh ? -(5 * WAVE_SWELL_DOTS) : 0;       /* (a new look: every dot as it is) */
@@ -1738,15 +1738,12 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
 
     /* the middle: the mark, the readout, the name; the top: the note or the whole numbers */
     const float my = 0.15f * k;
-    if (mark && w->level == SCENE_WAVE_NOTES)           /* a ring of dots round one: a tap opens the note */
-        for (int q = 0; q <= 8; q++) { const float a = q * 45.f * DEG, rr = q < 8 ? 0.062f * k : 0.f; beat_disc(sc, rr * cosf(a), rr * sinf(a) + my, (q < 8 ? 0.012f : 0.019f) * k, SCENE_NOTCH_RGB, true, -1); }
-    else if (mark && w->level == SCENE_WAVE_CHORDS)     /* the play mark: a triangle of dots pointing right */
+    if (mark && !playing)                               /* the play mark: a triangle of dots pointing right */
         for (int c = 0; c < 4; c++) for (int q = 0; q < 4 - c; q++) beat_disc(sc, (c - 1.3f) * 0.05f * 0.87f * k, ((float)q - (3 - c) * 0.5f) * 0.05f * k + my, 0.016f * k, SCENE_NOTCH_RGB, true, -1);
     else if (mark)                                      /* a small square of dots: a tap stops it */
         for (int q = 0; q < 9; q++) beat_disc(sc, (q % 3 - 1) * 0.02f * k, (q / 3 - 1) * 0.02f * k + my, 0.0065f * k, BEAT_STOP_RGB, true, -1);
     if (!w->on) return;
-    if (w->level == SCENE_WAVE_NOTES) wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.12f, 0.6f) * k, w->name_rgb, -1, 0.f);
-    else if (w->level == SCENE_WAVE_CHORDS) {
+    if (!playing) {
         wave_text(sc, name, 0.f, -0.02f * k, fit(name, 0.09f, 0.62f) * k, w->name_rgb, -1, 0.f);
         wave_text(sc, top, 0.f, SCENE_WAVE_TOP_Y * k, 0.07f * k, w->top_rgb, -1, 0.f);
     } else {
