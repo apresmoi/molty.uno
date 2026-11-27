@@ -40,7 +40,9 @@ const uint8_t *gc_font5x7(char c) {
     };
     static const uint8_t XLO[7]={0,0,0x11,0x0a,4,0x0a,0x11};   /* lowercase x — distinct ramp level */
     static const uint8_t FULL[7]={0x1f,0x1f,0x1f,0x1f,0x1f,0x1f,0x1f};
+    static const uint8_t FLAT[7]={0x10,0x10,0x16,0x19,0x11,0x11,0x1e};   /* GC_FLAT: a lowercase b, for a flat */
     if (c == 'x') return XLO;
+    if (c == GC_FLAT) return FLAT;
     if (c >= 'a' && c <= 'z') c -= 32;
     if (c >= 32 && c <= 90) return FONT[(int)c - 32];
     if (c >= 91 && c <= 96) return PUNCT[(int)c - 91];
