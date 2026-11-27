@@ -24,8 +24,11 @@ export const FRONT = {
   waitMs: 8000,
   /** The utterance waits this long at most for the front's reply to be known (what it said, whether it is waiting). */
   saidWaitMs: 1500,
-  /** A reply's first audio waits this long at most for its transcript, the text shown on the device. */
-  textHoldMs: 250,
+  /**
+   * A reply's first audio waits this long at most for its transcript (the text the device shows: it is
+   * set once per say). The model's text usually runs ahead of its audio; what is not in by then is not shown.
+   */
+  textHoldMs: 150,
   /** The device ends a stopped listen within one 100 ms chunk; a reply waits this long at most for its end frame. */
   deviceFreeMs: 600,
 } as const;
@@ -45,7 +48,7 @@ export interface FrontTurn {
   endAt: number;
   /** The box announced the front's reply (front.reply). */
   replyAt?: number;
-  /** The box's own: from its end of turn to the reply's start (front.reply ms.created). */
+  /** The box's own: from the model's end of turn to the reply's first audio (front.reply ms.created + tts.end ms.first_audio). */
   boxMs?: number;
   /** The reply's first audio left for the device. */
   replyOut?: number;

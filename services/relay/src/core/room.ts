@@ -5005,10 +5005,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const pick = await this.pickVoice("tts");
     if (!pick.ok || !pick.box) return sp.cancel();
     const ft = this.frontTurns.get(job);
-    if (ft) {
-      ft.replyAt = this.clock.now();
-      if (typeof sp.boxMs.created === "number") ft.boxMs = sp.boxMs.created;
-    }
+    if (ft) ft.replyAt = this.clock.now();
     this.frontReplies.set(job, sp);
     while (this.frontReplies.size > 4) this.frontReplies.delete(this.frontReplies.keys().next().value!);
     this.notify(this.frontWaiters, job);
@@ -5044,6 +5041,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (ft) {
       if (firstOut !== undefined) ft.replyOut = firstOut;
       ft.waiting = !!sp?.wait;
+      // the model's own time, as the box measured it: its end of turn -> the reply's start -> its first audio
+      const b = sp?.boxMs ?? {};
+      if (typeof b.created === "number" || typeof b.first_audio === "number") ft.boxMs = ((b.created as number) ?? 0) + ((b.first_audio as number) ?? 0);
     }
     if (!this.front) return;
     const wait = !!replyOf && !!sp?.wait;

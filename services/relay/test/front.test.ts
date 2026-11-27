@@ -225,7 +225,7 @@ describe("voice front: a turn", () => {
     // the turn's line in the activity log
     const act = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries;
     const line = act.find((e: any) => e.kind === "trace" && e.ev === "front");
-    expect(line.data.line).toMatch(/^front turn: Molty answered [\d.]+ s after the person stopped \(model 0.18 s\), utterance [\d.]+ s, handed to the agent, agent answered [\d.]+ s, spoken [\d.]+ s$/);
+    expect(line.data.line).toMatch(/^front turn: Molty answered [\d.]+ s after the person stopped \(model 0.48 s\), utterance [\d.]+ s, handed to the agent, agent answered [\d.]+ s, spoken [\d.]+ s$/);
     expect(Object.keys(line.data)).toEqual(expect.arrayContaining(["reply", "box", "reply_first_audio", "utterance", "agent_answer", "agent_first_audio"]));
     expect(act.some((e: any) => e.ev === "front.end" && e.data.reason === "idle")).toBe(true);
   });

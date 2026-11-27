@@ -50,8 +50,6 @@ _ws_log = logging.getLogger("molty_voice.realtime.socket")
 _ws_log.setLevel(logging.WARNING)
 
 PROVIDER_RATE = 24000
-SENTENCE_END = (".", "!", "?", "…")
-TEXT_EVERY_S = 0.15  # tts.text at most this often while the transcript grows (and always at its end)
 
 
 @dataclass
@@ -84,7 +82,6 @@ class _Speech:
     said: str = ""  # the output transcript so far
     words: int = 0  # words cued so far (tts.word)
     last_start: float = 0.0
-    text_at: float = 0.0
     text_sent: str = ""
     text_final: bool = False
     t0: float = 0.0
@@ -446,10 +443,10 @@ class RealtimeFront:
             s.last_start = max(s.last_start, s.samples / DEVICE_RATE)
             await self._send_json({"t": "tts.word", "id": s.sid, "i": s.words, "text": words[s.words][:64], "start_s": round(s.last_start, 3)})
             s.words += 1
-        now = time.monotonic()
-        text = s.said.strip()
-        if text and (done and not s.text_final or text != s.text_sent and (now - s.text_at >= TEXT_EVERY_S or text.endswith(SENTENCE_END))):
-            s.text_sent, s.text_at, s.text_final = text, now, done
+        # the text so far, once per word (the relay shows it on the device when the first sound goes out)
+        text = " ".join(words[:complete]) if not done else s.said.strip()
+        if text and (done and not s.text_final or not done and text != s.text_sent):
+            s.text_sent, s.text_final = text, done
             await self._send_json({"t": "tts.text", "id": s.sid, "text": text[:4000], **({"final": True} if done else {})})
 
     async def _on_done(self, resp: dict) -> None:

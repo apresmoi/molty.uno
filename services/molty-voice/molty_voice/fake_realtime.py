@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import logging
 import re
 
 import numpy as np
 from websockets.asyncio.server import serve
 
 RATE = 24000
+_log = logging.getLogger("molty_voice.fake_realtime")
+_log.setLevel(logging.WARNING)  # its handshake log would show the Authorization header it was sent
 
 
 class FakeRealtime:
@@ -34,7 +37,7 @@ class FakeRealtime:
         self._server = None
 
     async def __aenter__(self):
-        self._server = await serve(self.handler, "127.0.0.1", 0, max_size=1 << 24).__aenter__()
+        self._server = await serve(self.handler, "127.0.0.1", 0, max_size=1 << 24, logger=_log).__aenter__()
         self.port = self._server.sockets[0].getsockname()[1]
         return self
 
@@ -102,11 +105,14 @@ class FakeRealtime:
             total = int(RATE * 0.3 * n)  # 300 ms a word
             sent = 0
             parts = words.split()
+            said = 0
             for k in range(0, total, RATE // 10):
                 if st["active"] != rid:
                     break
-                if k // int(RATE * 0.3) < len(parts) and k % int(RATE * 0.3) < RATE // 10:
-                    await send({"type": "response.output_audio_transcript.delta", "response_id": rid, "delta": parts[k // int(RATE * 0.3)] + " "})
+                # the words' text runs a little ahead of their audio (two words), as a model's text does
+                while said < len(parts) and said * int(RATE * 0.3) <= k + 2 * int(RATE * 0.3):
+                    await send({"type": "response.output_audio_transcript.delta", "response_id": rid, "delta": parts[said] + " "})
+                    said += 1
                 pcm = (np.sin(np.arange(k, min(total, k + RATE // 10)) * 2 * np.pi * 220 / RATE) * 6000).astype("<i2").tobytes()
                 await send({"type": "response.output_audio.delta", "response_id": rid, "item_id": "x", "delta": base64.b64encode(pcm).decode()})
                 sent += len(pcm) // 2
