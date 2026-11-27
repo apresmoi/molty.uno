@@ -750,7 +750,7 @@ describe("review fixes", () => {
     const strict = (await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"v":{{event.data.peak_g|}}}' } })) as any;
     expect(strict).toMatchObject({ ok: false, error: "invalid_args", message: expect.stringMatching(/^for a tap event: .*valid JSON/) });
     expect((await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"v":{{event.data.peak_g|}}}', events: ["shake"] } })).ok).toBe(true);
-    expect((await w.room.webhook(t, { action: "set", spec: { ...json, events: ["wave"] } })) as any).toMatchObject({ ok: false, message: expect.stringMatching(/events must be/) });
+    expect((await w.room.webhook(t, { action: "set", spec: { ...json, events: ["waves"] } })) as any).toMatchObject({ ok: false, message: expect.stringMatching(/events must be/) });
     const ok = (await w.room.webhook(t, { action: "set", spec: { ...json, body: '{"peak":{{event.data.peak_g}},"n":{{event.data.reversals|0}},"id":"{{event.data.id|none}}"}', events: ["tap", "button"] } })) as any;
     expect(ok.ok).toBe(true);
     expect(ok.result.webhook.events).toEqual(["tap", "button"]);
@@ -770,7 +770,7 @@ describe("review fixes", () => {
     const { backend, token } = await surfaceWorld();
     const ok = await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["shake"] }, token);
     expect(ok.structuredContent).toMatchObject({ ok: true, webhook: { events: ["shake"] } });
-    expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["wave"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, double_tap, button, answer, ring, rhythm, utterance, utterance.partial, draft.used, draft.dropped, creature, dnd");
+    expect((await mcpCall(backend, "molty_webhook", { url: "https://hooks.example.org/x", events: ["waves"] }, token)).structuredContent.message).toBe("events must be a list of shake, tap, double_tap, button, answer, ring, rhythm, wave, utterance, utterance.partial, draft.used, draft.dropped, creature, dnd");
   });
 });
 

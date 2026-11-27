@@ -1,9 +1,9 @@
 // The tone player (docs/AGENT-LINK.md "Waves"): wave.play / set / stop are validated here and forwarded to a device that
-// lists the `rhythm` cap (the speaker's players share it); its mutes reach the agent as `tap` events.
+// lists the `wave` cap; its `wave` events and its muting `tap` events reach the agent, a webhook only when it names them.
 import { describe, expect, it } from "vitest";
 import type { RelayBackend } from "../src/core/api.js";
 import { CommandError, MAX_WAVE_BYTES, MAX_WAVE_KINDS, validateCommand } from "../src/core/commands.js";
-import { agentEventData, eventSentence } from "../src/core/events.js";
+import { SAMPLE_EVENTS, agentEventData, eventSentence, webhookWants } from "../src/core/events.js";
 import { handleRest } from "../src/surfaces/rest.js";
 import { DEVICE, LINK, connect, makeRoom } from "./helpers.js";
 
@@ -33,6 +33,16 @@ describe("wave commands: validation", () => {
     for (const bad of [{}, { count: false }, { midi: 60, hz: 440 }, { octave: 9 }, { volume: 3 }, { hz: 6000 }]) expect(code("wave.set", bad)).toBe("invalid_args");
     expect(validateCommand("wave.stop", {}).args).toEqual({});
     expect(code("wave.stop", { now: true })).toBe("invalid_args");
+  });
+  it("the wave event keeps its shape, a webhook gets it only when it names it", () => {
+    expect(agentEventData("wave", { state: "paused", hz: 277.18, chord: "minor", note: "C#", extra: 1 })).toEqual({ state: "paused", hz: 277.18, chord: "minor", note: "C#" });
+    expect(agentEventData("wave", { state: "louder", hz: 1 })).toBeUndefined();
+    expect(agentEventData("wave", SAMPLE_EVENTS.wave.data)).toEqual(SAMPLE_EVENTS.wave.data);
+    expect(eventSentence(SAMPLE_EVENTS.wave)).toBe("The human played C major on Molty");
+    expect(eventSentence({ id: "e1", type: "wave", ts: 0, data: { state: "paused", hz: 277.18, chord: "minor", note: "C#" } })).toBe("The human stopped C# minor on Molty: it waits, choosing");
+    expect(eventSentence({ id: "e1", type: "wave", ts: 0, data: { state: "stopped", hz: 1 } })).toBe("The human stopped the chord on Molty and left it");
+    expect(webhookWants(undefined, "wave")).toBe(false);
+    expect(webhookWants(["wave"], "wave")).toBe(true);
   });
   it("a muting tap on a voice keeps its shape and reads as the chord's", () => {
     expect(agentEventData("tap", { x: 0.5, y: 0.1, spot: "voice-2", muted: true })).toEqual({ x: 0.5, y: 0.1, spot: "voice-2", muted: true });
@@ -65,15 +75,15 @@ async function setup(caps: string[]) {
 }
 
 describe("wave commands: forwarding and caps", () => {
-  it("a Molty with a speaker's players (the rhythm cap) gets them as validated", async () => {
-    const w = await setup(["say", "pkg", "scene", "rhythm"]);
+  it("a Molty with the wave cap gets them as validated", async () => {
+    const w = await setup(["say", "pkg", "scene", "rhythm", "wave"]);
     expect((await w.cmd("wave.play", PLAY)).body).toMatchObject({ ok: true, result: { chord: "major", hz: 261.63 } });
     expect((await w.cmd("wave.set", { count: true })).body).toMatchObject({ ok: true });
     expect((await w.cmd("wave.stop", {})).body).toMatchObject({ ok: true });
     expect(w.cmds).toEqual([{ name: "wave.play", args: PLAY }, { name: "wave.set", args: { count: true } }, { name: "wave.stop", args: {} }]);
   });
-  it("no speaker (no rhythm cap): a clean 409 unsupported, nothing sent", async () => {
-    const w = await setup(["say", "pkg", "scene"]);
+  it("firmware without the cap (older, or no speaker): a clean 409 unsupported, nothing sent", async () => {
+    const w = await setup(["say", "pkg", "scene", "rhythm"]);
     for (const [name, args] of [["wave.play", PLAY], ["wave.set", { midi: 60 }], ["wave.stop", {}]] as const) {
       const r = await w.cmd(name, args);
       expect(r.status, name).toBe(409);

@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
 import { hasVoice, junkTranscript } from "./voiced.js";
-import { ASK_TITLE_CAP, HAPTIC_CAP, RHYTHM_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { ASK_TITLE_CAP, HAPTIC_CAP, RHYTHM_CAP, WAVE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1309,8 +1309,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (!live.getMeta()?.caps?.includes(pkg ? PKG_CAP : SCENE_CAP)) return fail("unsupported", `this Molty's firmware has no ${pkg ? "packages" : "scenes"} (no \`${pkg ? PKG_CAP : SCENE_CAP}\` in its caps): update it`);
       if (cmd.name === "pkg.install") return this.startJob("pkg", cmd.args, false, by);
     }
-    if ((cmd.name.startsWith("rhythm.") || cmd.name.startsWith("wave.")) && !live.getMeta()?.caps?.includes(RHYTHM_CAP)) {
+    if (cmd.name.startsWith("rhythm.") && !live.getMeta()?.caps?.includes(RHYTHM_CAP)) {
       return fail("unsupported", `this Molty's firmware has no beat player (no \`${RHYTHM_CAP}\` in its caps): update it, or it has no speaker`);
+    }
+    if (cmd.name.startsWith("wave.") && !live.getMeta()?.caps?.includes(WAVE_CAP)) {
+      return fail("unsupported", `this Molty's firmware has no tone player (no \`${WAVE_CAP}\` in its caps): update it, or it has no speaker`);
     }
     if (cmd.name.startsWith("creature.") && !live.getMeta()?.caps?.includes(CREATURES_CAP)) {
       return fail("unsupported", `this Molty's firmware has no creature packages (no \`${CREATURES_CAP}\` in its caps): update it`);

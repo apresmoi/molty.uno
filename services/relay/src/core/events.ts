@@ -94,6 +94,15 @@ const SHAPES: Record<string, (d: Record<string, unknown>) => JsonObject | undefi
     (d.state === "playing" || d.state === "paused" || d.state === "stopped") && int(d.bpm, 1, 1000)
       ? { state: d.state, bpm: d.bpm as number, ...(typeof d.rhythm === "string" && RHYTHM_ID_RE.test(d.rhythm) ? { rhythm: d.rhythm } : {}) }
       : undefined,
+  wave: (d) =>
+    (d.state === "playing" || d.state === "paused" || d.state === "stopped") && num(d.hz, 0, 10000)
+      ? {
+          state: d.state,
+          hz: d.hz as number,
+          ...(typeof d.chord === "string" && RHYTHM_ID_RE.test(d.chord) ? { chord: d.chord } : {}),
+          ...(typeof d.note === "string" && /^[A-G][#b]?$/.test(d.note) ? { note: d.note } : {}),
+        }
+      : undefined,
 };
 
 const RHYTHM_ID_RE = /^[a-z0-9-]{1,24}$/;
@@ -224,7 +233,7 @@ export const AGENT_EVENT_TYPES = [...Object.keys(SHAPES).filter((t) => !INBOX_ON
 
 /** Types a webhook gets only when its `events` names them (never by default): chatty, or nothing to answer (a wheel turned, a
  *  rhythm stopped: the human acts on Molty itself). Pull and ride-along carry them. */
-export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT, "ring", "rhythm"];
+export const OPT_IN_EVENTS: readonly string[] = [PARTIAL_EVENT, CREATURE_EVENT, "ring", "rhythm", "wave"];
 
 /** What a webhook without `events` receives. */
 export const DEFAULT_WEBHOOK_EVENTS = AGENT_EVENT_TYPES.filter((t) => !OPT_IN_EVENTS.includes(t));
@@ -249,6 +258,7 @@ export const SAMPLE_EVENTS: Record<string, AgentEvent> = {
   answer: { id: "e4", type: "answer", ts: 0, data: { job: "molty-xxxxxxxxxx.j_sample00", index: 0, label: "yes" } },
   ring: { id: "e12", type: "ring", ts: 0, data: { spot: "tempo", value: 112 } },
   rhythm: { id: "e13", type: "rhythm", ts: 0, data: { state: "paused", rhythm: "chacarera", bpm: 104 } },
+  wave: { id: "e14", type: "wave", ts: 0, data: { state: "playing", hz: 261.63, chord: "major", note: "C" } },
   [UTTERANCE_EVENT]: {
     id: "e5",
     type: UTTERANCE_EVENT,
@@ -330,6 +340,10 @@ export function eventSentence(ev: AgentEvent): string {
       return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it waits, stopped, for a tap in the middle` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
     case "rhythm":
       return d.state === "stopped" ? "The human stopped the rhythm on Molty and left it" : d.state === "paused" ? "The human stopped the rhythm on Molty: it waits on the clock, choosing" : `The human started ${String(d.rhythm ?? "the rhythm")} on Molty`;
+    case "wave": {
+      const chord = `${String(d.note ?? "")} ${String(d.chord ?? "chord")}`.trim();
+      return d.state === "stopped" ? "The human stopped the chord on Molty and left it" : d.state === "paused" ? `The human stopped ${chord} on Molty: it waits, choosing` : `The human played ${chord} on Molty`;
+    }
     case SCENE_EVENT:
       if (d.why === "close") return d.layout ? `The human closed a screen on Molty: ${d.layout} of ${d.pkg} is up now` : "The human closed Molty's screen: the creature is back, your screen is gone";
       if (!d.layout) return "Molty's scene ended: the creature is back";
