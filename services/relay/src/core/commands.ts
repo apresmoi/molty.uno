@@ -557,7 +557,7 @@ export interface TalkArgs {
   in_reply_to?: string;
   /** The agent's own latency report (clientTiming): timings.client and the turn's trace. */
   client_timing?: JsonObject;
-  /** The voice front says `say` word for word (default: in its own words). */
+  /** The voice front says `say` word for word (default: as the box sets it, word for word unless its realtime_inner is "own"). */
   exact?: boolean;
 }
 

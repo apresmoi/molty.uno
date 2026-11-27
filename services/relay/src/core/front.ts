@@ -155,6 +155,11 @@ export class FrontTalk {
     if (t) t.utteranceAt = this.h.clock.now();
   }
 
+  /** A listen is over: a front listen nobody spoke into (that did not yield to an answer) ends the conversation, a failed hands-free one too. */
+  listened(r: { ok: true; front?: boolean; text: string; yielded?: boolean } | { ok: false } | undefined, handsFree = false) {
+    if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.live && handsFree) void this.end(r?.ok ? "idle" : "listen_failed");
+  }
+
   /** The person said only a stop phrase: the conversation ends after the front's goodbye. */
   heard(text: string) {
     if (this.c && stopPhrase(text)) this.c.ending = "stop_phrase";

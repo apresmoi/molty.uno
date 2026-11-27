@@ -65,7 +65,7 @@ const KEEP: Prop = {
 };
 const EXACT: Prop = {
   type: "boolean",
-  description: "Only with the voice front on (the utterance has `front`): true = Molty's realtime voice says your text word for word. Default: it says your answer in its own short spoken words, keeping your facts.",
+  description: "Only with the voice front on (the utterance has `front`): true = Molty's realtime voice says your text word for word. Default: it says your text as written (the owner may set it to rephrase, keeping your facts); [cues] are never spoken.",
 };
 const IN_REPLY_TO: Prop = {
   type: "string",

@@ -66,6 +66,8 @@ export interface SttStreamOptions {
   onPartial?: (textSoFar: string) => void;
   /** The voice front (core/front.ts): the box answers this listen itself when the turn ends (stt.start front). */
   front?: boolean;
+  /** Held to talk (stt.start hold): the release ends the turn, never the box's turn detection. */
+  hold?: boolean;
   /** The person started speaking (the front's turn detection: stt.hint speech). Only while the stream is open. */
   onSpeech?: () => void;
   /** Ask the backend for its reflex verdicts (voice box `stt.reflex`, core/reflex.ts): only when it offers them. */

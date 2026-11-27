@@ -2157,7 +2157,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // out, and agents may speak again (never left human_speaking by a throw)
       if (trigger === "shake" || trigger === "front") await this.endTurn(id, r?.ok ? r : undefined, trigger);
       else if (r?.ok) await this.noteHeard(r);
-      if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.ft.live && trigger === "front") void this.ft.end(r?.ok ? "idle" : "listen_failed");
+      this.ft.listened(r, trigger === "front");
     }
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
@@ -2245,7 +2245,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.listen && !off) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
-      if (l.front && !l.text.trim() && !l.yielded) void this.ft.end("idle");
+      this.ft.listened(l);
       heard = l;
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
@@ -2828,7 +2828,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           onPartial: (text) => this.onPartial(buf, text),
           ...(buf.reflex?.wantsLocal ? { reflex: true, onReflex: (f: Record<string, unknown>) => this.onBoxReflex(buf, f) } : {}),
           ...(semantic ? { noSpeechMs: typeof extra.no_speech_ms === "number" ? extra.no_speech_ms : BOX_NO_SPEECH_MS } : {}),
-          ...(front ? { front: true, onSpeech: () => void (buf.speaking = true) } : {}),
+          ...(front ? { front: true, hold: buf.hold, onSpeech: () => void (buf.speaking = true) } : {}),
         });
         if (semantic && !buf.boxFailed) {
           buf.semantic = true;

@@ -66,7 +66,7 @@ interface BoxOpts {
 /** A realtime voice box on the voice socket, as molty-voice's realtime engine speaks it. */
 function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   const got: any[] = [];
-  const listens: Record<string, { n: number; front: boolean; heard: string; turned: boolean }> = {};
+  const listens: Record<string, { n: number; front: boolean; hold: boolean; heard: string; turned: boolean }> = {};
   let k = 0;
   const say = (m: unknown) => void room.socketMessage(sock, JSON.stringify(m));
   const speak = (id: string, words: string, end: Record<string, unknown> = {}, delay = 5) => {
@@ -84,7 +84,14 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     text(t);
     const f = JSON.parse(t);
     got.push(f);
-    if (f.t === "stt.start") listens[f.id] = { n: 0, front: f.front === true, heard: o.heard?.[Object.keys(listens).length] ?? (Object.keys(listens).length ? "" : "what is on my calendar today?"), turned: false };
+    if (f.t === "stt.start") listens[f.id] = { n: 0, front: f.front === true, hold: f.hold === true, heard: o.heard?.[Object.keys(listens).length] ?? (Object.keys(listens).length ? "" : "what is on my calendar today?"), turned: false };
+    // Molty ended the turn itself (held: the release): the box commits it and its front answers now
+    const l = f.t === "stt.end" ? listens[f.id] : undefined;
+    if (l && l.front && l.heard && !l.turned) {
+      l.turned = true;
+      say({ t: "front.reply", id: `fr${++k}`, stt: f.id });
+      speak(`fr${k}`, (o.reply ?? (() => ({ said: "Hi there!", wait: false })))(l.heard).said, {}, 20);
+    }
     if (f.t === "stt.end") setTimeout(() => !sock.closed && listens[f.id] && say({ t: "stt.final", id: f.id, text: listens[f.id].heard, ms: { final: 2 } }), 3);
     if (f.t === "tts") {
       const words = f.front === "own" ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
@@ -96,6 +103,7 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     const l = listens[fr.header.s];
     if (!l || l.turned) return;
     l.n++;
+    if (l.hold) return; // held to talk: no turn detection, the release ends it
     if (l.n === 1 && l.heard) say({ t: "stt.hint", id: fr.header.s, k: "speech" });
     if (!l.heard && l.n === 3) {
       l.turned = true;
@@ -289,6 +297,22 @@ describe("voice front: a turn", () => {
     expect(ctx.box.of("front.end")[0].reason).toBe("stop_phrase");
     const us = (await ctx.inbox()).filter((e) => e.type === "utterance");
     expect(us.map((e) => [e.data.text, e.data.trigger])).toEqual([["hi molty", "shake"], ["how are you", "front"], ["bye", "front"]]);
+  });
+
+  it("a held listen (the button): the box is told, the release ends the turn and the front answers it then", async () => {
+    // live 2026-11-27: held, spoke, let go; the box was never told it was held (its model could cut a pause)
+    const ctx = await setup({ box: { heard: ["what's up, is this fast?"], reply: () => ({ said: "Pretty fast!", wait: false }) } });
+    await ctx.room.socketMessage(ctx.sock, JSON.stringify({ t: "evt", name: "shake", data: { peak_g: 0, reversals: 0, ms: 0, listen: "shake-1", input: "button_accept", hold: true } }));
+    await until(() => sayTexts(ctx.dev).length > 0);
+    expect(ctx.box.of("stt.start")[0]).toMatchObject({ front: true, hold: true });
+    expect(ctx.dev.named("listen_stop")).toEqual([]); // the device's own end (the release), not the model's
+    expect(sayTexts(ctx.dev)[0]).toBe("Pretty fast!");
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    const u = (await ctx.inbox()).find((e) => e.type === "utterance")!;
+    expect(u.data).toMatchObject({ text: "what's up, is this fast?", front: { said: "Pretty fast!", waiting: false } });
+    // a hands-free listen after it is not held
+    await until(() => ctx.box.of("stt.start").length >= 2, 3000);
+    expect(ctx.box.of("stt.start")[1].hold).toBeUndefined();
   });
 
   it("an agent answer during a hands-free listen nobody spoke into yet: the listen yields to it, the conversation goes on", async () => {

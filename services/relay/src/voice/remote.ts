@@ -18,7 +18,8 @@
 //                the box's classifier on reflex chunk n, core/reflex.ts)
 //
 // The voice front (docs/AGENT-LINK.md "Voice front"; a box whose hello says "front": 1, core/front.ts):
-//   relay → box  stt.start adds "front": true (answer this listen yourself at the turn's end)
+//   relay → box  stt.start adds "front": true (answer this listen yourself at the turn's end; "hold": true,
+//                held to talk: the release ends it, never your turn detection)
 //   relay → box  {"t":"tts",…,"front":"own"|"exact"|"wait"} (the agent's answer: in the front's words / verbatim /
 //                "still waiting"), {"t":"front.context","text"}, {"t":"front.end","reason"}
 //   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
@@ -352,7 +353,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     };
     this.sttOps.set(id, op);
     try {
-      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}), ...(opts.reflex ? { reflex: true } : {}), ...(opts.front ? { front: true } : {}) }));
+      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}), ...(opts.reflex ? { reflex: true } : {}), ...(opts.front ? { front: true } : {}), ...(opts.front && opts.hold ? { hold: true } : {}) }));
     } catch {
       op.settle(new Error(BOX_OFFLINE));
     }
