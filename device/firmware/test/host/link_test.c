@@ -201,8 +201,9 @@ static void test_ack(void)
     assert(link_ack_decide(C, "tap", true, 160, false, true) == C);         /* a tap / release ended a turn with speech in it */
     assert(link_ack_decide(C, "tap", true, 159, false, true) == O);         /* a press that heard nobody: no chirp */
     assert(link_ack_decide(C, "tap", false, 0, false, true) == O);          /* released inside calibration: too short to have said anything */
-    assert(link_say_stalled(8000, 0) && !link_say_stalled(7999, 0));        /* no audio at all: 8 s */
-    assert(link_say_stalled(4000, 1) && !link_say_stalled(3999, 1));        /* mid-stream: 4 s dry */
+    assert(link_say_stalled(8000, 0, 0) && !link_say_stalled(7999, 0, 1));  /* no audio at all: 8 s */
+    assert(link_say_stalled(4000, 1, 0) && !link_say_stalled(3999, 1, 0));  /* mid-stream, the relay not heard: 4 s dry */
+    assert(link_say_stalled(25000, 1, 1) && !link_say_stalled(24999, 1, 1)); /* ...heard (its pong): its TTS may be slow */
     assert(link_ack_decide(C, "turn_end", false, 0, false, true) == C);     /* the relay's end of turn: speech by definition */
     assert(link_ack_decide(C, "turn_end", true, 0, false, true) == C);
     assert(link_ack_decide(C, "silence", true, 900, false, true) == C);

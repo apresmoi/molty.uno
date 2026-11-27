@@ -402,7 +402,7 @@ static void link_task(void *arg)
                         log_welcome(j, now);
                         creature_sent = 0; dnd_sent = 0;
                         backoff = 1; last_pong = now; last_ping = now;
-                    } else if (!strcmp(t->valuestring, "pong")) last_pong = now;
+                    } else if (!strcmp(t->valuestring, "pong")) { last_pong = now; link_audio_pong(); }
                     else if (!strcmp(t->valuestring, "ping")) {
                         cJSON *pong = cJSON_CreateObject();
                         cJSON_AddStringToObject(pong, "t", "pong"); link_send_json(pong); cJSON_Delete(pong);
@@ -423,7 +423,7 @@ static void link_task(void *arg)
             free(m.data);
         }
         log_upload(esp_timer_get_time());
-        if (link_client_connected() && now - last_ping >= 20000000) {
+        if (link_client_connected() && (now - last_ping >= 20000000 || link_audio_probe())) {   /* (a dry say's question too) */
             cJSON *ping = cJSON_CreateObject();
             cJSON_AddStringToObject(ping, "t", "ping");
             if (link_send_json(ping) != ESP_OK) atomic_store(&s_lost, true);

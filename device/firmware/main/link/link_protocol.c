@@ -364,9 +364,9 @@ cJSON *link_evt_double_tap_frame(double x, double y)
     return j;
 }
 
-bool link_say_stalled(uint32_t dry_ms, bool started)
+bool link_say_stalled(uint32_t dry_ms, bool started, bool heard)
 {
-    return dry_ms >= (started ? LINK_SAY_DRY_MS : LINK_SAY_FIRST_AUDIO_MS);
+    return dry_ms >= (!started ? LINK_SAY_FIRST_AUDIO_MS : heard ? LINK_SAY_LIVE_MS : LINK_SAY_DRY_MS);
 }
 
 cJSON *link_evt_button_frame(bool accept)
