@@ -29,6 +29,25 @@ agent (scripted | local LLM) ──REST talk/say──▶ relay ◀────�
 Why Python: it reuses `services/molty-voice/` directly (Kyutai TTS/STT clients, resampler, framing) and runs the
 second molty-voice bridge from the same venv; the relay side needs no hook (a stock `wrangler dev`).
 
+## The voice front (`molty-sim front`)
+
+The realtime voice front end to end, no device and no key: a local `wrangler dev`, a sim device,
+a local `molty-voice run --engine realtime` and a fake realtime provider
+(`services/molty-voice/molty_voice/fake_realtime.py`). The person shakes Molty and says a WAV;
+the front answers, hands the turn to a scripted agent, says its answer, listens again, and the
+conversation ends when nobody speaks. It prints each turn's activity line and the sim device's own
+measures (voice ended -> listen_stop -> Molty's first sound -> the agent's answer).
+
+```sh
+cd services/relay && pnpm install --frozen-lockfile && cd ../..
+cd tools/sim && uv run molty-sim front                          # synthetic clip, fake provider
+say -o /tmp/q.wav --data-format=LEI16@16000 "What is on my calendar today?"
+uv run molty-sim front --wav /tmp/q.wav --live                  # the real provider: MOLTY_REALTIME_KEY in this shell
+```
+
+`--live` passes the key from this command's environment to the bridge child process only; the run
+directory keeps the logs (no key in them) and deletes the bridge's voice token at the end.
+
 ## Run it (from clean state)
 
 ```sh

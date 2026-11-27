@@ -10,6 +10,8 @@ Molty ──WSS──▶ relay ◀──WSS── molty-voice ──ws://127.0.0
               agents               no inbound ports, no tunnel)
 ```
 
+- No GPU? The **realtime engine** (below) makes the box a realtime voice model with your own key:
+  Molty's fast conversational voice, on a laptop.
 - Molty doesn't change: it talks to the relay as before.
 - The box is one more relay client. It pairs like an agent (same tap on Molty) with the
   role `voice`. Its token opens only the voice socket and is refused on every agent call.
@@ -57,6 +59,83 @@ Without Docker, run your own moshi-server (STT at `ws://127.0.0.1:8090/api/asr-s
 `ws://127.0.0.1:8089/api/tts_streaming`, header `kyutai-api-key: public_token`; configs in `moshi/`)
 and install the bridge with Python ≥ 3.12: `uv tool install './services/molty-voice[reflex]'`.
 Then use `molty-voice pair`, `check` and `run` directly; `examples/molty-voice.service` keeps it running.
+
+## Realtime engine (the voice front, no GPU)
+
+A second kind of voice box: instead of Kyutai on a GPU, `molty-voice` talks to a **realtime voice
+model** (speech in, speech out) with **your own key**, and becomes Molty's fast conversational voice,
+the *voice front* (`docs/AGENT-LINK.md` "Voice front"). It hears you while you speak, decides when
+you are done, and answers within a fraction of a second; your agent stays the brain. Its
+answers reach the front as an "inner voice", and the front says them. The first provider is
+OpenAI's Realtime API.
+
+- **Runs anywhere:** a laptop or a small server. No GPU, no Docker, no Kyutai.
+- **Your key never leaves your machine:** put it in this process's environment
+  (`MOLTY_REALTIME_KEY`, else `OPENAI_API_KEY`), or as `"realtime_key"` in the config file
+  (mode 0600). It is only ever sent in the provider's `Authorization` header. It is never logged,
+  printed, or sent to the relay. A key from the environment is never written to the file.
+- **The relay holds no key:** it only routes Molty's audio to this box and back, like a Kyutai box.
+- **Choose it:** `molty-voice run --engine realtime` (or `"engine": "realtime"` in the config).
+- **Switch it on per device:** the owner sets `front: "on"`, see below. With the front off, the
+  same box still serves Molty's speech to text and text to speech (verbatim), as a plain voice box.
+
+From a clean state, on the machine that will run it:
+
+```sh
+git clone https://github.com/apresmoi/molty.uno && cd molty.uno
+uv tool install --force ./services/molty-voice
+molty-voice pair --relay https://<your relay> --device molty-xxxxxxxxxx --link-code K7M2W9C4
+read -rs MOLTY_REALTIME_KEY && export MOLTY_REALTIME_KEY      # paste the key, Enter (not echoed, not in history)
+molty-voice check --engine realtime                           # one spoken line: proves the key, the model and the voice
+molty-voice run --engine realtime
+```
+
+Tap Molty when it shows the code during `pair`. Pairing this box replaces any other voice box
+(one per device). Then turn the front on, with the device's current link code from the console's
+agent page:
+
+```sh
+curl -sS -X POST https://<your relay>/v1/devices/molty-xxxxxxxxxx/voice \
+  -H 'content-type: application/json' -H 'X-Molty-Link-Code: K7M2W9C4' -d '{"front":"on"}'
+```
+
+The answer's `front` says whether it serves now, and why not. Then shake Molty and talk.
+
+Settings (config file or `run` flags):
+
+| setting | default | |
+|---|---|---|
+| `realtime_model` | `gpt-realtime-2.1-mini` | `--realtime-model`; `gpt-realtime-2.1` is the larger one |
+| `realtime_voice` | `marin` | `--realtime-voice`; the provider's voices: marin, cedar, alloy, ash, ballad, coral, echo, sage, shimmer, verse |
+| `realtime_turn` | `semantic` | `--realtime-turn`: `semantic` ends your turn by meaning (`realtime_eagerness`, default `high`), `server` by silence (`realtime_silence_ms`, 500) |
+| `realtime_transcribe` | `gpt-4o-mini-transcribe` | the transcript your agent gets (a separate model on the same audio) |
+| `realtime_idle_s` | 45 | a session with nothing going on closes |
+| `realtime_max_session_s` | 600 | a session closes after this long, whatever happens |
+| `realtime_daily_minutes` | 30 | `--daily-minutes`: no session opens once today's minutes are used (0 = no cap); the box then stops offering the front and Molty falls back to the relay's voice |
+
+What it costs (developers.openai.com pricing and realtime cost guide, read 2026-11-27): audio
+in is 1 token per 100 ms (600 a minute), audio out 1 token per 50 ms (1,200 a minute).
+
+| model | a minute of you talking | a minute of Molty talking | a mixed conversation minute |
+|---|---|---|---|
+| `gpt-realtime-2.1-mini` ($10 / $20 per 1M audio tokens in / out) | $0.006 | $0.024 | about $0.02 |
+| `gpt-realtime-2.1` ($32 / $64) | $0.019 | $0.077 | about $0.06 |
+
+The mixed minute adds a little for the conversation context each answer reads again (cached
+audio is $0.30 or $0.40 per 1M). Ten minutes a day is about $0.20 a day (about $6 a month) on
+mini, and about $0.60 a day ($18 a month) on the larger model. An hour a day is about $1.20 a day
+($36 a month) on mini, and about $3.60 a day ($110 a month) on the larger model. These are
+estimates: the provider's usage page is the bill. Every session's tokens and its estimated
+price are in the bridge's log when it closes (`realtime: session closed …`), and in the relay's
+activity log (`front.session`). The day's minutes are kept in `realtime-usage.json` next to the
+config.
+
+How it works: one provider WebSocket per conversation, kept across turns (the model remembers
+the conversation). Molty's 16 kHz audio is resampled to the 24 kHz PCM the API takes, chunk by
+chunk as it arrives, and the model's 24 kHz audio back to 16 kHz the same way (`molty_voice/audio.py`).
+The talker's brief, with the reasons for each rule, is `molty_voice/brief.py`. The engine sits
+behind a small interface (`molty_voice/front.py`), so a second engine (Kyutai STT, a small fast
+model, Kyutai TTS) can plug in without touching the relay.
 
 ## Pairing
 
@@ -166,4 +245,7 @@ The tests cover:
 
 - framing and resampling;
 - a bridge test against a fake relay and fake STT/TTS servers;
-- the error paths: no free channel, cancel, refused token.
+- the error paths: no free channel, cancel, refused token;
+- the realtime engine against a fake provider (`tests/test_realtime.py`): a front turn end to end,
+  formats in and out, inner voice in own words and verbatim, the queue, idle / end / daily limit,
+  and the key kept out of logs, reprs and the saved config.

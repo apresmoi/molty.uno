@@ -27,6 +27,18 @@ a full model round trip on your side). The human hears your latency as silence.
 - To end the conversation, `molty_talk {"say":"…","listen":false}` (speak without listening).
 - Measure yourself (below).
 
+## With the voice front
+
+If the `utterance` has `front`, the owner turned the voice front on: a realtime voice model
+already answered the person within a fraction of a second, and you are the inner voice
+([voice.md](voice.md#the-voice-front-you-are-the-inner-voice)). What changes:
+
+- **Skip quick phrases and fillers.** The front said the holding line. Go straight to the facts.
+- **Answer with facts; the front words them.** One `talk` (or `say`) with the content; use
+  `exact: true` when your exact words matter.
+- **`front.waiting: false`:** it handled the turn itself. Stay quiet unless you have something to add.
+- **Your latency still counts** for a `waiting` turn: the person hears "let me check", then waits for you.
+
 ## Weak Wi-Fi
 
 Don't retry a turn because it got slow: with firmware cap `resume`, a job in `reconnecting` picks up

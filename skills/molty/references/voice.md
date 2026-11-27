@@ -7,11 +7,35 @@ audio into words (STT) by the relay, by one of these.
 |---|---|---|
 | **Cloud** | the relay's provider: Cloudflare Workers AI (Deepgram Aura TTS, Whisper STT), or any OpenAI-compatible API | nothing from the owner on the official relay; on a private relay, the Workers AI binding on its account (`VOICE_PROVIDER=workers-ai`, what `wrangler.jsonc` ships) or a key (`VOICE_PROVIDER=openai`, `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, `TTS_MODEL` / `STT_MODEL` / `TTS_VOICE`) |
 | **Own voice box** | the owner's GPU running Kyutai STT/TTS + `molty-voice`, paired with a tap like an agent | a GPU machine ([services/molty-voice/README](https://github.com/apresmoi/molty.uno/tree/main/services/molty-voice)); streaming STT and semantic end of turn: the fastest turns. See [voice-box.md](voice-box.md) |
+| **Own voice box, realtime engine** | a realtime voice model reached with the owner's own key, through `molty-voice --engine realtime` on any computer: Molty's fast conversational voice, the *voice front* (below) | the owner's provider key and an always-on computer; no GPU |
 | **None** | nothing: `VOICE_PROVIDER=none` on the relay (also what a relay without an AI binding and without the variable falls back to) | no account, key or GPU |
 
 The official relay runs the cloud provider. Which one a private relay runs is its operator's
 choice ([self-hosting.md](self-hosting.md)); the owner picks per Molty whether their voice box
 or the cloud speaks (`voice_mode` on the console's agent page: `auto`, `box`, `cloud`).
+
+## The voice front: you are the inner voice
+
+When the owner turns the voice front on, a realtime voice model is Molty's outer voice. It hears
+the person as they speak and answers within a fraction of a second; you are the inner voice. You
+can tell: the `utterance` carries `front: {said, waiting}`.
+
+- **The front already answered.** `said` is what Molty told the person. `waiting: true` means it
+  said a holding line and handed the turn to you: the person waits for your answer. `waiting:
+  false` means it handled small talk itself: answer only if you have something to add.
+- **Answer with facts, not with spoken filler.** Your `talk` / `say` text is not read out by a
+  text to speech voice: the front says it in its own words, briefly, keeping your facts, numbers
+  and names. No "let me check", no greeting, no quick phrase first: the front already did that.
+- **Use `exact: true` when the wording matters** (a quote, a code, a name spelled out, a sentence you
+  chose with care): the front then says it word for word. Inline `[cues]` apply only with `exact`.
+- **Your answer never cuts the front off.** If it is still speaking, yours plays right after.
+- **Background, said only if asked:** `molty_front {context: "…"}`. **End the conversation:**
+  `molty_front {end: true}`. Molty listens again by itself after each answer (hands-free) until the
+  person stops, says bye, or taps.
+- **You stay the brain.** The front knows nothing about the person's work and is told never to
+  invent a result. If you never answer a waiting turn, it says once that it is still waiting.
+
+The model runs on the owner's own computer with the owner's own key; the relay never holds a key.
 
 ## What works without a voice
 

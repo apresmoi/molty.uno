@@ -1830,7 +1830,7 @@ the console is served by the device.
   jev, openai, keywords}, engine, fallback?, timeout_ms, liveliness}, box:{paired, name, paired_at,
   connected, connected_since, reported_name, version, voices, stt, tts, last:{stt_ms,
   tts_first_audio_ms, …}}}` (`reflex.engine`: what the next listen fires with, null when off).
-- **POST** `{mode?, voice?, reflex?, reflex_compare?, liveliness?}` changes the settings (`voice:
+- **POST** `{mode?, voice?, reflex?, reflex_compare?, liveliness?, front?}` changes the settings (`front`: `on` | `off`, [Voice front](#voice-front); `voice:
   null` = the box's default; `reflex` one of `off auto local jev openai keywords`, `liveliness` one
   of `calm normal lively`, see [Reflex](#reflex)).
 - **DELETE** unpairs the box.
@@ -1843,6 +1843,125 @@ The console's agent page has a **Voice** card with:
 - the default box voice;
 - unpair;
 - the `molty-voice pair` command, filled in.
+
+## Voice front
+
+A realtime voice model is Molty's **outer voice**; the person's agent is its **inner voice**. The
+model hears the person as they speak, ends their turn and answers within a fraction of a second;
+the agent gets what was said, thinks at its own speed, and feeds the front the facts, which the
+front then says. The agent stays the brain: the front only talks.
+
+```mermaid
+sequenceDiagram
+  accTitle: The voice front
+  participant M as Molty
+  participant R as Relay
+  participant B as Voice box
+  participant V as Voice model
+  participant A as Agent
+  M->>R: mic chunks
+  R->>B: as they arrive
+  B->>V: as they arrive
+  V-->>B: end of turn, then its answer
+  B-->>R: listen_stop, front.reply audio
+  R-->>M: Molty speaks at once
+  R->>A: utterance, with what the front said
+  A->>R: say or talk, the facts
+  R->>B: inner voice
+  B->>V: say it now
+  V-->>M: Molty says it, then listens again
+```
+
+**Where it runs.** In the owner's voice box (`services/molty-voice`, engine `realtime`), with the
+owner's own provider key on the owner's machine. The relay never holds a key and never talks to a
+model provider; it never accepts, stores or forwards a key from anyone: no endpoint, command,
+pairing step or setting takes one. A box serves only the device it was paired to with a tap
+(`Voice box` above), so a key pays only for its owner's conversations.
+
+**Switch.** Owner API `POST …/voice {front: "on" | "off"}` (default off). It serves only when the
+voice mode is `auto` or `box` and the connected box's hello offers it; `GET …/voice` reports
+`front: {mode, available, serving, reason?, conversation, engine}` (`reason`: why not, in plain
+words). Turning it off (or the voice mode to `cloud` / `off`) is the **kill switch**: the
+conversation ends and the box is told to close its session at once. Off, everything works as
+before; the same box then serves plain STT and verbatim TTS.
+
+**Box protocol, version 1** (additions to the voice socket; an older relay or box ignores them,
+and then the box is a plain STT / TTS box):
+
+| Direction | Message |
+|---|---|
+| box → relay | `voice.hello` adds `"front": 1` (the version) and `"engine": "realtime"`. A box that stops offering it (its daily limit) sends a new hello without it (`stt`/`tts` false): the relay falls back |
+| relay → box | `stt.start` adds `"front": true`: a front listen; answer it yourself at the turn's end |
+| box → relay | `{"t":"stt.hint","id","k":"speech"}`: the person started speaking |
+| box → relay | `{"t":"front.reply","id","stt","ms"?:{created}}`: the front answers listen `stt`; audio frames `s=id`, `tts.word`, `tts.text`, `tts.end` follow as for a `tts` |
+| relay → box | `{"t":"tts",…,"front":"own"\|"exact"\|"wait"}`: the agent's answer, in the front's words / word for word / "still waiting" (no text needed). A plain `tts` is word for word |
+| box → relay | `{"t":"tts.text","id","text","final"?}`: what is being said (the model's output transcript), once per word, `final` at the end |
+| box → relay | `tts.end` adds `"wait": true` when the front handed the turn to the agent (a holding line), and `ms: {first_audio, total}` |
+| relay → box | `{"t":"front.context","text"}`: silent context; `{"t":"front.end","reason"}`: the conversation is over, close the session |
+| box → relay | `{"t":"front.session","state":"open"\|"closed","reason"?,"s"?,"usage"?,"today_s"?}`: for the activity log |
+
+**A turn.** The person shakes Molty (or an agent's `talk` listens). The relay adopts the listen as
+a *front listen*: the device's silence VAD is off (`vad:false`, firmware with `listen_stop`), the
+mic chunks go to the box as they arrive, and the model's turn detection ends the turn: the relay
+sends `listen_stop {reason:"turn_end"}` at once. The box's `front.reply` plays as a relay-owned say
+the moment the device's listen is over (its end frame, ≤ 600 ms): `cmd say` waits for the first
+audio, then at most 150 ms for its transcript, and shows those words (the device takes a say's text
+once, so later words of a long reply are not shown; word cues are estimated by the box from when
+each word's text arrived). No auto filler, no first words: the front answered.
+
+**The agent (inner voice).** It works as the skill says, with one more field and two small additions:
+
+- Every turn still reaches agents as ONE `utterance`, now with `front: {said, waiting}`: what the
+  front already said, and whether it handed the turn to the agent with a holding line (`waiting:
+  true`, the person is waiting for the answer). It waits at most 1.5 s for the reply to be known
+  (`partial: true` when it was not complete). A `talk`'s result carries the same `front`.
+- The agent's `say` / `talk` is not run through text to speech: its text goes to the box as inner
+  voice and the front says it in its own words, keeping the facts; `exact: true` says it word for
+  word (inline `[cues]` apply only then). If the front is still speaking, the answer queues behind
+  it: never cut off, never `audio_busy`. The job's `text` is what was said (`asked`: the agent's text).
+- `front {context?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` = facts the
+  front may use if the person asks (nothing is said now); `end: true` ends the conversation.
+  `{skipped:"front_off", reason}` when the front is not serving.
+- The agent never answers a `waiting` turn: after 8 s Molty says it is still waiting, once
+  (`tts front:"wait"`), then listens again. Molty shows `thinking` while it waits.
+
+**Hands-free.** After Molty speaks, it listens again (a relay-owned listen; nobody speaking ends it
+by the box's `no_speech`, 8 s). An agent's answer arriving during that listen before anyone spoke
+ends it at once (`listen_stop no_speech`) and plays. The conversation ends when: a listen hears
+nobody (`idle`), the person says a stop phrase alone ("bye", "that's all", "stop": after the
+front's goodbye), a tap while Molty is not listening, the agent's `front {end}`, do not disturb
+turning on, the owner's switch, the box or the device going away, 30 turns or 15 minutes. Do not
+disturb keeps its meaning: the conversation is the person's own (they started it); an agent still
+cannot start one unprompted.
+
+**The device's limits.** Molty cannot hear while it speaks (one audio job at a time in
+`device/firmware/main/link/link_audio.c`: a say and a listen exclude each other), so turns are
+strictly one after the other, with no interruption. Real barge in would need firmware that keeps
+the mic open during a say (both I2S channels running at once; not checked on the board), echo cancellation
+on the device (or a reference of the played audio sent up with the mic), mic frames streamed
+during the say with a flag, and a relay command to stop playback at once (`say_cancel` exists;
+it would need to cut the DMA within one write); the front would then use
+`interrupt_response` and `conversation.item.truncate`.
+
+**Timings.** Per turn, one activity entry `kind:"trace", ev:"front"` on the turn's listen job, ms
+after the end of the person's speech as the relay got it: `reply` (front.reply in), `box` (the
+model's own end of turn to its first audio, as the box measured it), `reply_first_audio` (to the
+device), `utterance`, `agent_answer` (the agent's call), `agent_first_audio`, `waiting`, and
+`line`: one sentence ("front turn: Molty answered 0.46 s after the person stopped (model 0.30 s),
+utterance 0.82 s, handed to the agent, agent answered 2.33 s, spoken 2.78 s"). The reply's say job
+carries `timings.front {created, first_audio, text_wait}`. `front.start`, `front.end {reason,
+turns, ms}` and the box's `front.session` (usage) are `voice_box` entries.
+
+**Cost.** Realtime audio is billed per minute of audio on the owner's key: about $0.02 a
+conversation minute on the small model (services/molty-voice/README.md "Realtime engine"). The
+box enforces the guards: a session closes after 45 s with nothing going on and after 10 minutes in
+all, at most 30 minutes a day by default, and one session at a time. The relay adds its own
+conversation limits (above) and never warms quick phrases through such a box (each would be billed).
+
+**Later: a hosted plan.** If the operator ever offers the front without a box, the same engine
+(`molty_voice/front.py`) runs next to the relay with the operator's key, gated per device by a paid
+plan and metered per device from the usage each session reports (`front.session`). Nothing of
+that exists: today the key is always the owner's own.
 
 ## Activity log
 
