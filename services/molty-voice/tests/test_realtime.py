@@ -158,6 +158,24 @@ def test_inner_voice_own_words_exact_and_the_queue():
     assert not relay.of("front.reply")
 
 
+def test_an_answer_sent_while_the_person_talks_waits_for_the_reply():
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
+        await relay.mic("s1", speech(400))
+        await relay.send({"t": "tts", "id": "t1", "text": "Done.", "front": "own"})  # the agent, while the person still talks
+        await asyncio.sleep(0.2)
+        held = len(fake.sessions[0]["creates"])
+        await relay.mic("s1", speech(200) + silence(700))
+        await relay.until(lambda: relay.of("tts.end", id="t1") and relay.of("front.reply"))
+        relay.held = held
+
+    relay, fake, _ = asyncio.run(run(scenario))
+    assert relay.held == 0  # nothing generated while the person was talking
+    reply = relay.of("front.reply")[0]["id"]
+    ends = [m["id"] for m in relay.of("tts.end")]
+    assert ends.index(reply) < ends.index("t1")  # the front's reply first, then the agent's answer
+
+
 def test_a_plain_listen_only_transcribes():
     async def scenario(relay, fake, bridge):
         await relay.send({"t": "stt.start", "id": "s2", "rate": 16000})

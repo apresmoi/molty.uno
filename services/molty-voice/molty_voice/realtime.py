@@ -370,6 +370,9 @@ class RealtimeFront:
     async def _next(self) -> None:
         if self._active is not None or self._creating is not None or not self._queue or self._ws is None:
             return
+        lst = self._listen
+        if lst is not None and lst.front and lst.speech and not lst.turned:
+            return  # the person is talking: the agent's answer waits for their turn's end (and the front's reply)
         s = self._queue.pop(0)
         self._creating = s
         meta = {"molty": s.sid}
@@ -519,6 +522,8 @@ class RealtimeFront:
                 lst.turned, lst.t_stop = True, time.monotonic()
                 log.info("stt %s: end of turn (the model's turn detection)", lst.mid)
                 await self._send_json({"t": "stt.turn_end", "id": lst.mid})
+                if not lst.front:
+                    await self._next()
         elif t == "input_audio_buffer.committed":
             if lst and isinstance(ev.get("item_id"), str):
                 lst.committed = True
