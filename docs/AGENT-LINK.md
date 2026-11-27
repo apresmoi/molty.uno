@@ -1851,6 +1851,16 @@ model hears the person as they speak, ends their turn and answers within a fract
 the agent gets what was said, thinks at its own speed, and feeds the front the facts, which the
 front then says. The agent stays the brain: the front only talks.
 
+**One voice.** With the front serving, the front is Molty's only speaker. It answers itself only
+what it already has the context for (a greeting, chit-chat, a repeat, what the agent told it);
+for anything else it says a short holding line that echoes the person's own words ("ok, let me
+see... checking your emails") and hands the turn to the agent (`waiting`). Everything an agent
+says (`say`, `talk`, any form, with or without `in_reply_to` or `exact`) is the front's inner
+thought, never an order to the speaker: the front voices it (a waiting turn at once, after a
+short "ok, got it"; something new at the next natural moment, briefly) or absorbs it (it only
+repeats what was said: nothing is spoken). The rules the model follows are in
+`services/molty-voice/molty_voice/brief.py`.
+
 ```mermaid
 sequenceDiagram
   accTitle: The voice front
@@ -1895,10 +1905,10 @@ and then the box is a plain STT / TTS box):
 | relay → box | `stt.start` adds `"hold": true` on a front listen held to talk (the button): the release ends it, never your turn detection |
 | box → relay | `{"t":"stt.hint","id","k":"speech"}`: the person started speaking |
 | box → relay | `{"t":"front.reply","id","stt","ms"?:{created}}`: the front answers listen `stt`; audio frames `s=id`, `tts.word`, `tts.text`, `tts.end` follow as for a `tts` |
-| relay → box | `{"t":"tts",…,"front":"own"\|"exact"\|"wait"}`: the agent's answer, in the front's words / word for word / "still waiting" (no text needed). A plain `tts` is word for word |
+| relay → box | `{"t":"tts",…,"front":"inner"\|"wait","exact"?}`: the agent's thought, which the front voices in its words or absorbs (`exact`: keep its wording as close as it can) / "still waiting", naming the task (no text needed). A plain `tts` is word for word; an older relay's `own` / `exact` are `inner` |
 | box → relay | `{"t":"tts.text","id","text","final"?}`: what is being said (the model's output transcript), once per word, `final` at the end |
-| box → relay | `tts.end` adds `"wait": true` when the front handed the turn to the agent (a holding line), and `ms: {first_audio, total}` |
-| relay → box | `{"t":"front.context","text"}`: silent context; `{"t":"front.end","reason"}`: the conversation is over, close the session |
+| box → relay | `tts.end` adds `"wait": true` when the front handed the turn to the agent (a holding line), `"absorbed": true` when it kept an inner thought and said nothing (no audio, no error), and `ms: {first_audio, total}` |
+| relay → box | `{"t":"front.context","text","persona"?}`: silent context, kept across the box's sessions (its last 8 lines, 2000 characters; never a session opened for it); `persona`: the agent's standing persona line, in every session's brief. `{"t":"front.end","reason"}`: the conversation is over, close the session |
 | box → relay | `{"t":"front.session","state":"open"\|"closed","reason"?,"s"?,"usage"?,"today_s"?}`: for the activity log |
 
 **A turn.** The person shakes Molty (or an agent's `talk` listens). The relay adopts the listen as
@@ -1910,42 +1920,43 @@ audio, then at most 150 ms for its transcript, and shows those words (the device
 once, so later words of a long reply are not shown; word cues are estimated by the box from when
 each word's text arrived). No auto filler, no first words: the front answered.
 
-**The agent (inner voice).** It works as the skill says, with one more field and two small additions:
+**The agent (inner voice).** It works as the skill says, with one more field and these changes:
 
-- Every turn still reaches agents as ONE `utterance`, now with `front: {said, waiting}`: what the
-  front already said, and whether it handed the turn to the agent with a holding line (`waiting:
-  true`, the person is waiting for the answer). It waits at most 1.5 s for the reply to be known
+- Every turn still reaches agents as ONE `utterance`, now with `front: {said, waiting, role}`: what
+  the front already said, whether it handed the turn to the agent with a holding line (`waiting:
+  true`, the person is waiting for the answer), and `role`, one plain sentence for any agent
+  whatever its skill ("you are the inner voice: a voice front speaks for you ...; send only facts
+  or decisions it lacks, no greetings, no chat"). It waits at most 1.5 s for the reply to be known
   (`partial: true` when it was not complete). A listen-only `talk`'s result carries the same `front`.
-- The agent's `say` / `talk` is not run through text to speech: its text goes to the box as inner
-  voice and the front says it word for word in a natural delivery (the box's `realtime_inner: "own"`:
-  in its own words, keeping the facts); `exact: true` is always word for word (inline `[cues]` apply
-  only then, and are never spoken). If the front is still speaking, the answer queues behind
-  it: never cut off, never `audio_busy`. The job's `text` is what was said (`asked`: the agent's text).
-  A `talk` with `say` does not listen itself: its result comes once its words are said (`reason:
-  "spoken"`, `hint`), and the front's hands-free listen follows (`listen: false`: none), so a
-  webhook agent is never held through a listen; the person's words come as the next `utterance`.
-- `front {context?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` = facts the
-  front may use if the person asks (nothing is said now); `end: true` ends the conversation.
+- The agent's `say` / `talk` is never text to speech: its text goes to the box as the front's inner
+  thought (`tts front:"inner"`), queued behind whatever is being said and never while the person
+  speaks: never cut off, never a second voice. `exact: true` takes the same path (the front keeps
+  the wording as close as it can; inline `[cues]` are never spoken nor shown with the front).
+  A `talk` with `say` does not listen itself: the front's hands-free listen follows (`listen:
+  false`: none), so a webhook agent is never held through a listen; the person's words come as the
+  next `utterance`.
+- **What the agent gets back** (a say's job result; a talk's result), promptly and truthfully:
+
+  | It | Result |
+  |---|---|
+  | was voiced by the front | `status: "done", spoken: true, as: "inner", how: "said", said` (what the front actually said), `hint` |
+  | was absorbed (it repeated what the front said) | `status: "done", spoken: false, as: "inner", how: "absorbed", hint` |
+  | waits for its moment (someone speaks) past the talk budget | `202 status: "pending", spoken: false, as: "inner", how: "queued", job` (`molty_wait` for the rest) |
+  | answers a turn over 60 s old (`TURN_HOLD_MS`), or one of a conversation that ended after the front answered it | `status: "done", spoken: false, how: "absorbed", reason: "old_turn"` / `"conversation_over"`: kept as the front's context, never voiced, no session opened |
+  | repeats this agent's answer to the same turn (queued, playing or done) | the first answer's `job` and result, `repeated: true` (a first answer that failed does not count) |
+
+  The claim rule keeps its meaning: only an answer the relay admits to the speaker queue claims
+  the turn (`turn_claimed` for the other agents as before). A say / talk while Molty is offline is
+  `device_offline` and opens no box session.
+- `front {context?, persona?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` =
+  facts the front may use (nothing is said now; the box keeps it across sessions); with `persona:
+  true` it is the agent's standing persona line (at most 500 characters: who the agent is and how
+  it talks), kept per device in the relay's storage (KV `front:persona`) and given to every box
+  that connects, so the front sounds like the agent; `end: true` ends the conversation.
   `{skipped:"front_off", reason}` when the front is not serving.
-- The agent never answers a `waiting` turn: after 8 s Molty says it is still waiting, once
-  (`tts front:"wait"`), then listens again. Molty shows `thinking` while it waits.
-
-**Late and repeated answers** (core/front.ts `fate`). An agent's say / talk with `in_reply_to` is
-said only while it belongs to the conversation's current moment; every case answers at once with a
-truthful result (a job that is `done`), never an error that invites a retry:
-
-| The answer to turn T arrives | It is | The agent gets |
-|---|---|---|
-| T is the latest turn, nobody speaks | said (it ends a hands-free listen nobody spoke into yet) | `status: "done"`, `said`, `reason: "spoken"`, once said |
-| the front handed T to the agent (`waiting`) | said, even after the person spoke again (queued behind them) | as above |
-| the person has spoken since T (a newer turn, or speaking now) | not said; the front gets it as silent context (`front.context`) | `spoken: false, as: "context", reason: "newer_turn", hint` |
-| T is over 60 s old (`TURN_HOLD_MS`), or its conversation ended and the front had answered T | not said, nothing sent to the box | `spoken: false, as: "dropped", reason: "old_turn"` / `"conversation_over"` |
-| the same agent answered T already (queued, playing or done) | not said again | the first answer's `job` and result, `repeated: true` (a first answer that failed does not count: the retry is judged anew) |
-
-The claim rule keeps its meaning: only an answer that is said claims the turn (`turn_claimed` for
-the other agents as before); one given as context or dropped claims nothing. Without `in_reply_to`
-an answer is said as before. A say / talk while Molty is offline is `device_offline` and opens no
-box session; the box never opens a session just for context (it keeps it for the next session).
+- The agent never answers a `waiting` turn: after 8 s Molty says it is still on it, once, naming
+  the task (`tts front:"wait"`), then listens again (a new turn from the person wins). Molty shows
+  `thinking` while it waits.
 
 **Hands-free.** After Molty speaks, it listens again (a relay-owned listen; nobody speaking ends it
 by the box's `no_speech`, 8 s). An agent's answer arriving during that listen before anyone spoke

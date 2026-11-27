@@ -16,37 +16,32 @@ or the cloud speaks (`voice_mode` on the console's agent page: `auto`, `box`, `c
 
 ## The voice front: you are the inner voice
 
-When the owner turns the voice front on, a realtime voice model is Molty's outer voice. It hears
-the person as they speak and answers within a fraction of a second; you are the inner voice. You
-can tell: the `utterance` carries `front: {said, waiting}`.
+When the owner turns the voice front on, a realtime voice model is Molty's only voice. It hears
+the person as they speak and answers within a fraction of a second; you are the inner voice, in
+the background. You can tell: the `utterance` carries `front: {said, waiting, role}`.
 
+- **Do not chat: send substance or nothing.** You are not the speaker. Whatever you `say` / `talk`
+  is the front's own thought: it says it in its words at the right moment, or says nothing if it
+  only repeats what Molty already said. A greeting after its greeting is never voiced.
 - **The front already answered.** `said` is what Molty told the person. `waiting: true` means it
-  said a holding line and handed the turn to you: the person waits for your answer. `waiting:
-  false` means it handled small talk itself: answer only if you have something to add.
-- **Answer with facts, not with spoken filler.** Your `talk` / `say` text is said by the front's
-  voice as you wrote it (the owner may set it to rephrase, keeping your facts, numbers and names), so
-  write it to be heard: short, spoken. No "let me check", no greeting, no quick phrase first: the
-  front already did that. Inline `[cues]` are never spoken.
-- **Use `exact: true` when the wording matters** (a quote, a code, a name spelled out, a sentence you
-  chose with care): it is always word for word. Inline `[cues]` apply only with `exact`.
-- **Your answer never cuts the front off.** If it is still speaking, yours plays right after.
-- **Always pass `in_reply_to`.** Your answer is said only while it still belongs to the moment. Every
-  case is a quick, truthful `200`, never an error to retry:
-
-  | When your `talk` / `say` arrives | You get back |
-  |---|---|
-  | the turn is the latest and nobody speaks (or the front handed it to you) | it is said: `status: "done"`, `said`, `reason: "spoken"`, once said; a `talk` does not listen itself (`hint`): the front listens and the person's words come as the next `utterance` |
-  | the person has spoken again since that turn | not said; the front has it as silent context: `spoken: false, as: "context", reason: "newer_turn"`. Answer the newer `utterance` instead |
-  | the turn is over a minute old, or the conversation ended and the front had answered it | not said: `spoken: false, as: "dropped", reason: "old_turn"` / `"conversation_over"` |
-  | you answered that turn already (a retry) | the first answer's `job` and result, `repeated: true`; nothing is said again (a retry of one that failed is tried again) |
-
-  So never retry a turn: one call per turn. A second, different thing to say for the same turn goes
-  without `in_reply_to` (you keep the floor). Without `in_reply_to` an answer is always said.
-- **Background, said only if asked:** `molty_front {context: "…"}`. **End the conversation:**
-  `molty_front {end: true}`. Molty listens again by itself after each answer (hands-free) until the
-  person stops, says bye, or taps.
+  said a holding line ("checking your emails, one sec") and handed the turn to you: the person
+  waits, and your answer is voiced at once. `waiting: false` means it handled the turn itself:
+  stay quiet unless you have a fact or decision it lacks.
+- **Write facts, short.** No "let me check", no greeting, no quick phrase first. `exact: true`
+  asks it to keep your wording as close as it can (it still decides whether and when). Inline
+  `[cues]` are never spoken.
+- **Read your result:** `spoken: true|false`, `as: "inner"`, `how`: `"said"` (with `said`, what the
+  front actually said), `"absorbed"` (nothing said: it had said this), or `"queued"` (`202`: it waits
+  for its moment; `molty_wait {job}`). A `talk` does not listen itself: the front listens, and the
+  person's next words come as an `utterance`.
+- **One call per turn, with `in_reply_to`; never retry.** A repeat for the same turn returns the
+  first answer's `job` (`repeated: true`); an answer to a turn over a minute old, or to a
+  conversation that ended after the front answered it, is only kept as context (`reason`).
+- **Sound like yourself:** `molty_front {context: "…", persona: true}` sets your standing persona
+  line (who you are, how you talk; 500 characters), kept for every session. **Background:**
+  `molty_front {context: "…"}`. **End the conversation:** `molty_front {end: true}`.
 - **You stay the brain.** The front knows nothing about the person's work and is told never to
-  invent a result. If you never answer a waiting turn, it says once that it is still waiting.
+  invent a result. If you never answer a waiting turn, it says once that it is still on it.
 
 The model runs on the owner's own computer with the owner's own key; the relay never holds a key.
 

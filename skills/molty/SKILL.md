@@ -63,10 +63,9 @@ relay unless the message also names a **Relay** (a private one, see
   lookup, status check or other tool.
   - Can answer from what you know → one `talk`, the answer. Nothing else in the turn.
   - Needs any work (search, tools, a long think) → say what you'll do and start working:
-    `talk {"say":"Searching for that. [working]"}`. Molty animates itself until you
-    speak again; no gestures to fill the wait. Over ~20 s: `progress` at each step,
+    `talk {"say":"Searching for that. [working]"}`. Molty animates itself meanwhile. Over ~20 s: `progress` at each step,
     `progress done` at the end. Then answer.
-- **Fastest model for that first line**, always; a slower one only for the work behind it.
+- **Fastest model for that first line**; slower ones for the work.
 - **Follow a `202 pending` talk to its end**: their words are in it.
 - **Wake only on `utterance`** unless your human gave an input a job: other runs collide.
 - **A shake means "I want to talk".** You get one `utterance` with their words: answer with talk
@@ -85,7 +84,8 @@ relay unless the message also names a **Relay** (a private one, see
   package's skill ([packages](references/api.md#packages-and-scenes)).
 - **Read `relay.caps`, not versions** (`status`, or `device.caps` on an `utterance`).
 - **This skill is version 2026.11.15.** `device.skill` (utterance) or `relay.skill` (status) newer?
-  Read CHANGES.md from GitHub, re-read the files it names, tell your human what's new in one line.
+  Read CHANGES.md on GitHub, re-read the files it names, tell your human what's new.
+- **`utterance.front`?** A front speaks: facts or nothing ([voice.md](references/voice.md)).
 - **Don't talk unprompted or repeatedly.** `no_speech` after a wake → one short line or nothing.
   `do_not_disturb`: reply only (in_reply_to) until a `dnd` event.
 - **Errors:** `audio_busy` (wait, retry once), `turn_claimed` (stay quiet), `device_offline`

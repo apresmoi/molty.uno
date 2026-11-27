@@ -29,18 +29,16 @@ a full model round trip on your side). The human hears your latency as silence.
 
 ## With the voice front
 
-If the `utterance` has `front`, the owner turned the voice front on: a realtime voice model
-already answered the person within a fraction of a second, and you are the inner voice
+If the `utterance` has `front`, the owner turned the voice front on: a realtime voice model is
+Molty's only voice, already answered the person, and you are the inner voice
 ([voice.md](voice.md#the-voice-front-you-are-the-inner-voice)). What changes:
 
-- **Skip quick phrases and fillers.** The front said the holding line. Go straight to the facts.
-- **Answer with facts; the front words them.** One `talk` (or `say`) with the content; use
-  `exact: true` when your exact words matter.
-- **`front.waiting: false`:** it handled the turn itself. Stay quiet unless you have something to add.
-- **Your latency still counts** for a `waiting` turn: the person hears "let me check", then waits for you.
-- **One call per turn, with `in_reply_to`.** A late answer (the person spoke again) is not said but
-  given to the front as context; a retry returns the first answer's job. Never retry a turn
-  ([voice.md](voice.md#the-voice-front-you-are-the-inner-voice)).
+- **Do not chat: send substance or nothing.** Everything you say goes to the front, which voices
+  it or absorbs it (`how: "said" | "absorbed" | "queued"`). Skip quick phrases, fillers, greetings.
+- **`front.waiting: true`:** the person waits for you; your facts are voiced at once. Your latency
+  counts: they hear "checking your emails", then wait.
+- **`front.waiting: false`:** it handled the turn. Stay quiet unless you have a fact it lacks.
+- **One call per turn, with `in_reply_to`.** A retry returns the first answer's job. Never retry a turn.
 
 ## Weak Wi-Fi
 
