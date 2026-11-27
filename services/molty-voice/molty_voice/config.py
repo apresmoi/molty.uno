@@ -86,6 +86,9 @@ class Config:
     realtime_eagerness: str = "high"
     realtime_silence_ms: int = 500
     realtime_max_output_tokens: int = 800
+    # How the front says the agent's answers (tts front "own"): "verbatim" (its words, word for word)
+    # or "own" (the front's own words, keeping the facts). exact:true is always word for word.
+    realtime_inner: str = "verbatim"
     # Cost guards (the key is the owner's): a session closes after this long without anything
     # happening, after this long in all, and no session opens once today's minutes are used (0 = no cap).
     realtime_idle_s: float = 45.0

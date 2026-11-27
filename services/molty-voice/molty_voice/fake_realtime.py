@@ -52,7 +52,9 @@ class FakeRealtime:
         sess = {"auth": bool(ws.request.headers.get("authorization")), "path": ws.request.path, "updates": [], "items": [], "creates": [],
                 "appended": 0, "commits": 0, "clears": 0, "closed": False, "cancels": 0}
         self.sessions.append(sess)
-        st = {"buf": [], "speech": False, "quiet": 0, "audio_ms": 0, "start_ms": 0, "active": None, "n": 0, "create": True}
+        # vad: the turn detection's settings (None: off, push to talk). Its speech state lives across
+        # commits and clears, as a real detector's does: only a new turn_detection resets it.
+        st = {"buf": [], "speech": False, "quiet": 0, "audio_ms": 0, "start_ms": 0, "active": None, "n": 0, "create": True, "vad": None}
         lock = asyncio.Lock()
 
         async def send(ev):
@@ -63,14 +65,15 @@ class FakeRealtime:
             st["n"] += 1
             return f"{p}_{st['n']}"
 
-        async def commit():
+        async def commit(by_vad: bool):
             item = nid("item")
-            st["speech"], st["quiet"] = False, 0
+            if by_vad:
+                st["speech"], st["quiet"] = False, 0
             sess["commits"] += 1
             st["buf"] = []
             await send({"type": "input_audio_buffer.committed", "item_id": item, "previous_item_id": None})
             heard = self.transcript if self.transcript is not None else "hello molty"
-            if st["create"]:
+            if by_vad and st["create"]:  # a client's own commit never makes a response by itself
                 asyncio.create_task(respond(heard, None))
 
             async def transcribe():
@@ -90,14 +93,14 @@ class FakeRealtime:
             st["active"] = rid
             await send({"type": "response.created", "response": {"id": rid, "status": "in_progress", "metadata": meta}})
             instr = (req or {}).get("instructions") or ""
-            m = re.search(r"word for word, and nothing else: (.*)$", instr, re.S)
+            m = re.search(r"(?:word for word, and nothing else|The answer): (.*)$", instr, re.S)
             tool = False
             if m:
-                words = m.group(1).strip()
+                words = ("So, " if "own spoken words" in instr else "") + m.group(1).strip()
             elif "has not answered yet" in instr:
                 words = "Still waiting on that, one moment."
             elif req is not None and sess["items"] and sess["items"][-1].startswith("Inner voice: "):
-                words = "So, " + sess["items"][-1][len("Inner voice: "):]
+                words = "Okay, that's a neat vibe, let me translate that briefly."  # what a model did with a bare system message
             else:
                 words, tool = self.reply(heard)
             await asyncio.sleep(self.first_audio_ms / 1000)
@@ -131,9 +134,11 @@ class FakeRealtime:
                 t = ev.get("type")
                 if t == "session.update":
                     sess["updates"].append(ev["session"])
-                    td = (((ev["session"].get("audio") or {}).get("input") or {}).get("turn_detection"))
-                    if isinstance(td, dict) and "create_response" in td:
-                        st["create"] = bool(td["create_response"])
+                    inp = (ev["session"].get("audio") or {}).get("input") or {}
+                    if "turn_detection" in inp:
+                        td = inp["turn_detection"]
+                        st["vad"], st["speech"], st["quiet"] = td, False, 0
+                        st["create"] = bool(td.get("create_response", True)) if isinstance(td, dict) else False
                     await send({"type": "session.updated", "session": ev["session"]})
                 elif t == "input_audio_buffer.append":
                     pcm = np.frombuffer(base64.b64decode(ev["audio"]), dtype="<i2").astype(np.float32) / 32768
@@ -141,6 +146,8 @@ class FakeRealtime:
                     for i in range(0, len(pcm), RATE // 50):  # 20 ms steps
                         w = pcm[i : i + RATE // 50]
                         st["audio_ms"] += 20
+                        if st["vad"] is None:
+                            continue
                         loud = float(np.sqrt(np.mean(w * w))) > self.threshold if w.size else False
                         if loud and not st["speech"]:
                             st["speech"], st["quiet"] = True, 0
@@ -149,12 +156,12 @@ class FakeRealtime:
                             st["quiet"] = 0 if loud else st["quiet"] + 20
                             if st["quiet"] >= self.silence_ms:
                                 await send({"type": "input_audio_buffer.speech_stopped", "audio_end_ms": st["audio_ms"], "item_id": "pending"})
-                                await commit()
+                                await commit(True)
                 elif t == "input_audio_buffer.commit":
-                    await commit()
+                    await commit(False)
                 elif t == "input_audio_buffer.clear":
                     sess["clears"] += 1
-                    st["buf"], st["speech"], st["quiet"] = [], False, 0
+                    st["buf"] = []
                 elif t == "conversation.item.create":
                     item = ev.get("item") or {}
                     if item.get("type") == "message":
@@ -164,6 +171,8 @@ class FakeRealtime:
                 elif t == "response.create":
                     sess["creates"].append(ev.get("response") or {})
                     asyncio.create_task(respond("", ev.get("response") or {}))
+                elif t == "conversation.item.delete":
+                    sess.setdefault("deleted", []).append(ev.get("item_id"))
                 elif t == "response.cancel":
                     sess["cancels"] += 1
                     st["active"] = None

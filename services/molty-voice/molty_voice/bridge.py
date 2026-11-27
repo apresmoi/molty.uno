@@ -24,6 +24,7 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
   The conversational front (engine "realtime", molty_voice/front.py, docs/AGENT-LINK.md "Voice front"):
   box -> relay   voice.hello adds "front": 1 (the front protocol's version) and "engine": "realtime"
   relay -> box   stt.start adds "front": true: answer this listen yourself when the person's turn ends
+                 ("hold": true: held to talk, the release ends it, never the model's turn detection)
                  {"t":"tts",...,"front":"own"|"exact"|"wait"}: the agent's answer in the front's words / verbatim /
                  "still waiting" (a plain tts is verbatim); {"t":"front.context","text"}; {"t":"front.end","reason"}
   box -> relay   {"t":"stt.hint","id","k":"speech"} the person started speaking
@@ -249,7 +250,7 @@ class Bridge:
         if t == "stt.start" and isinstance(mid, str):
             ns = m.get("no_speech_ms")
             no_speech_s = ns / 1000 if isinstance(ns, int) and not isinstance(ns, bool) and 1000 <= ns <= 10000 else None
-            await f.listen_start(mid, m.get("front") is True, no_speech_s)
+            await f.listen_start(mid, m.get("front") is True, no_speech_s, m.get("hold") is True)
         elif t == "stt.end" and isinstance(mid, str):
             await f.listen_end(mid)
         elif t == "stt.cancel" and isinstance(mid, str):

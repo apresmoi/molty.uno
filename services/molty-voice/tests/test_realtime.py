@@ -115,8 +115,11 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     assert up["instructions"] == brief.BRIEF and up["tools"] == brief.TOOLS
     assert up["audio"]["input"]["format"] == {"type": "audio/pcm", "rate": 24000}
     assert up["audio"]["output"]["format"] == {"type": "audio/pcm", "rate": 24000}
-    td = up["audio"]["input"]["turn_detection"]
-    assert td["type"] == "semantic_vad" and td["create_response"] is True and td["interrupt_response"] is False
+    # turn detection only while the listen runs: off at the open, on at its start, off at its end
+    assert up["audio"]["input"]["turn_detection"] is None
+    tds = [u["audio"]["input"]["turn_detection"] for u in s["updates"][1:]]
+    assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is True and tds[0]["interrupt_response"] is False
+    assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
     assert 24 * 1050 <= s["appended"] <= 24 * 1300
@@ -147,11 +150,9 @@ def test_inner_voice_own_words_exact_and_the_queue():
 
     relay, fake, _ = asyncio.run(run(scenario))
     s = fake.sessions[0]
-    assert "Inner voice: Your next meeting is at 3 pm." in s["items"]
     assert "Inner voice context: The build log is 200 lines long." in s["items"]
-    exact = [c for c in s["creates"] if "instructions" in c]
-    assert [c["instructions"] for c in exact] == [brief.exactly("Build 42 passed."), brief.exactly("hi")]
-    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Your next meeting is at 3 pm."
+    assert [c["instructions"] for c in s["creates"]] == [brief.exactly(t) for t in ("Your next meeting is at 3 pm.", "Build 42 passed.", "hi")]
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "Your next meeting is at 3 pm."
     assert relay.of("tts.text", id="t2")[-1]["text"] == "Build 42 passed."
     assert [m["id"] for m in relay.of("tts.end")] == ["t1", "t2", "t3"]
     assert all("error" not in m for m in relay.of("tts.end"))
@@ -184,7 +185,7 @@ def test_a_plain_listen_only_transcribes():
         await asyncio.sleep(0.4)
 
     relay, fake, _ = asyncio.run(run(scenario))
-    assert fake.sessions[0]["updates"][0]["audio"]["input"]["turn_detection"]["create_response"] is False
+    assert fake.sessions[0]["updates"][1]["audio"]["input"]["turn_detection"]["create_response"] is False
     assert relay.of("stt.final", id="s2")[0]["text"] == "hello molty"
     assert not relay.of("front.reply") and not fake.sessions[0]["creates"]
 
@@ -274,3 +275,77 @@ def test_usage_book_rolls_over_a_day(tmp_path):
     assert b.used_s() == 90
     b.day = "2000-01-01"
     assert b.used_s() == 0
+
+
+def test_a_turn_molty_ends_itself_is_answered_at_once():
+    # live 2026-11-27: the person held the button, spoke, let go; the box committed but no reply came
+    # until the agent's answer, 16 s later. Whoever ends the turn, the front answers it now.
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True, "no_speech_ms": 8000})
+        await relay.mic("s1", speech(800))  # the model's detector has not ended it yet
+        await relay.send({"t": "stt.end", "id": "s1"})  # Molty did (a tap, the button let go)
+        await relay.until(lambda: relay.of("front.reply") and relay.of("tts.end"), timeout=3)
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"transcript": "hi there"}))
+    assert relay.of("front.reply")[0]["stt"] == "s1"
+    assert fake.sessions[0]["commits"] == 1 and len(fake.sessions[0]["creates"]) == 1
+
+
+def test_a_held_listen_is_never_cut_by_the_model_and_is_answered_on_release():
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "h1", "rate": 16000, "front": True, "hold": True})
+        await relay.mic("h1", speech(400) + silence(1000) + speech(400))  # a pause while the button is held
+        await asyncio.sleep(0.3)
+        relay.early = [m["t"] for m in relay.msgs if m["t"] in ("stt.turn_end", "front.reply")]
+        await relay.send({"t": "stt.end", "id": "h1"})
+        await relay.until(lambda: relay.of("tts.end") and relay.of("stt.final", id="h1"), timeout=3)
+
+    relay, fake, _ = asyncio.run(run(scenario))
+    assert relay.early == []
+    s = fake.sessions[0]
+    assert s["commits"] == 1 and 24 * 1700 <= s["appended"] <= 24 * 1900  # all of it reached the model, one turn
+    assert relay.of("front.reply")[0]["stt"] == "h1"
+
+
+def test_the_next_listen_is_not_ended_by_the_last_turn():
+    # live: the follow up listen ended after 1.7 s of nobody speaking: the detector was still in the
+    # first turn's speech (Molty ended that turn itself) and its late end of turn hit the new listen
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True, "no_speech_ms": 8000})
+        await relay.mic("s1", speech(800))
+        await relay.send({"t": "stt.end", "id": "s1"})
+        await relay.until(lambda: relay.of("tts.end"), timeout=3)
+        await relay.send({"t": "stt.start", "id": "s2", "rate": 16000, "front": True, "no_speech_ms": 3000})
+        await relay.mic("s2", silence(2500))
+        await asyncio.sleep(0.3)
+        relay.early = relay.of("stt.turn_end", id="s2") + relay.of("front.reply", stt="s2")
+        await relay.mic("s2", silence(700))
+        await relay.until(lambda: relay.of("stt.turn_end", id="s2"), timeout=3)
+
+    relay, fake, _ = asyncio.run(run(scenario))
+    assert relay.early == []
+    assert relay.of("stt.turn_end", id="s2")[0]["reason"] == "no_speech"
+    assert not relay.of("front.reply", stt="s2")
+
+
+def test_the_inner_voice_is_said_as_given_cues_never_spoken():
+    # live: "Hey Juan! [happy] All good here..." came out as "Okay, that's a neat vibe, let me translate that briefly."
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "tts", "id": "t1", "text": "Hey Juan! [happy] All good here, and yeah, pretty fast today.", "front": "own"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+
+    relay, fake, _ = asyncio.run(run(scenario))
+    c = fake.sessions[0]["creates"][0]
+    assert c["tool_choice"] == "none" and "[happy]" not in c["instructions"]
+    assert not any(str(i).startswith("Inner voice: ") for i in fake.sessions[0]["items"])
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "Hey Juan! All good here, and yeah, pretty fast today."
+
+
+def test_own_words_is_an_option():
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "tts", "id": "t1", "text": "Build 42 passed. [happy]", "front": "own"})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+
+    relay, fake, _ = asyncio.run(run(scenario, cfg_extra={"realtime_inner": "own"}))
+    assert fake.sessions[0]["creates"][0]["instructions"] == brief.own_words("Build 42 passed.")
+    assert relay.of("tts.text", id="t1")[-1]["text"] == "So, Build 42 passed."

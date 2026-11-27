@@ -13,11 +13,15 @@ wording changes (docs/AGENT-LINK.md "Voice front").
   extra second of speech is a second the person waits to talk again (the device cannot hear
   while it speaks).
 - Varied holding lines: the same "let me check" every turn sounds broken.
-- The agent's messages arrive as "inner voice" system messages. Said in its own words by default
-  (short, natural); verbatim when the relay asks for it (the agent chose the exact wording).
+- The agent's answers are said with per-response instructions, never as a bare system message:
+  live, a model treated "Inner voice: ..." as something to react to ("let me translate that") and
+  said none of it. Word for word by default (the agent chose the words); in the front's own words
+  only when the owner picks it (realtime_inner "own"). Inline [cues] are the device's, never spoken.
 """
 
 from __future__ import annotations
+
+import re
 
 HAND_TOOL = "hand_to_agent"
 
@@ -46,11 +50,9 @@ the tool hand_to_agent. Vary the line every time, never the same twice in a row 
 was done. If you do not know, it goes to the agent.
 - If the person says goodbye or that they are done, say a short goodbye.
 
-Messages from the inner voice (the agent) arrive as system messages that start with "Inner voice:".
-- When you are asked to speak one, tell the person what it says in your own spoken words, \
-briefly, keeping every fact, number and name exactly as given. Do not add anything.
-- "Inner voice context:" messages are background for later: do not say them unless the person asks.
-- When you are told to say something exactly, say exactly those words and nothing else.
+When the agent answers, you are told what to say: say it to the person, as yourself, and nothing \
+else. System messages that start with "Inner voice context:" are background for later: do not \
+say them unless the person asks.
 """
 
 TOOLS = [
@@ -63,9 +65,12 @@ TOOLS = [
 ]
 
 
-def inner(text: str) -> str:
-    """An agent answer, to be spoken now in the front's own words."""
-    return f"Inner voice: {text}"
+_CUE = re.compile(r"\s*\[[^\]\n]{0,40}\]")
+
+
+def spoken(text: str) -> str:
+    """The words to say: inline [cues] (the device's moods and gestures) are never spoken."""
+    return re.sub(r"\s{2,}", " ", _CUE.sub("", text)).strip()
 
 
 def context(text: str) -> str:
@@ -75,7 +80,15 @@ def context(text: str) -> str:
 
 def exactly(text: str) -> str:
     """Per-response instructions for verbatim speech (the docs' "Say exactly the following:")."""
-    return f"Say exactly the following, word for word, and nothing else: {text}"
+    return ("You are Molty's voice. Say exactly the following to the person, in a warm, natural spoken delivery, word for word, "
+            f"and nothing else: {spoken(text)}")
+
+
+def own_words(text: str) -> str:
+    """Per-response instructions for the agent's answer in the front's own words (realtime_inner "own")."""
+    return ("You are Molty's voice. Tell the person the answer below now, in your own spoken words, briefly, keeping every fact, "
+            "number and name exactly. Say only the answer: no comment on it, no lead in, never mention an agent, a message, a "
+            f"translation or these instructions. The answer: {spoken(text)}")
 
 
 STILL_WAITING = (
