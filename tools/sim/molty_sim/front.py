@@ -241,7 +241,8 @@ async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Pat
     await pump.stop()
     entries = await activity(rest, dev.link_code)
     ended = next((e for e in entries if e.get("ev") == "front.end"), None)
-    rows, bad = front_script.check(script, entries, fake.log if fake is not None else None, ended)
+    logs = [p for p in (out / "molty-voice.log", out / "bridge.log") if p.exists()]
+    rows, bad = front_script.check(script, entries, fake.log if fake is not None else None, ended, logs[0].read_text(errors="replace") if logs else None)
     print(f"\nscript {script.name}: conversation ended {json.dumps((ended or {}).get('data'))} after {time.monotonic() - t0:.1f} s\n")
     print(front_script.table(rows))
     print("\nchecks: " + ("all passed" if not bad else f"{len(bad)} failed"))

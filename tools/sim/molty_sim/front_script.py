@@ -21,6 +21,7 @@ device (both live and fake) and, with the fake provider, its own log:
   handoff        a turn marked `front: handoff` (a factual question) was handed to the agent
   faithful       every voiced agent answer holds all the numbers, names and content words of the agent's text
                  (molty_voice.brief.faithful, the box's own rule), and the box did not report it unfaithful
+  reply_end      every reply the box asked for ended "completed" in its log (none cut, cancelled or left without an end)
 """
 
 from __future__ import annotations
@@ -107,7 +108,22 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9 ]+", "", re.sub(r"\s+", " ", s.lower().replace("’", "'"))).strip()
 
 
-def check(script: Script, entries: list[dict], fake_log: list[dict] | None = None, ended: dict | None = None) -> tuple[list[dict], list[str]]:
+def reply_ends(box_log: str) -> list[str]:
+    """From the box's log: every reply whose end is not "completed", or that has no end line at all."""
+    bad, ends = [], {}
+    for m in re.finditer(r"front (\S+) \(reply\): response (\w+)(?: \(([^)]*)\))?", box_log):
+        ends.setdefault(m.group(1), []).append((m.group(2), m.group(3)))
+    for rid, seen in ends.items():
+        done = [x for x in seen if x[0] != "created"]
+        if not done:
+            bad.append(f"reply_end: reply {rid} never ended (no end in the box's log)")
+        elif done[0][0] != "completed":
+            bad.append(f"reply_end: reply {rid} ended {done[0][0]}" + (f" ({done[0][1]})" if done[0][1] else ""))
+    return bad
+
+
+def check(script: Script, entries: list[dict], fake_log: list[dict] | None = None, ended: dict | None = None,
+          box_log: str | None = None) -> tuple[list[dict], list[str]]:
     """The per-turn rows and the violations, from the relay's activity log (any order) and, with the fake provider, its log."""
     entries = sorted(entries, key=lambda e: e.get("ts", 0))
     turns = [e for e in entries if e.get("kind") == "trace" and e.get("ev") == "front"]
@@ -199,6 +215,8 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
     for o in (e for e in entries if e.get("kind") == "voice_box" and e.get("ev") == "front.session" and e["data"].get("state") == "open"):
         if not any(-1500 <= o["ts"] - s <= 4000 for s in starts):
             bad.append("no_session: a box session was opened with no conversation starting (for a line that is only context)")
+    if box_log is not None:
+        bad += reply_ends(box_log)
     if fake_log is not None:
         for e in fake_log:
             if e.get("ev") == "create" and e.get("speaking"):
