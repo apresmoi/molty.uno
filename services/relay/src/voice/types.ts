@@ -64,6 +64,10 @@ export interface SttStreamOptions {
    * while the stream is open; informational — the final text from end() is what counts.
    */
   onPartial?: (textSoFar: string) => void;
+  /** The voice front (core/front.ts): the box answers this listen itself when the turn ends (stt.start front). */
+  front?: boolean;
+  /** The person started speaking (the front's turn detection: stt.hint speech). Only while the stream is open. */
+  onSpeech?: () => void;
   /** Ask the backend for its reflex verdicts (voice box `stt.reflex`, core/reflex.ts): only when it offers them. */
   reflex?: boolean;
   /** A reflex verdict from the backend (the raw frame: the room validates it). Only while the stream is open. */

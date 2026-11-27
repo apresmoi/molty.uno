@@ -58,8 +58,8 @@ export interface UtteranceInput {
   reason: string;
   speech_ms: number;
   stt_ms: number;
-  /** shake: Molty's own listen. talk: a talk's listen whose result no agent collected. */
-  trigger: "shake" | "talk";
+  /** shake: Molty's own listen. talk: a talk's listen whose result no agent collected. front: a hands-free listen of the voice front. */
+  trigger: "shake" | "talk" | "front";
   /** What woke Molty for a shake turn: "shake", or the gesture bound to talk ("double_tap", "button_accept", ...). */
   input?: string;
   caps: string[];

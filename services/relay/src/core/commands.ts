@@ -18,7 +18,7 @@ export const PROGRESS_CAP = "progress";
 export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop", "front"] as const;
 /** `buzz {pattern | ms, strength?}`: the vibration motor (firmware cap `haptic`, only on boards that have one). A pattern is
  *  a name the device knows (tick, tap, double, nudge: unknown_pattern otherwise) or [on, off, on, ...] ms. */
 export const HAPTIC_CAP = "haptic";
@@ -306,6 +306,16 @@ function turnId(v: unknown): string | undefined {
   return v;
 }
 
+/** The voice front's silent context (`front {context}`): at most this many characters. */
+export const MAX_FRONT_CONTEXT = 2000;
+
+/** say / talk `exact`: with the voice front on, it says the text word for word (core/front.ts). */
+function exactArg(v: unknown): boolean {
+  if (v === undefined) return false;
+  if (typeof v !== "boolean") throw invalid("exact must be a boolean");
+  return v;
+}
+
 export function validateCommand(name: unknown, rawArgs: unknown): Validated {
   if (typeof name !== "string" || !(COMMANDS as readonly string[]).includes(name)) {
     throw new CommandError("unknown_command", `unknown command ${String(name)}`);
@@ -347,12 +357,13 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
         job: false,
       };
     case "say": {
-      only(args, ["text", "voice", "in_reply_to", "client_timing"]);
+      only(args, ["text", "voice", "in_reply_to", "client_timing", "exact"]);
       // relay-only `marks` (the text's [cues]): room.ts sends them to firmware with say_marks
       const said = sayText(args.text, "text");
       const out: JsonObject = { text: said.text };
       if (said.marks.length) out.marks = said.marks;
       if (args.voice !== undefined) out.voice = voiceId(args.voice);
+      if (exactArg(args.exact)) out.exact = true;
       const reply = turnId(args.in_reply_to);
       const ct = clientTiming(args.client_timing);
       return { name: n, args: out, job: true, ...(reply !== undefined ? { in_reply_to: reply } : {}), ...(ct ? { client_timing: ct } : {}) };
@@ -505,6 +516,19 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       const reply = turnId(args.in_reply_to);
       return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
+    case "front": {
+      // the voice front (core/front.ts): {context?, end?}; relay-only, never forwarded to the device
+      only(args, ["context", "end"]);
+      const out: JsonObject = {};
+      if (args.context !== undefined) {
+        if (typeof args.context !== "string" || !args.context.trim() || args.context.length > MAX_FRONT_CONTEXT) throw invalid(`context must be text of 1..${MAX_FRONT_CONTEXT} characters`);
+        out.context = args.context.trim();
+      }
+      if (args.end !== undefined && typeof args.end !== "boolean") throw invalid("end must be a boolean");
+      if (args.end === true) out.end = true;
+      if (!Object.keys(out).length) throw invalid("give context, or end: true");
+      return { name: n, args: out, job: false };
+    }
     case "act":
       only(args, ["action"]);
       if (typeof args.action !== "string" || !GESTURE_RE.test(args.action)) {
@@ -533,13 +557,15 @@ export interface TalkArgs {
   in_reply_to?: string;
   /** The agent's own latency report (clientTiming): timings.client and the turn's trace. */
   client_timing?: JsonObject;
+  /** The voice front says `say` word for word (default: in its own words). */
+  exact?: boolean;
 }
 
 /** molty_talk / POST /v1/devices/<id>/talk: `{say?, listen? (default true), listen_ms? (0 = unlimited, 1..30000; default the device's setting, 30000 out of the box), voice?, end_silence_ms?, no_speech_ms?, vad?, ring_color?, ack?, in_reply_to?}`. */
 export function validateTalk(raw: unknown): TalkArgs {
   const args = raw === undefined || raw === null ? {} : raw;
   if (!isRecord(args)) throw invalid("args must be an object");
-  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", "client_timing", ...VAD_KEYS]);
+  only(args, ["say", "listen", "listen_ms", "voice", "ring_color", "ack", "in_reply_to", "client_timing", "exact", ...VAD_KEYS]);
   if (args.listen !== undefined && typeof args.listen !== "boolean") throw invalid("listen must be a boolean");
   const out: TalkArgs = { listen: args.listen !== false, vad: vadArgs(args) };
   // `[working]`: off to work after this line, nobody to listen for (unless listen is asked for)
@@ -559,6 +585,7 @@ export function validateTalk(raw: unknown): TalkArgs {
   if (reply !== undefined) out.in_reply_to = reply;
   const ct = clientTiming(args.client_timing);
   if (ct) out.client_timing = ct;
+  if (exactArg(args.exact)) out.exact = true;
   if (out.say === undefined && !out.listen) throw invalid("give say, or listen (or both)");
   return out;
 }

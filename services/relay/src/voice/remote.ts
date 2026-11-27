@@ -17,6 +17,15 @@
 //                {"t":"stt.reflex","id","n","pick","conf","p","ms","chars","tokens"?}? (only when stt.start said reflex:true:
 //                the box's classifier on reflex chunk n, core/reflex.ts)
 //
+// The voice front (docs/AGENT-LINK.md "Voice front"; a box whose hello says "front": 1, core/front.ts):
+//   relay → box  stt.start adds "front": true (answer this listen yourself at the turn's end)
+//   relay → box  {"t":"tts",…,"front":"own"|"exact"|"wait"} (the agent's answer: in the front's words / verbatim /
+//                "still waiting"), {"t":"front.context","text"}, {"t":"front.end","reason"}
+//   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
+//                {"t":"front.reply","id","stt","ms"?} then frames s=id, tts.word, {"t":"tts.text","id","text","final"?},
+//                {"t":"tts.end","id","wait"?,"ms"?} (as a tts; wait: the front handed the turn to the agent)
+//                {"t":"front.session","state","reason"?,"s"?,"usage"?,"today_s"?} (the box's session, for the log)
+//
 // Every request is bound to the socket it went out on: when that socket closes
 // or is replaced, drop() fails its requests at once (`voice_box_offline`), so
 // nothing waits on a box that is gone.
@@ -34,6 +43,30 @@ export interface BoxChannel {
   same(other: BoxChannel): boolean;
 }
 
+/**
+ * Speech by the voice front (frontSpeak, or the box's own front.reply): PCM into `feed`, word cues on
+ * the spoken words, and what is being said (the model's output transcript, `said`) as it is known.
+ */
+export interface FrontSpeech {
+  readonly id: string;
+  readonly feed: PcmFeed;
+  /** own / exact / wait (an agent's answer, the relay's "still waiting"), reply (the front's own answer to a turn). */
+  readonly mode: "own" | "exact" | "wait" | "reply";
+  /** What is being said so far; `final` once the box says it is complete. */
+  said: string;
+  final: boolean;
+  /** The front handed the person's turn to the agent (its reply was a holding line). */
+  wait: boolean;
+  /** The box's timings ({created} on a front.reply, {first_audio, total} at the end). */
+  boxMs: JsonObject;
+  /** Resolves when the box ended the stream (all of it generated: said and wait are final). */
+  readonly ended: Promise<void>;
+  /** Resolves when `said` changes or the stream ends (the device's text waits on it). */
+  changed(): Promise<void>;
+  /** Nobody will play it: the box stops (tts.cancel). */
+  cancel(): void;
+}
+
 export const BOX_OFFLINE = "voice_box_offline";
 export const BOX_ERROR = "voice_box_error";
 
@@ -47,8 +80,17 @@ interface TtsOp {
   feed: PcmFeed;
   onWord?: (i: number, startS: number) => void;
 }
+interface FrontOp {
+  ch: BoxChannel;
+  sp: FrontSpeech;
+  /** The box ended it (error = failed). */
+  end(error?: Error, wait?: boolean, ms?: JsonObject): void;
+  text(said: string, final: boolean): void;
+}
 interface SttOp {
   ch: BoxChannel;
+  /** stt.hint speech from the box: the person started speaking. */
+  speech(): void;
   settle(err: Error | undefined, text?: string): void;
   /** stt.turn_end from the box: once, and only while the audio is still flowing. */
   turnEnd(reason?: "no_speech"): void;
@@ -68,7 +110,12 @@ export class RemoteVoiceProvider implements VoiceProvider {
   private readonly ttsOps = new Map<string, TtsOp>();
   private readonly sttOps = new Map<string, SttOp>();
   private readonly openerOps = new Map<string, { ch: BoxChannel; done(line: string | undefined): void }>();
+  private readonly frontOps = new Map<string, FrontOp>();
   private seq = 0;
+  /** The box's front answers a listen by itself (front.reply): the room plays it, or cancels it. */
+  onFrontReply: ((sttId: string, sp: FrontSpeech) => void) | undefined;
+  /** The box's front session opened / closed (front.session): the room logs it. */
+  onFrontSession: ((frame: Record<string, unknown>) => void) | undefined;
 
   constructor(
     /** The box's socket now, or undefined when no box is connected (and greeted). */
@@ -88,7 +135,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
 
   /** How many requests are in flight (tests, status). */
   get pending(): number {
-    return this.ttsOps.size + this.sttOps.size;
+    return this.ttsOps.size + this.sttOps.size + this.frontOps.size;
   }
 
   // ---------------- first words (core/opener.ts) ----------------
@@ -173,6 +220,87 @@ export class RemoteVoiceProvider implements VoiceProvider {
     }
   }
 
+  // ---------------- the voice front ----------------
+
+  /** The agent's answer (or "still waiting") spoken by the box's front: tts {front: mode}. Throws when no box. */
+  frontSpeak(text: string, mode: "own" | "exact" | "wait"): FrontSpeech {
+    const ch = this.channel();
+    const id = this.newId("t");
+    const sp = this.frontOp(ch, id, mode);
+    try {
+      ch.sendText(JSON.stringify({ t: "tts", id, text, front: mode }));
+    } catch {
+      this.frontOps.get(id)?.end(new Error(BOX_OFFLINE));
+    }
+    return sp;
+  }
+
+  /** Silent context for the front (the agent's `front {context}`); false: no box. */
+  frontContext(text: string): boolean {
+    const ch = this.link();
+    if (!ch) return false;
+    this.sendQuiet(ch, { t: "front.context", text });
+    return true;
+  }
+
+  /** The conversation is over: the box closes its session (billing stops). */
+  frontEnd(reason: string): void {
+    const ch = this.link();
+    if (ch) this.sendQuiet(ch, { t: "front.end", reason });
+  }
+
+  private frontOp(ch: BoxChannel, id: string, mode: FrontSpeech["mode"]): FrontSpeech {
+    const feed = new PcmFeed();
+    let endedResolve!: () => void;
+    const ended = new Promise<void>((r) => (endedResolve = r));
+    let wake: Array<() => void> = [];
+    const poke = () => {
+      const w = wake;
+      wake = [];
+      for (const f of w) f();
+    };
+    const sp: FrontSpeech = {
+      id,
+      feed,
+      mode,
+      said: "",
+      final: false,
+      wait: false,
+      boxMs: {},
+      ended,
+      changed: () => (feed.done ? Promise.resolve() : new Promise<void>((r) => wake.push(r))),
+      cancel: () => {
+        if (!this.frontOps.has(id)) return;
+        this.frontOps.delete(id);
+        feed.end(new Error("tts cancelled"));
+        this.sendQuiet(ch, { t: "tts.cancel", id });
+        endedResolve();
+        poke();
+      },
+    };
+    this.frontOps.set(id, {
+      ch,
+      sp,
+      text: (said, final) => {
+        sp.said = said;
+        sp.final ||= final;
+        poke();
+      },
+      end: (error, wait, ms) => {
+        this.frontOps.delete(id);
+        sp.wait = !!wait;
+        sp.final = true;
+        if (ms) Object.assign(sp.boxMs, ms);
+        feed.end(error);
+        endedResolve();
+        poke();
+      },
+    });
+    // the consumer gave up (the say failed, the device went): the box stops generating
+    feed.signal.addEventListener("abort", () => sp.cancel(), { once: true });
+    return sp;
+  }
+
   // ---------------- STT ----------------
 
   async stt(pcm: Int16Array): Promise<string> {
@@ -218,10 +346,13 @@ export class RemoteVoiceProvider implements VoiceProvider {
       reflex: (frame) => {
         if (state === "open" && !turned) opts.onReflex?.(frame);
       },
+      speech: () => {
+        if (state === "open" && !turned) opts.onSpeech?.();
+      },
     };
     this.sttOps.set(id, op);
     try {
-      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}), ...(opts.reflex ? { reflex: true } : {}) }));
+      ch.sendText(JSON.stringify({ t: "stt.start", id, rate: SAMPLE_RATE, ...(opts.noSpeechMs !== undefined ? { no_speech_ms: opts.noSpeechMs } : {}), ...(opts.reflex ? { reflex: true } : {}), ...(opts.front ? { front: true } : {}) }));
     } catch {
       op.settle(new Error(BOX_OFFLINE));
     }
@@ -263,20 +394,36 @@ export class RemoteVoiceProvider implements VoiceProvider {
 
   /** A text frame from the box socket `from` (already parsed). */
   onText(from: BoxChannel, frame: Record<string, unknown>): void {
+    if (frame.t === "front.session") return this.onFrontSession?.(frame);
     const id = typeof frame.id === "string" ? frame.id : undefined;
     if (!id) return;
     if (frame.t === "opener.result") {
       const op = this.openerOps.get(id);
       if (op && op.ch.same(from)) op.done(typeof frame.text === "string" ? frame.text.slice(0, 400) : undefined);
+    } else if (frame.t === "front.reply") {
+      const stt = frame.stt;
+      if (typeof stt !== "string" || this.frontOps.has(id) || id.length > 128) return;
+      const sp = this.frontOp(from, id, "reply");
+      if (isRecord(frame.ms)) Object.assign(sp.boxMs, cleanMs(frame.ms));
+      if (this.onFrontReply) this.onFrontReply(stt, sp);
+      else sp.cancel();
+    } else if (frame.t === "tts.text") {
+      const op = this.frontOps.get(id);
+      if (op && op.ch.same(from) && typeof frame.text === "string") op.text(frame.text.trim().slice(0, 4000), frame.final === true);
     } else if (frame.t === "tts.end") {
+      const err = typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined;
+      const fop = this.frontOps.get(id);
+      if (fop && fop.ch.same(from)) return fop.end(err, frame.wait === true, isRecord(frame.ms) ? cleanMs(frame.ms) : undefined);
       const op = this.ttsOps.get(id);
       if (!op || !op.ch.same(from)) return;
-      op.feed.end(typeof frame.error === "string" && frame.error ? new Error(BOX_ERROR) : undefined);
+      op.feed.end(err);
     } else if (frame.t === "tts.word") {
-      const op = this.ttsOps.get(id);
       const i = frame.i, s = frame.start_s;
-      if (!op || !op.ch.same(from) || op.feed.done) return;
       if (typeof i !== "number" || !Number.isInteger(i) || i < 0 || i > 100000 || typeof s !== "number" || !Number.isFinite(s) || s < 0 || s > 3600) return;
+      const fop = this.frontOps.get(id);
+      if (fop && fop.ch.same(from) && !fop.sp.feed.done) return fop.sp.feed.cue(i, Math.round(s * SAMPLE_RATE));
+      const op = this.ttsOps.get(id);
+      if (!op || !op.ch.same(from) || op.feed.done) return;
       op.onWord?.(i, s);
     } else if (frame.t === "stt.turn_end") {
       const op = this.sttOps.get(id);
@@ -284,6 +431,7 @@ export class RemoteVoiceProvider implements VoiceProvider {
     } else if (frame.t === "stt.hint") {
       const op = this.sttOps.get(id);
       if (op && op.ch.same(from) && (frame.k === "pause" || frame.k === "question")) op.hint(frame.k);
+      else if (op && op.ch.same(from) && frame.k === "speech") op.speech();
     } else if (frame.t === "stt.trace") {
       // kept on the op itself (still reachable once the op settled: the room reads it at the listen's end)
       const op = this.sttOps.get(id);
@@ -307,6 +455,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
 
   /** A binary frame from the box: TTS audio for one of our requests. */
   onAudio(from: BoxChannel, header: AudioHeader, payload: Uint8Array): void {
+    const fop = this.frontOps.get(header.s);
+    if (fop && fop.ch.same(from)) {
+      fop.sp.feed.push(bytesToPcm16(payload));
+      return;
+    }
     const op = this.ttsOps.get(header.s);
     if (!op || !op.ch.same(from)) return;
     op.feed.push(bytesToPcm16(payload));
@@ -324,6 +477,10 @@ export class RemoteVoiceProvider implements VoiceProvider {
       if (only && !op.ch.same(only)) continue;
       op.settle(new Error(code));
     }
+    for (const op of [...this.frontOps.values()]) {
+      if (only && !op.ch.same(only)) continue;
+      op.end(new Error(code));
+    }
   }
 
   private sendQuiet(ch: BoxChannel, msg: JsonObject) {
@@ -333,4 +490,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
       /* the box is gone */
     }
   }
+}
+
+/** The box's ms object, numbers 0..3600000 only. */
+function cleanMs(v: Record<string, unknown>): JsonObject {
+  const out: JsonObject = {};
+  for (const [k, x] of Object.entries(v).slice(0, 8)) if (/^[a-z_]{1,32}$/.test(k) && typeof x === "number" && Number.isFinite(x) && x >= 0 && x <= 3600000) out[k] = Math.round(x);
+  return out;
 }

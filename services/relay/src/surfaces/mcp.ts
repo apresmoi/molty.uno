@@ -63,6 +63,10 @@ const KEEP: Prop = {
   type: "integer",
   description: "Optional, with an utterance's `opener`: your text is what follows the opener's first `keep` words (instead of starting with them word for word).",
 };
+const EXACT: Prop = {
+  type: "boolean",
+  description: "Only with the voice front on (the utterance has `front`): true = Molty's realtime voice says your text word for word. Default: it says your answer in its own short spoken words, keeping your facts.",
+};
 const IN_REPLY_TO: Prop = {
   type: "string",
   description: "The turn_id of the `utterance` you are answering (the human shook Molty and spoke). The first agent to answer a turn claims it; other agents get turn_claimed for 60 s. Adds timings.turn {id, reply, first_audio} (ms after the utterance).",
@@ -231,6 +235,7 @@ export const TOOLS: ToolDef[] = [
         voice: { type: "string", description: "Optional relay TTS voice (provider-specific, e.g. luna for Workers AI Aura)." },
         in_reply_to: IN_REPLY_TO,
         keep: KEEP,
+        exact: EXACT,
         client_timing: CLIENT_TIMING,
         wait: { type: "boolean", description: `true: block until spoken (at most ${TALK_BUDGET_MS / 1000} s, then {job, status:"pending"} for molty_wait).` },
       },
@@ -306,11 +311,23 @@ export const TOOLS: ToolDef[] = [
       voice: { type: "string", description: "Optional relay TTS voice." },
       in_reply_to: IN_REPLY_TO,
       keep: KEEP,
+      exact: EXACT,
       client_timing: CLIENT_TIMING,
       ...VAD_PROPS,
     }),
     auth: true,
     run: (api, t, a) => api.talk(t, a),
+  },
+  {
+    name: "molty_front",
+    description:
+      "The voice front (an utterance with `front` means it is on): a realtime voice model is Molty's outer voice and you are its inner voice. It already answered the person ({said, waiting}); you answer with facts through molty_talk / molty_say as usual and it speaks them. Here: context = facts it may use only if the person asks (it says nothing now); end: true = end the hands-free conversation (Molty stops listening). Returns {conversation, context?, ended?}, or {skipped:\"front_off\", reason} when the front is not serving.",
+    inputSchema: obj({
+      context: { type: "string", description: "Background for the front, at most 2000 characters, e.g. \"The deploy finished at 14:02, 3 warnings.\"" },
+      end: { type: "boolean", description: "true: end the conversation now." },
+    }),
+    auth: true,
+    run: (api, t, a) => api.command(t, "front", a),
   },
   {
     name: "molty_ask",
