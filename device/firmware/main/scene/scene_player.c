@@ -910,12 +910,15 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         switch (it->k) {
         case PK_RING:  ring(c, it, false); break;
         case PK_ARC:   ring(c, it, true); break;
-        case PK_TICKS:
+        case PK_TICKS: {
+            const int n0 = c->hd && c->hd->n >= 0 ? c->hd->n : 0;
             for (int q = 0; q < it->n; q++) {
                 const float a0 = (it->a0 + q * 360.f / it->n) * DEG, cx = cosf(a0), cy = sinf(a0);
                 segment(c, it->r * cx, it->r * cy, (it->r + it->len) * cx, (it->r + it->len) * cy, it->w * 0.5f, it->rgb);
             }
+            for (int q = n0; it->lead && c->hd && q < c->hd->n; q++) c->hd->shapes[q].tag = FLUID_TAG_LEAD;
             break;
+        }
         case PK_LINE:  path(c, pts, it->npts, false, it->w * 0.5f, it->rgb); break;
         case PK_CURVE: path(c, pts, it->npts, true, it->w * 0.5f, it->rgb); break;
         case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
@@ -1487,11 +1490,13 @@ void scene_wheel(scene_t *sc, const scene_wheel_t *w) {
 #define WAVE_SWELL_S 0.25f
 #define WAVE_MUTED  0.3f                /* a muted voice: this much of its colour                                  */
 #define WAVE_TOL    1.0f                /* px: the outline's strokes stay this close to its points, at first        */
-#define WAVE_RUN    30                  /* ... and never cross a multiple of this many (a change stays where it is)  */
+#define WAVE_SWELLS 2                   /* dots that swell or settle a frame (a hit's bounce, at most a frame late)     */
+#define WAVE_SWELL_DOTS 64
+#define WAVE_RUN    15                  /* ... and never cross a multiple of this many (a change stays where it is:
+                                         * 7.5 degrees, what the drawer remakes in a frame beside the rest)            */
 #define WAVE_STILL  1.5f                /* px: a point that moved less than this stays where it was drawn (a hit's tail
                                          * settles in steps: the strokes the screen sends again a frame stay few)       */
 #define WAVE_SNAP   0.6f                /* px: this near the circle it is the circle                                 */
-#define WAVE_RUNS   1                   /* stretches of the outline that move a frame for the most moved (a 24th of it) */
 #define WAVE_STROKE 0.018f              /* the outline's and the shapes' width: 4 px on the 1.75C (a thinner one is drawn as
                                          * the grid's hairline, 1 px, which the glass barely shows)                     */
 #define WAV_MAX_CORNERS 48               /* a voice's hits a turn, at most (wave_player.h WAV_MAX_N)                  */
@@ -1586,9 +1591,17 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
     sc->npts = sc->npts_fixed;
     /* the outline's points, and the radii last drawn (a point that barely moved stays: a still outline stays still,
      * a slow one redraws only behind the hand): PSRAM, once */
-    static struct { float xy[SCENE_WAVE_PTS + 1][2], last[SCENE_WAVE_PTS + 1]; int16_t keep[SCENE_WAVE_PTS + 1]; unsigned look; int turn; uint32_t line;
+    static struct { float xy[SCENE_WAVE_PTS + 1][2], last[SCENE_WAVE_PTS + 1], cs[SCENE_WAVE_PTS][2], sw[5][WAVE_SWELL_DOTS]; int16_t keep[SCENE_WAVE_PTS + 1];
+                    int nsw;
+                    unsigned look; int turn; unsigned tick; uint32_t line;
                     float corner[WAV_MAX_CORNERS][2], run[2 * WAV_MAX_CORNERS + 2][2]; } *scr;
-    if (!scr && !(scr = SCENE_CALLOC(sizeof(*scr)))) return;
+    if (!scr) {                                          /* (with the points' angles: the same floats as sinf, cosf each frame) */
+        if (!(scr = SCENE_CALLOC(sizeof(*scr)))) return;
+        for (int q = 0; q < SCENE_WAVE_PTS; q++) {
+            const float a = (90.f - 360.f * q / SCENE_WAVE_PTS) * DEG;
+            scr->cs[q][0] = cosf(a); scr->cs[q][1] = sinf(a);
+        }
+    }
     float (*xy)[2] = scr->xy;
     const scene_item_t W = sc->items[sc->wave];
     const float k = W.r / WAVE_RC, RC = W.r;
@@ -1611,7 +1624,7 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
             for (int q = 3; q >= 1; q--) beat_spoke(sc, deg + span * q / 3.f, WAVE_HAND0 * k, len, BEAT_HAIR, scale_rgb(0xffffffu, trail * (1.f - q / 4.f)), true);
             budget -= 3;
         }
-        if (crisp > 0.01f) { beat_spoke(sc, deg, WAVE_HAND0 * k, len, 0.03f, scale_rgb(0xffffffu, crisp), true); budget--; }
+        if (crisp > 0.01f) { beat_spoke(sc, deg, WAVE_HAND0 * k, len, 0.03f, scale_rgb(0xffffffu, crisp), true); budget--; sc->items[sc->nitems - 1].lead = true; }
     } else { beat_spoke(sc, 90.f, WAVE_HAND0 * k, RC * 0.97f - WAVE_HAND0 * k, 0.012f, BEAT_GRID, true); budget--; }
     scene_item_t *ring = beat_item(sc, PK_RING, true);
     if (ring) { ring->r = RC; ring->rgb = BEAT_GRID; }
@@ -1644,8 +1657,8 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
                                                              * a new colour is the whole outline drawn again) */
     scr->line = line;
     #define RAT(x) (scr->last[(int)lrintf(wfrac(x) * SCENE_WAVE_PTS)])   /* (the outline as drawn: a dot moves with it, never by less) */
-    /* what moves this frame: the outline's stretches (WAVE_RUN points, which no stroke crosses) that moved most, WAVE_STILL
-     * px or more, WAVE_RUNS of them, and the next one in turn that moved; the rest keep what was drawn and follow. What the screen
+    /* what moves this frame: the outline's stretch (WAVE_RUN points, which no stroke crosses) that moved most, WAVE_STILL
+     * px or more, or one frame in four the next one in turn that moved; the rest keep what was drawn and follow. What the screen
      * draws again a frame stays inside what its drawer makes in one (fluid_draw.c GLASS_CACHE_US) */
     const bool fresh = scr->look != sc->look;
     scr->look = sc->look;
@@ -1656,19 +1669,17 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
         most[g] = 0.f;
         for (int q = g * WAVE_RUN; q < (g + 1) * WAVE_RUN; q++) most[g] = fmaxf(most[g], fabsf(TARGET(q) - scr->last[q]));
     }
-    for (int pick = 0; pick < (fresh ? RUNS : w->still ? 0 : WAVE_RUNS + 1); pick++) {
+    const bool turn = (++scr->tick & 3) == 0;            /* (one frame in four: the next in turn, so none waits for long) */
+    for (int pick = 0; pick < (fresh ? RUNS : w->still ? 0 : 1); pick++) {
         int g = 0;
-        if (pick < WAVE_RUNS || fresh) for (int c = 1; c < RUNS; c++) { if (most[c] > most[g]) g = c; }
-        else for (int c = 0; c < RUNS; c++) { g = (scr->turn + c) % RUNS; if (most[g] >= WAVE_STILL / WAVE_PX) break; }   /* (and one in turn: none waits for long) */
+        if (!turn || fresh) for (int c = 1; c < RUNS; c++) { if (most[c] > most[g]) g = c; }
+        else for (int c = 0; c < RUNS; c++) { g = (scr->turn + c) % RUNS; if (most[g] >= WAVE_STILL / WAVE_PX) break; }
         if (most[g] < 0.f || (!fresh && most[g] < WAVE_STILL / WAVE_PX)) continue;
         for (int q = g * WAVE_RUN; q < (g + 1) * WAVE_RUN; q++) scr->last[q] = TARGET(q);
         most[g] = -1.f;
-        if (pick == WAVE_RUNS) scr->turn = (g + 1) % RUNS;
+        if (turn) scr->turn = (g + 1) % RUNS;
     }
-    for (int q = 0; q < SCENE_WAVE_PTS; q++) {
-        const float a = (90.f - 360.f * q / SCENE_WAVE_PTS) * DEG;
-        xy[q][0] = scr->last[q] * cosf(a); xy[q][1] = scr->last[q] * sinf(a);
-    }
+    for (int q = 0; q < SCENE_WAVE_PTS; q++) { xy[q][0] = scr->last[q] * scr->cs[q][0]; xy[q][1] = scr->last[q] * scr->cs[q][1]; }
     #undef TARGET
     scr->last[SCENE_WAVE_PTS] = scr->last[0];
     xy[SCENE_WAVE_PTS][0] = xy[0][0]; xy[SCENE_WAVE_PTS][1] = xy[0][1];
@@ -1683,13 +1694,14 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
         const float low = playing ? (nv > 1 ? -0.265f : -0.165f) : w->level == SCENE_WAVE_CHORDS ? -0.08f : -0.095f;
         box[0] = -half * k; box[1] = half * k; box[2] = (low - 0.5f * WAVE_STROKE) * k; box[3] = (0.23f + 0.5f * WAVE_STROKE) * k;
     }
+    scr->nsw = fresh ? -(5 * WAVE_SWELL_DOTS) : 0;       /* (a new look: every dot as it is) */
     for (int j = 0; j < nv; j++) {
         if (!dots[j]) continue;
         const int n = w->count[j] ? w->count[j] : 1;
         const float show = 1.f - (playing ? scene_wave_fuse(w->f[j]) : 0.f), ph = playing ? w->ph[j] : 0.f;
         const bool poly = shape[j] && n <= WAV_MAX_CORNERS;
         #define HIT_X(q, x, at) do { x = playing ? wfrac(h + ((q) - ph) / n) : (float)(q) / n; at = (int)lrintf(x * n); \
-            if (fabsf(x * n - at) < 1e-3f) x = (float)(at % n) / n; at = (at % n + n) % n; } while (0)
+            if (fabsf(x * n - at) < 1e-3f) { x = (float)(at % n) / n; } at = (at % n + n) % n; } while (0)
         for (int q = 0; poly && q < n; q++) {   /* its shape first, under its dots: corners on the circle (it stays still while
                                                  * its dots ride the wave; the screen never redraws its long edges for a shiver) */
             float x; int at;
@@ -1704,15 +1716,19 @@ void scene_wave(scene_t *sc, const scene_wave_t *w) {
             float x;
             int at;
             HIT_X(q, x, at);
-            (void)at;
             const float r = playing ? RAT(x) : RC, a = (90.f - 360.f * x) * DEG;
             float sw = 0.f;
             if (playing && !MUTED(j)) {
                 const float since = wfrac(h - x) / fc, inst = since < WAVE_SWELL_S ? (1.f - since / WAVE_SWELL_S) * (1.f - since / WAVE_SWELL_S) : 0.f;
                 const float P = 1.f / fc, m = fminf(P, WAVE_SWELL_S), u = 1.f - m / WAVE_SWELL_S, mean = WAVE_SWELL_S / (3.f * P) * (1.f - u * u * u);
-                sw = inst + (mean - inst) * wsmooth((fc - 2.f) / 4.f);
+                sw = inst + (mean - inst) * wsmooth((fc - 1.5f) / 1.5f);   /* (steady by 3 turns a second: past that a swell a hit is a redraw a frame) */
             } else if (!playing) sw = 0.8f * (w->pluck[j] ? w->env[j] : 0.f);
             sw = roundf(fminf(1.f, fmaxf(0.f, sw)) * 2.f) / 2.f;   /* (in two steps: a swelling dot is drawn again twice, not each frame) */
+            if (at < WAVE_SWELL_DOTS) {                  /* (WAVE_SWELLS change a frame, the rest the next: never a frame of them all) */
+                if (sw != scr->sw[j][at] && (w->still || scr->nsw >= WAVE_SWELLS)) sw = scr->sw[j][at];
+                else if (sw != scr->sw[j][at]) scr->nsw++;
+                scr->sw[j][at] = sw;
+            }
             beat_disc(sc, r * cosf(a), r * sinf(a), size * (1.f + 0.9f * sw), scale_rgb(col[j], fminf(1.f, show * 1.4f)),
                       true, playing && !MUTED(j) && show > 0.3f ? j : -1);
         }

@@ -282,7 +282,9 @@ typedef struct {
     const uint8_t *mask;               /* mask: 1-bit rows MSB first; char: 5 x 7 font rows */
     uint8_t tag;                       /* FLUID_TAG_*: what it is to the fine dust          */
 } fluid_shape_t;
-enum { FLUID_TAG_DRAWING, FLUID_TAG_CAPTION };   /* a caption letter forms from the dust (fluid_draw_opts_t.cap_reveal) */
+enum { FLUID_TAG_DRAWING, FLUID_TAG_CAPTION,     /* a caption letter forms from the dust (fluid_draw_opts_t.cap_reveal) */
+       FLUID_TAG_LEAD };                         /* a drawing's mover (a wave's hand): its cells drawn first, never owed for
+                                                  * the rest of a frame, so it moves whole each frame */
 
 /** A shape's own colour in the palette, rgb565 (not byte-swapped); 0: it erases. */
 uint16_t fluid_shape_565(const fluid_shape_t *sh, int palette);
@@ -597,6 +599,8 @@ typedef struct {
     uint8_t  *owe;                     /* N: over a kept glass, a changed cell whose cache had no room in its frame: drawn
                                         * (and sent) the next (fluid_draw_send2)                                        */
     int      hdc_next, nbuilt, nowed;   /* the cache made ahead from this cell on; cells made, owed this frame (the log) */
+    int      owe_k;                     /* where in its order the cache first ran out last frame: it starts there next */
+    bool     morphed;                   /* the last frame's diff was a change's pass (fluid_draw_cells)            */
     int      ndrawn;                   /* this frame: px of changed cells drawn into the kept glass (the bench)        */
     int      move_us, cache_us, draw_us;   /* this frame: the dust moved alone, the drawing's cache made, the changed cells drawn
                                            * into the glass (the three parts of cmp; the bench) */

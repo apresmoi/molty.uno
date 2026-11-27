@@ -843,7 +843,14 @@ static struct {
     int wlevel;                                        /* a wave's: the level its labels are of (wave.h WAVE_AT_*) */
 } s_wh;
 static atomic_int s_ticks;                             /* clicks the motor has not ticked yet               */
-#define WAVE_LAND_TICK (40 << 8 | 100)                 /* a wave landing on the chosen note's octave: a longer, firmer tick */
+/* a wave up: the dust under it holds still (its drift and its light would send a third of the panel every frame, which a
+ * wave's motion needs: wave_frame) */
+static bool s_dust_hold;
+/* while a wave shows, over its last 300 frames (the `wave.frames` log line): frames, those held still for the drawer's
+ * backlog (the same picture again), those late (over 37.5 ms since the one before), the most cells the drawer owed */
+static int s_wave_n, s_wave_held, s_wave_late, s_wave_owed;
+#define WAVE_LAND_TICK (40 << 8 | 100)
+#define WAVE_HEAVY_US  6000            /* a frame's drawing cache past this: the wave's hand and rest take turns */
 static atomic_int s_tick_plan;                         /* their dial's tick: ms << 8 | percent (0: the motor's own) */
 static mole_ring_evt_t s_ring_evt;                     /* s_mutex */
 static bool s_ring_evt_on;
@@ -1259,6 +1266,7 @@ static void wave_frame(float rdt) {
     scene_t *sc = s_cur == ST_SCENE ? s_sp.cur : NULL;
     const bool shown = sc && sc->wave >= 0, active = wave_active();
     static unsigned seen_gen;                          /* the scene whose circle showed a chord */
+    s_dust_hold = shown;
     wave_orphan(shown, rdt);
     if (shown && active) seen_gen = s_sp.gen;
     if (shown && !active && seen_gen == s_sp.gen) { seen_gen = 0; scene_event("end", NULL); scene_clear(&s_sp); return; }
@@ -1267,16 +1275,27 @@ static void wave_frame(float rdt) {
     if (!f && !(f = heap_caps_calloc(1, sizeof(*f), MALLOC_CAP_SPIRAM))) return;
     rhythm_view_ahead(s_view_ahead_us);
     scene_wave_t *w = &f->w;
-    /* the glass behind (the drawer owed cells last frame: a new chord, a new level, much of the wave at once): the same
-     * picture again, still, until it caught up. Moving on would pile more on what it owes, and the glass would show old
-     * and new pieces mixed for as long as it moved */
-    if (w->on && s_draw && s_draw->nowed > 0) { w->still = true; scene_wave(sc, w); return; }
-    /* while the hand shows, it moves on a frame of its own, the rest the frame after: a frame that moves it holds little
-     * else, so the drawer takes its old place and its new one whole, never one piece of each */
+    s_wave_n++;
+    if (rdt > 0.0375f) s_wave_late++;
+    if (s_draw && s_draw->nowed > s_wave_owed) s_wave_owed = s_draw->nowed;
+    if (s_wave_n >= 300) {                             /* (now and then while it shows: /api/log) */
+        mole_diag_event(false, "wave.frames n=%d held=%d late=%d owed_max=%d", s_wave_n, s_wave_held, s_wave_late, s_wave_owed);
+        s_wave_n = s_wave_held = s_wave_late = s_wave_owed = 0;
+    }
+    /* The hand moves every frame, its cells first in the drawer (FLUID_TAG_LEAD: never owed, never in two pieces), the
+     * rest with it while the drawer has room. A frame its cache found heavy (WAVE_HEAVY_US: a chord's many dots and
+     * strokes under the hand), or one that left cells owed, and the hand and the rest take turns, a frame each: the rest
+     * (the same picture again, still) while the drawer catches up, the hand on the next; never more piled on what it
+     * owes, old and new pieces mixed for as long as it moved */
     static bool hand_turn;
-    hand_turn = !hand_turn;
-    if (hand_turn && w->on && w->level == SCENE_WAVE_PLAYING && scene_wave_fuse(w->f[0]) < 0.99f && wave_now(&f->s)) {
-        w->hand = f->s.v.H; w->still = true;
+    static int owed_was;                               /* (what it owed the frame before: owing no less, the hand waits too) */
+    const int nowed = s_draw ? s_draw->nowed : 0;
+    const bool owed = nowed > 0, heavy = owed || (s_draw && s_draw->cache_us > WAVE_HEAVY_US);
+    hand_turn = heavy && !hand_turn && !(owed && nowed >= owed_was);
+    owed_was = nowed;
+    if (w->on && (owed || hand_turn)) {
+        if (hand_turn && w->level == SCENE_WAVE_PLAYING && scene_wave_fuse(w->f[0]) < 0.99f && wave_now(&f->s)) w->hand = f->s.v.H;
+        w->still = true; s_wave_held += !hand_turn;           /* (the same picture again) */
         scene_wave(sc, w);
         return;
     }
@@ -1285,6 +1304,7 @@ static void wave_frame(float rdt) {
     w->hand = hand;
     if (wave_now(&f->s)) {
         const wave_screen_t *s = &f->s;
+        if (scene_wave_fuse(s->v.f[0]) < 0.99f) w->hand = s->v.H;
         w->on = true; w->level = s->level; w->nv = s->nv; w->muted = s->v.mute; w->H = s->v.H; w->fc = s->v.fc;
         for (int j = 0; j < WAV_VOICES; j++) { w->count[j] = s->count[j]; w->rgb[j] = s->rgb[j]; w->ph[j] = s->v.ph[j]; w->f[j] = s->v.f[j]; w->env[j] = s->v.env[j]; w->pluck[j] = s->v.pluck[j]; }
         if (s->t) {
@@ -2076,6 +2096,28 @@ const char *const MOLE_ANIM_PART_NAMES[MOLE_ANIM_PARTS] = {
 _Static_assert(10 + FLUID_MP_N == MOLE_ANIM_PARTS, "the bench's parts: the frame's ten and the change's own");
 static uint32_t s_touch_us;                         /* the drawer's touch polls since the last fine log line (us) */
 static volatile uint32_t s_sim_work_us;             /* the sim's last frame's own work (sim_frame, the dust's build in it) */
+/* The touch poll, its own task: a read of the touch chip waits ~1.5 ms on the shared I2C bus, which in the drawer's frame
+ * was 1.5 ms of every frame. Woken by the drawer as a frame starts (frames flow: the screen is up), at most every
+ * FLUID_TOUCH_US; made once, it waits for the drawer while there is none */
+static TaskHandle_t s_ttask;
+static void touch_poll(int64_t *last) {
+    const int64_t t0 = esp_timer_get_time();
+    if (t0 - *last < FLUID_TOUCH_US) return;
+    uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
+    const uint32_t bt = atomic_exchange(&s_bench_touch, 0);   /* (the bench's finger: down for one poll) */
+    const int n = bt ? (xs[0] = (uint16_t)(bt >> 16 & 0x7FFF), ys[0] = (uint16_t)(bt & 0xFFFF), 1) : molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
+    s_touch_us += (uint32_t)(esp_timer_get_time() - t0);   /* (for the fine log's tp=) */
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
+    xSemaphoreGive(s_mutex);
+    *last = t0;
+}
+static void touch_task(void *arg) {
+    (void)arg;
+    int64_t last = 0;
+    for (;;) { touch_poll(&last); ulTaskNotifyTake(pdTRUE, portMAX_DELAY); }
+}
+
 static void draw_task(void *arg) {
     (void)arg;
     esp_err_t wdt_err = esp_task_wdt_add(NULL);
@@ -2093,16 +2135,8 @@ static void draw_task(void *arg) {
         int64_t t0 = esp_timer_get_time();
         atomic_store(&s_pres_t, 0);                     /* (the sender is idle: drained at the last frame's end) */
         int64_t touch_t = s_dtouch; s_dtouch = 0;
-        if (t0 - last_touch >= FLUID_TOUCH_US) {        /* for the sim's next frame */
-            uint16_t xs[MOLTY_TOUCH_MAX_POINTS] = { 0 }, ys[MOLTY_TOUCH_MAX_POINTS] = { 0 };
-            const uint32_t bt = atomic_exchange(&s_bench_touch, 0);   /* (the bench's finger: down for one poll) */
-            const int n = bt ? (xs[0] = (uint16_t)(bt >> 16 & 0x7FFF), ys[0] = (uint16_t)(bt & 0xFFFF), 1) : molty_touch_poll(xs, ys, MOLTY_TOUCH_MAX_POINTS);
-            s_touch_us += (uint32_t)(esp_timer_get_time() - t0);   /* (the poll's share of the cells, for the fine log) */
-            xSemaphoreTake(s_mutex, portMAX_DELAY);
-            s_tp = (touch_read_t){ n, xs[0], ys[0], t0, s_tp.seq + 1 };
-            xSemaphoreGive(s_mutex);
-            last_touch = t0;
-        }
+        if (s_ttask) xTaskNotifyGive(s_ttask);          /* the touch poll, for the sim's next frame, beside this one */
+        else touch_poll(&last_touch);
         uint16_t *fb = molty_display_framebuffer();   /* NULL: the display is down */
         int nc = 0;
         int ds = s_dstatus, mark = ds > 0 && ds < FD_STATUS_COUNT ? MARK[ds] : FLUID_MARK_NONE;
@@ -2661,7 +2695,7 @@ static void fluid_task(void *arg) {
             fo.palette = cfg.palette; fo.time = s_tnow; fo.shapes = s_shp; fo.nshapes = s_nshp; fo.kdots = s_kdots; fo.cap_word = s_cap_word;
             fo.cap_unformed = s_cap_word && FINE_REVEAL_S > 0.f ? fmaxf(0.f, 1.f - (s_tnow - s_cap_t0) / (FINE_REVEAL_S + 1e-6f)) : 0.f;
             fluid_fine_caption_box(s_fine, s_cap_box_on ? s_cap_box : NULL);
-            s_fine->pause = false;
+            s_fine->hold = s_fine->pause = s_dust_hold;
             fluid_fine_frame_ahead(s_fine, &fv, &fo);
         }
         const int64_t tb0 = esp_timer_get_time();
@@ -2930,7 +2964,7 @@ static void fluid_task(void *arg) {
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
             const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
                             !fluid_draw_morphing(s_draw) && fluid_fine_dust_kind_get() == FINE_DUST_SPECKS;
-            if (go && !s_fine->bready) { s_fine->pause = false; fluid_fine_frame_ahead(s_fine, s_frame, &s_dopts); atomic_store(&s_fine_boot_seen, true); }
+            if (go && !s_fine->bready) { s_fine->pause = s_fine->hold; fluid_fine_frame_ahead(s_fine, s_frame, &s_dopts); atomic_store(&s_fine_boot_seen, true); }
             fluid_fine_publish(s_fine, go);
             s_fine_go = go;
         }
@@ -3156,6 +3190,10 @@ esp_err_t mole_fluid_creature_init(void) {
         free_grid();
         return ESP_ERR_NO_MEM;
     }
+    /* the touch poll on core 0 above the drawer (it waits on the bus, the drawer runs meanwhile); a PSRAM stack, as the
+     * sense task's that reads the IMU on the same bus. Made once: no frames, no polls */
+    if (!s_ttask && xTaskCreatePinnedToCoreWithCaps(touch_task, "fluid_touch", 3072, NULL, 3, &s_ttask, 0, MALLOC_CAP_SPIRAM) != pdPASS)
+        s_ttask = NULL;
     mole_diag_set_calm(fluid_calm_ms);
     if (xTaskCreatePinnedToCore(fluid_task, "fluid_task", 6144, NULL, 2, &s_task, 1) != pdPASS) {
         s_run = false; s_task = NULL;

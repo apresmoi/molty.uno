@@ -818,8 +818,9 @@ esp_err_t link_audio_init(void)
         if (xTaskCreatePinnedToCoreWithCaps(up_task, "link_up", 6144, NULL, 4, NULL, tskNO_AFFINITY,
                                             MALLOC_CAP_SPIRAM) != pdPASS) return ESP_ERR_NO_MEM;
     }
-    /* PSRAM stack: no flash ops on this task; internal RAM is the scarce one */
-    return xTaskCreatePinnedToCoreWithCaps(audio_task, "link_audio", 6144, NULL, 4, NULL, tskNO_AFFINITY,
+    /* PSRAM stack: no flash ops on this task; internal RAM is the scarce one. On core 1, beside the sim (which waits on
+     * the panel's pulse a third of each frame): unpinned it took a quarter of core 0, the drawer's, under a chord */
+    return xTaskCreatePinnedToCoreWithCaps(audio_task, "link_audio", 6144, NULL, 4, NULL, 1,
                                            MALLOC_CAP_SPIRAM) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 

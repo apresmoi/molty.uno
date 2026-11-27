@@ -76,6 +76,7 @@ typedef struct {
     int8_t lst; uint8_t eln;            /* the list param it was repeated over (-1 none) and which element */
     bool live;                          /* drawn anew each frame (a beat's hand, its swelling hits): a shape only,
                                          * never in the kept dots, the fine dust or a key                         */
+    bool lead;                          /* ... its shapes the screen's mover (FLUID_TAG_LEAD: a wave's hand)       */
     int8_t layer;                       /* a beat's hit: its layer (a tap mutes it), else -1                      */
     /* a dial: a click every step degrees adds by (fast turning fast) to val, vmin..vmax; or steps through its labels
      * (nlab of them, in scene_t.say from lab, '\n' between); sets the beat player's (1 tempo, 2 pick); on face 0 or 1;

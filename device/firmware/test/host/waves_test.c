@@ -302,8 +302,24 @@ static float hand_at(void) {
     for (int q = sc ? sc->nfixed : 0; sc && q < sc->nitems; q++) if (sc->items[q].k == PK_TICKS && sc->items[q].w == 0.03f) return sc->items[q].a0;
     return -999.f;
 }
-static int s_torn, s_moves;            /* frames that moved the hand and left cells for the next (a hand in two pieces for a
-                                        * frame), of the frames that moved it                                               */
+static int s_torn, s_moves;            /* frames that moved the hand and showed a pixel of it wrong (a hand in two pieces for
+                                        * a frame), of the frames that moved it                                             */
+/* a pixel of the hand (the core of a stroke tagged FLUID_TAG_LEAD, its drawer's mover) the panel shows wrong */
+static bool hand_wrong(const uint16_t *ref) {
+    for (int q = 0; q < s_dopts.nshapes; q++) {
+        const fluid_shape_t *sh = &s_dopts.shapes[q];
+        if (sh->tag != FLUID_TAG_LEAD || sh->k != FLUID_SHAPE_SEG) continue;
+        int16_t b[4];
+        fluid_shape_box(sh, s_draw->ox, s_draw->oy, b);
+        const float vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
+        for (int y = b[2] < 0 ? 0 : b[2]; y < b[3] && y < S; y++) for (int x = b[0] < 0 ? 0 : b[0]; x < b[1] && x < S; x++) {
+            const float px = x - s_draw->ox + 0.5f - sh->x, py = y - s_draw->oy + 0.5f - sh->y;
+            const float u = l2 > 0.f ? fminf(1.f, fmaxf(0.f, (px * vx + py * vy) / l2)) : 0.f, ex = px - u * vx, ey = py - u * vy;
+            if (ex * ex + ey * ey <= (sh->hw - 1.f) * (sh->hw - 1.f) && s_rgba_of[ref[y * S + x]] != s_rgba[y * S + x]) return true;
+        }
+    }
+    return false;
+}
 static int glass_lag(int nframes) {
     static uint16_t ref[S * S], age[S * S];
     memset(age, 0, sizeof age);
@@ -312,13 +328,14 @@ static int glass_lag(int nframes) {
     for (int f = 0; f < nframes; f++) {
         frames(1);
         const float now = hand_at();
-        s_torn += now != hand && s_draw->nowed > 0;
-        s_moves += now != hand && now > -999.f;
+        const bool moved = now != hand && now > -999.f;
+        s_moves += moved;
         hand = now;
         if (fluid_draw_morphing(s_draw)) continue;
         const fluid_rect_t t = { ref, S, 0, 0, S, S };
         fluid_draw_rect(s_draw, &s_dopts, &t, true);
         fluid_draw_overlay(s_draw, &t, s_dopts.palette, &s_kept.ov);
+        s_torn += moved && hand_wrong(ref);
         for (int q = 0; q < S * S; q++) { age[q] = s_rgba_of[ref[q]] != s_rgba[q] ? age[q] + 1 : 0; if (age[q] > oldest) oldest = age[q]; }
     }
     return oldest;
@@ -347,36 +364,52 @@ static void test_glass(void) {
 }
 
 /* ── cost: the 1.75C's frame in the device model ───────────────────────────────────────────────────────────────── */
+/* the device's time for a frame (device mode), calibrated on the 1.75C's own logs (research/fps, 2026-11-27): the model
+ * counts the drawer's cells pass flat (web_device.c DEV_CELLS_MS) but on the device that pass also makes the drawing's
+ * cache of every changed cell (`anim ... cache=9.0`: the cells pass 14 to 27 ms while the hand sweeps): here it is the
+ * model's frame or its cells, cache and send in a row, whichever is longer. Also, in percent, the frames over 34 ms
+ * (a third refresh: the device's `frames.sim` histogram past its <=34 bucket; the cache is timed by this computer's
+ * clock 100 times over, DEV_CPU_X, so a hiccup of its scheduler is a frame 10 ms longer) and those held for the
+ * drawer's backlog (the same picture again: a stutter) */
+static double s_held, s_over;
 static double device_ms(bool turn, double *worst) {
     wm_device(1);
     double sum = 0.;
-    int n = 0;
+    int n = 0, held = 0, was = s_wave_held;
+    int over = 0;
     *worst = 0.;
     for (int q = 0; q < 240; q++) {
         const float an = (90.f - q * 2.f) * 0.017453293f;
         if (turn) touch_at(1, 0.93f * cosf(an), 0.93f * sinf(an));
         wm_frame(DT);
-        const float ms = wm_frame_info()[FI_FRAME_MS];
-        if (q >= 30) { sum += ms; n++; if (ms > *worst) *worst = ms; }
+        const float *fi = wm_frame_info();
+        const double ms = fmax(fi[FI_FRAME_MS], fi[FI_CELLS_MS] + s_draw->cache_us / 1000. + fi[FI_SEND_MS]);
+        if (q >= 30) held += s_wave_held - (s_wave_held < was ? 0 : was);   /* (mole_fluid.c wave_frame: the same picture again) */
+        was = s_wave_held;
+        if (q >= 30) { sum += ms; n++; over += ms > 34.; if (ms > *worst) *worst = ms; }
     }
     if (turn) touch_at(0, 0.f, 0.f);
     wm_device(0);
+    s_held = 100. * held / n; s_over = 100. * over / n;
     return sum / n;
 }
 static void test_cost(void) {
     wm_scene_clear(); frames(120);
-    double w0, w1, w2, w3, w4;
-    const double creature = device_ms(false, &w0);
+    double w[6], h[6], o[6];
+    const double creature = device_ms(false, &w[0]);
     show(); play("major", "\"midi\":60"); frames(60);
-    const double note = device_ms(false, &w1);
-    play("major", "\"midi\":12"); frames(60);
-    const double slow = device_ms(false, &w2);
+    const double note = device_ms(false, &w[1]); h[1] = s_held; o[1] = s_over;
+    play("major", "\"hz\":4.1"); frames(60);
+    const double slow = device_ms(false, &w[2]); h[2] = s_held; o[2] = s_over;
     play("alone", "\"midi\":31"); frames(60);   /* 49 Hz: through the hand-over while it turns */
-    const double turn = device_ms(true, &w3);
+    const double turn = device_ms(true, &w[3]); h[3] = s_held; o[3] = s_over;
     play("major", "\"midi\":24"); frames(60);   /* the zone where the hand blurs and the shivers close */
-    const double zone = device_ms(false, &w4);
-    printf("  device  the 1.75C's model, ms a frame (worst): the creature %.1f (%.1f); C major as a note %.1f (%.1f), slow %.1f (%.1f), in the zone %.1f (%.1f); one voice turning %.1f (%.1f)\n",
-           creature, w0, note, w1, slow, w2, zone, w4, turn, w3);
+    const double zone = device_ms(false, &w[4]); h[4] = s_held; o[4] = s_over;
+    play("alone", "\"hz\":1"); frames(60);
+    const double beat = device_ms(false, &w[5]); h[5] = s_held; o[5] = s_over;
+    printf("  device  the 1.75C, calibrated, ms a frame (worst; over 34 ms, held): the creature %.1f (%.1f); C major as a note %.1f (%.1f; %.0f%%, %.0f%%), "
+           "slow %.1f (%.1f; %.0f%%, %.0f%%), in the zone %.1f (%.1f; %.0f%%, %.0f%%); one beat a second %.1f (%.1f; %.0f%%, %.0f%%); one voice turning %.1f (%.1f; %.0f%%, %.0f%%)\n",
+           creature, w[0], note, w[1], o[1], h[1], slow, w[2], o[2], h[2], zone, w[4], o[4], h[4], beat, w[5], o[5], h[5], turn, w[3], o[3], h[3]);
     /* the sim task's own share (the model counts it flat): the trace and the items, timed here, times the device's
      * slowness (web_device.c DEV_CPU_X) */
     play("7-sharp-9", "\"midi\":36"); frames(60);
@@ -388,7 +421,11 @@ static void test_cost(void) {
     printf("  sim     the trace and the items of a five-voice chord: %.0f us a frame here, about %.1f ms on the device (x%.0f)\n", us, us * DEV_CPU_X / 1000., DEV_CPU_X);
     CHECK(us * DEV_CPU_X / 1000. + DEV_SIM_MS < 30., "with the sim's own work, under the 30 ms frame");
     const double floor_ms = 1000. / 30.;
-    CHECK(note <= floor_ms && slow <= floor_ms && turn <= floor_ms && zone <= floor_ms, "30 frames a second at least: %.1f, %.1f, %.1f, %.1f ms", note, slow, zone, turn);
+    CHECK(note <= floor_ms && slow <= floor_ms && turn <= floor_ms && zone <= floor_ms && beat <= floor_ms, "30 frames a second at least: %.1f, %.1f, %.1f, %.1f, %.1f ms", note, slow, zone, beat, turn);
+    double late = 0.;
+    for (int q = 1; q < 6; q++) late = fmax(late, o[q]);
+    CHECK(late <= 3., "a third refresh at most 3 frames in 100 while it moves (the diagnosis's 97%% bound): at most %.0f%%", late);
+    CHECK(h[1] + h[3] + h[5] == 0. && h[2] <= 25. && h[4] <= 25., "held for the backlog: none for a note, a beat or a turn, at most a frame in four for a slow chord (%.0f, %.0f%%)", h[2], h[4]);
     wm_rhythm("wave.stop", NULL); frames(60);
 }
 
