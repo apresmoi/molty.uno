@@ -469,6 +469,9 @@ enum { FLUID_MD_OLD, FLUID_MD_PASS, FLUID_MD_READY, FLUID_MD_DUST, FLUID_MD_PAIR
                                                          * between them nothing moved or the clock stood) */
        FLUID_MD_LIN0, FLUID_MD_LINF,                    /* (the first frame a new line showed, all of them) */
        FLUID_MD_FRAMES, FLUID_MD_N };
+/** A letter as the drawer draws it: its 5 x 7 glyph (or a symbol's mask) in box (x, y, w, h), colour c (rgb565 BE),
+ *  clipped to the px of its cells [cx0, cx1) x [cy0, cy1). */
+typedef struct { const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1; } fluid_glyph_t;
 typedef struct fluid_morph_mem fluid_morph_mem_t;  /* (fluid_draw.c: the two pictures' grains and lines, the pairs) */
 typedef struct {
     bool     on;
@@ -525,6 +528,13 @@ typedef struct {
     int      pace[5];                  /* (fluid_task's alone, for the log "change pace": refreshes lost at its pace while
                                         * a change ran; for the latest, how late it was there, its job's room, the drawer's
                                         * lateness at the handoff before; the drawer's most, us)                        */
+    uint8_t  *wm, *wm2;                /* N: the cells of a say's words drawn live over it (fluid_draw_opts_t.words): the
+                                        * change never writes there; the next frame's (scratch)                       */
+    int      wn;                       /* .. how many (0: none)                                                       */
+    fluid_glyph_t *wg;                 /* .. their letters this frame (FLUID_MAX_LETTERS)                               */
+    uint32_t wsig;                     /* .. the letters as drawn there (a hash)                                       */
+    uint8_t  qrate, qrate_next;        /* its clock's quarter frames a frame when quicker than a scene's (a say's words
+                                        * coming or going: fluid_draw_morph_quick; 0: as approved, 4); the next change's */
     fluid_morph_mem_t *jmm;            /* the change that task reads for (set and cleared at the handoff only)          */
     fluid_morph_mem_t *jfree;          /* changes ended in the drawer's frame while that task had them: freed at the handoff */
 } fluid_morph_t;
@@ -536,6 +546,7 @@ typedef struct { int wait, fly, landed, spare, born, born_landed, old_lines, new
 /* animations the drawer tells apart (fluid_draw_t.anim_*): each frame, which had cells change, and which of those
  * had any change left unsent (none may) */
 enum { FLUID_ANIM_WAVE, FLUID_ANIM_GROW, FLUID_ANIM_WORD, FLUID_ANIM_WATER, FLUID_ANIM_N };
+
 
 typedef struct {
     int W, H;
@@ -590,10 +601,10 @@ typedef struct {
     int      move_us, cache_us, draw_us;   /* this frame: the dust moved alone, the drawing's cache made, the changed cells drawn
                                            * into the glass (the three parts of cmp; the bench) */
     int      nsh0;
-    struct {                           /* this frame's condensed letters, ready to draw   */
-        const uint8_t *gl, *mask; uint16_t c, mw, mh; int16_t x, y, w, h, cx0, cy0, cx1, cy1;
-    } lt[FLUID_MAX_LETTERS];
+    fluid_glyph_t lt[FLUID_MAX_LETTERS];   /* this frame's condensed letters, ready to draw   */
     int nlt;
+    bool words_whole;                  /* this frame's letters (a say's words: fluid_draw_opts_t.words) all on the glass
+                                        * whole (none: false)                                                        */
     void *block;
     bool force;                        /* redraw every cell next frame                    */
     fluid_morph_t m;                   /* the whole picture changing, as dust (fluid_draw_morph_look) */
@@ -661,6 +672,9 @@ typedef struct {
                                         * wm_haze; never the device): each of its dots reseeded at its own moment ..  */
     float haze_water[2];               /* .. and the water moves its dots, its slope taken these many times across and
                                         * down (wm_haze_water: as far as the page's dust moves; 0: still)          */
+    bool  words;                       /* the letters are a say's words: over a change of picture they are drawn as they
+                                        * are, live, in their cells (the change never writes there), never read into its
+                                        * new picture (fluid_draw_morph_*)                                           */
 } fluid_draw_opts_t;
 
 /* crisp dots' interlace: frame n of the dots' maker, its water's rows taking turns over m frames (2..9) */
@@ -724,6 +738,10 @@ void fluid_draw_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
  *  A look that differs only by FLUID_LOOK_DUST changes nothing while a change runs; gained afterwards, its dust comes.
  *  A new look starts a change; the inputs are the new look's from the same frame. */
 void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool ready);
+/** Before fluid_draw_morph_look, each frame: a change that starts now runs its dissolve in dur_s seconds (its clock that
+ *  much quicker than a scene's 1.12 s: a say's words coming or going); 0: as approved. A change keeps the pace it started
+ *  with. Its first frames, that read its pictures (two or three), come before. */
+void fluid_draw_morph_quick(fluid_draw_t *d, float dur_s);
 /** The glass is empty (snap cleared, black): the next look gathers from it (FLUID_LOOK_EMPTY), on the change's short clock
  *  (from MP_BORN0: ~0.65 s). With the drawer idle; a change running ends. */
 void fluid_draw_morph_empty(fluid_draw_t *d, uint16_t *snap);

@@ -345,6 +345,25 @@ static unsigned s_dask;                         /* ...the question a tap on it m
 /* the question a tap may answer on the frame last flushed to the panel (0 none): written
  * by the drawer after each flush, read by the touch path (mole_fluid_ask_shown) */
 static atomic_uint s_glass_ask;
+/* A say's words on the glass (link_audio's gate: nothing is spoken before the screen can show it). The sim tags the frame it
+ * hands over with the reader's say and word (s_dword: SAY_TAG); the drawer, once that frame is on the panel with its
+ * letters whole, publishes the tag (s_glass_word), counts the say's words shown (s_glass_n) and when its first one was
+ * (s_glass_t0, us). s_words_away: the reader's words will not show now (a question or a scene over them, the glass going
+ * dark): nothing to wait for. */
+#define SAY_TAG(ver, word) (0x80000000u | ((uint32_t)(ver) & 0x7FFFFu) << 12 | ((uint32_t)(word) & 0xFFFu))
+#define SAY_TAG_VER(t)     ((t) >> 12 & 0x7FFFFu)
+#define SAY_TAG_WORD(t)    ((t) & 0xFFFu)
+static uint32_t s_dword;
+static atomic_uint s_glass_word, s_glass_n, s_glass_t0;
+static atomic_bool s_words_away;
+/* The say on the screen, for its one log line ("say ...", when its words leave the glass): what link_audio told of its
+ * voice (under s_mutex: when its first sound went to the speaker, how long that waited for the glass, the words the
+ * speaker reached) and what the sim saw (the change that brought its words: frames, ms). */
+typedef struct { unsigned ver; int64_t sound_us; int gate_ms, spoken; } say_in_t;
+static say_in_t s_say_in = { .ver = ~0u, .spoken = -1 };
+typedef struct { unsigned ver; int words, chg_f, chg_ms; bool on, logged; } say_log_t;
+static say_log_t s_say_log;
+static atomic_uint s_glass_last;                /* (the drawer's last say word whole on the panel: whose s_glass_n is) */
 
 static fluid_director_t s_dir;                 /* states, moods, idle life, status  */
 static int   s_cur = ST_CREATURE;               /* the state the sim is drawing (none loaded: nothing) */
@@ -547,11 +566,55 @@ static void read_text(const char *text, int len) {
     s_rd_on = s_rd->n > 0;
 }
 
+static float s_word_t = -1e9f;                  /* when the reader last showed a word (its clock, s_tnow) */
 static void show_word(int idx) {
     const ftok_t *t = &s_toks[idx];
     fluid_text_set_word(s_tx, s_sim, s_ttext + t->off, t->len, t->orp);
     if (s_tint) tint_letters();
+    s_word_t = s_tnow;
 }
+
+/* The say's one log line, as its words leave the glass (back to the creature, or another say's in their place): its words,
+ * those the speaker reached (link_audio's cues; - with none), those whole on the panel, its first one's time on the glass
+ * against its first sound (want <= 34 ms), how long that sound waited for it (the gate), and the change that brought them
+ * (frames, ms; 0f: none, the words came over words). */
+static void say_log(void) {
+    if (!s_say_log.on || s_say_log.logged || (s_cur == ST_TEXT && (unsigned)s_seen_ver == s_say_log.ver)) return;
+    s_say_log.logged = true;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    const say_in_t in = s_say_in;
+    xSemaphoreGive(s_mutex);
+    const bool mine = SAY_TAG_VER(atomic_load(&s_glass_last)) == (s_say_log.ver & 0x7FFFFu), heard = in.ver == s_say_log.ver;
+    char spoken[12] = "-", first[24] = "-", gate[24] = "-";
+    if (heard && in.spoken >= 0) snprintf(spoken, sizeof(spoken), "%d", in.spoken);
+    if (heard && mine) snprintf(first, sizeof(first), "%+dms", (int)((int32_t)(atomic_load(&s_glass_t0) - (uint32_t)in.sound_us) / 1000));
+    if (heard) snprintf(gate, sizeof(gate), "%dms", in.gate_ms);
+    mole_diag_event(false, "say words=%d spoken=%s shown=%d first=%s gate=%s into=%df/%dms", s_say_log.words, spoken,
+                    mine ? (int)atomic_load(&s_glass_n) : 0, first, gate, s_say_log.chg_f, s_say_log.chg_ms);
+}
+
+/* ── A say's words on the glass: the rules in one place ──
+ * - Nothing is spoken before the screen can show it: the voice's first sound waits for its first word on the glass
+ *   (link_audio.c SAY_GATE_MS at most; mole_fluid_text_shown), and each later word is drawn the frame the speaker reaches
+ *   it, a change of picture or not (fluid_draw_opts_t.words: drawn live over the change, its dust around them).
+ * - They come and go by a quick change, WORDS_IN_S and WORDS_OUT_S (the dissolve's own length; its first two or three
+ *   frames, that read its pictures, come before), the fluid under it held still.
+ * - Back to the creature: once the voice is over, the change that brought them has ended, and the last word was readable
+ *   WORDS_LAST_S. A filler takes the screen as any say does: its words are shown, its way back waits for the change into
+ *   them (never turned back in mid-flight). */
+#define WORDS_LAST_S 0.4f
+/* (tried on the host player at true speed, 0.25 to 0.7 s: at 0.25 the cloud never forms, the cat goes out in four frames
+ * of scatter, close to a cut; at 0.35 the dust still leaves, swirls and settles round the word; the cat coming back
+ * reads as gathering, its lines arriving over frames, from about 0.45) */
+#ifndef WORDS_IN_S
+#define WORDS_IN_S   0.35f               /* the creature to a say's words: ~13 frames, 0.43 s with the two that read it */
+#endif
+#ifndef WORDS_OUT_S
+#define WORDS_OUT_S  0.45f               /* a say's words back to the creature: ~15 frames, 0.5 s */
+#endif
+/* the text state shows a say's words (not the boot word, not the goodbye's): the drawer draws them live over a change */
+static bool say_words(void) { return s_cur == ST_TEXT && !s_word_dots && !fd_bye_word(&s_dir); }
+
 
 static cJSON *gestures_json(uint32_t packed) {
     cJSON *o = cJSON_CreateObject();
@@ -572,6 +635,22 @@ static void motion(void) {
 static void ripple(float x, float y, float strength, float radius) {
     motion();
     fluid_sim_impulse(s_sim, x, y, strength, radius);
+}
+
+/* following a say: each word when the speaker reaches it (link_audio's cues), never on the reader's own clock; once the
+ * say is over, the clock takes the rest. True: a word came (its letters are the reader's now) */
+static bool reader_follow(const fluid_cfg_t *cfg) {
+    const int t = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1;
+    bool came = false;
+    if (t >= 0 && (t > s_word || s_text_hidden)) {
+        if (t > s_word) s_word = t;
+        s_text_hidden = false;
+        show_word(s_word);
+        ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
+        came = true;
+    }
+    s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
+    return came;
 }
 
 /* Enter a state on the sim: the ripple + swirl that melt the old shape, the new relax
@@ -600,6 +679,7 @@ static void enter_state(int st, const fluid_cfg_t *cfg) {
         }
         fluid_text_set_sentence(s_tx, ext);
         s_word = 0;
+        if (s_say_log.ver != (unsigned)s_seen_ver || !s_say_log.on) s_say_log = (say_log_t){ (unsigned)s_seen_ver, s_ntok, 0, 0, true, false };
         /* following a say whose voice has not reached word 0 yet: blank until it does (the
          * word lands with its voice, not ~0.3 s before it) */
         s_text_hidden = s_follow && s_follow_word < 0;
@@ -1232,19 +1312,10 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         scene_grow_tick(&s_grow, s_rd_on || s_sub, rdt);
         if (s_sp.cur) scene_grow_apply(&s_grow, s_sp.cur);
     }
-    /* speed reader (paused under a question: the labels own s_tx; its own clock waits while the words' picture comes) */
-    if (s_cur == ST_TEXT && fluid_draw_morphing(s_draw)) s_word_until += rdt;
+    /* speed reader (paused under a question: the labels own s_tx; a change of picture never pauses it: a say's words are
+     * drawn live over it) */
     if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_follow) {
-        /* following a say: each word when the speaker reaches it (link_audio's cues),
-         * never on the reader's own clock; once the say is over, the clock takes the rest */
-        const int t = s_follow_word < s_ntok ? s_follow_word : s_ntok - 1;
-        if (t >= 0 && (t > s_word || s_text_hidden)) {
-            if (t > s_word) s_word = t;
-            s_text_hidden = false;
-            show_word(s_word);
-            ripple(0.f, 0.f, 0.45f + 0.6f * 0.3f, 0.12f);
-        }
-        s_word_until = s_tnow + word_delay_s(s_ttext, &s_toks[s_word], cfg->wpm);
+        reader_follow(cfg);
     } else if (!asking && s_cur == ST_TEXT && s_word < s_ntok && s_text_hidden) {
         /* the say ended (or failed) before word 0 was cued: the reader's own pace from word 0 */
         s_text_hidden = false;
@@ -1308,8 +1379,15 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     wheel_frame(rdt);
     beat_frame(rdt);                                       /* (every frame: a rhythm with no clock on screen stops) */
     if (s_cur == ST_SCENE && s_sp.cur && s_wh.gen == s_sp.gen) scene_wheel(s_sp.cur, &s_wh.w);
+    /* a say's words under a change of picture (the drawer draws them live, the rest it reads once, at its pass): the ink
+     * stands on its target, as a creature's and a scene's do. Their target, floor and view are made again only while the
+     * drawer may still read them and when a word came (the change's end goes on from that, nothing older) */
+    static float held_t = -1e9f;
+    const bool held = s_cur == ST_TEXT && say_words() && fluid_draw_morphing(s_draw);
+    const bool held_fresh = held && (!fluid_draw_morph_still(s_draw) || s_word_t >= held_t);
+    if (held_fresh) { held_t = s_tnow; s->p.settle = true; }   /* (the glow round the word at once: nothing eases unseen) */
     switch (s_cur) {   /* under a question too: it keeps moving */
-    case ST_TEXT:     fluid_text_fill(s_tx, s, s_tnow); break;
+    case ST_TEXT:     if (!held || held_fresh) fluid_text_fill(s_tx, s, s_tnow); break;
     case ST_SCENE: {
         const scene_caption_t cap = scene_caption();
         scene_shapes_t hd = { s_shp, 0, s_kdots, s_still };
@@ -1440,9 +1518,9 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         else scene_hd_tick(&s_hd, scene ? s_sp.gen : 0, plain, rdt);
         fine_was = fine;
     }
-    const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp;
+    const bool still = (s_hd.gen != 0 && s_cur == ST_SCENE && !asking) || s_crisp || held;
     s->p.still = still;
-    if (!still) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
+    if (!still || held_fresh) fluid_sim_background(s, s_tnow, breath, (s_frame_no & 1) == 0 || s_frame_no < 2);
 
     /* surface drivers (main.js): thinking = the motor's fine standing shimmer; the creature's
      * speech envelope rings the surface from its mouth; mic adds shimmer + random drops */
@@ -1476,7 +1554,8 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
         cpk_paint(s_cpk, s);
         FLUID_PROF_END(FP_C_FILL, cpaint);                 /* prof_ms.c_fill: a rigged creature's paint and rings */
     }
-    if (!still) fluid_sim_view(s);
+    if (held_fresh) memcpy(s->ink, s->T, sizeof(int16_t) * (size_t)s->N);
+    if (!still || held_fresh) fluid_sim_view(s);
     s_shimmer = 0.12f + (thinking ? 0.35f : 0.f) + cfg->mic * 0.4f;
 
     /* the question over it all, from the water as it is now */
@@ -1943,6 +2022,7 @@ static void draw_task(void *arg) {
         }
         const fluid_overlay_t ov = s_dov;
         const unsigned ask_seq = s_dask;
+        const uint32_t word_tag = s_dword;
         int64_t t1 = t0;
         s_tx_frame = false;
         if (fb && s_draw && s_frame) {
@@ -1981,6 +2061,14 @@ static void draw_task(void *arg) {
                 xSemaphoreGive(s_fb_done);
             }
             atomic_store(&s_glass_ask, ask_seq);        /* on the panel now */
+            {   /* a say's word, whole on the panel now (its first one's time, and the say's words shown so far) */
+                static uint32_t last;                   /* (the last word whole: blank frames between count nothing) */
+                const uint32_t tag = sent && s_draw->words_whole ? word_tag : 0;
+                if (tag && SAY_TAG_VER(tag) != SAY_TAG_VER(last)) { atomic_store(&s_glass_n, 1); atomic_store(&s_glass_t0, (uint32_t)esp_timer_get_time()); last = tag; }
+                else if (tag && tag != last) { atomic_fetch_add(&s_glass_n, 1); last = tag; }
+                atomic_store(&s_glass_last, last);
+                atomic_store(&s_glass_word, tag);
+            }
         }
         int64_t t2 = esp_timer_get_time();
         mole_diag_panel_frame((uint32_t)(t1 - t0), (uint32_t)(t2 - t1));
@@ -2422,6 +2510,14 @@ static void fluid_task(void *arg) {
             if (req == ST_TEXT && s_follow) { s_sub = true; s_sub_word = -1; req = -1; }
             else if (req == ST_CREATURE && req_implied) req = -1;
         }
+        {   /* a say's words go back to the creature once its voice is over, the change that brought them has ended (never a
+             * change turned back in mid-flight: a filler's dust) and its last word was readable WORDS_LAST_S */
+            static bool back, back_hold;
+            if (req >= 0 && req != ST_CREATURE) back = false;   /* (anything else the agent shows wins) */
+            if (req == ST_CREATURE && say_words()) { back = true; back_hold = req_hold; req = -1; }
+            if (back && (!say_words() || nsops)) back = false;
+            if (back && !s_follow && !fluid_draw_morphing(s_draw) && s_tnow - s_word_t >= WORDS_LAST_S) { req = ST_CREATURE; req_hold = back_hold; back = false; }
+        }
         if (req >= 0) fd_request_state(&s_dir, req, req_hold);
         for (int q = 0; q < nsops; q++) {                   /* scenes, in the order they came */
             if (sops[q].op == MOLE_SCENE_PLAY) scene_play(&s_sp, sops[q].sc);
@@ -2538,6 +2634,17 @@ static void fluid_task(void *arg) {
         const int64_t tw = esp_timer_get_time();
         /* hand the frame to the drawer: wait until it finished the previous one */
         xSemaphoreTake(s_idle, portMAX_DELAY);
+        {   /* a word the speaker reached since this frame was simulated goes with it, not with the next (the voice's first
+             * sound waits for its first word on the glass: link_audio's gate) */
+            xSemaphoreTake(s_mutex, portMAX_DELAY);
+            const bool same = s_text_ver == s_seen_ver;
+            if (same) { s_follow = s_follow_in; s_follow_word = s_follow_word_in; }
+            xSemaphoreGive(s_mutex);
+            if (same && s_follow && say_words() && s_word < s_ntok && s_ask.scr.phase != FLUID_ASK_SHOW && reader_follow(&cfg)) {
+                s_noverlay = s_tx->nletters;
+                memcpy(s_overlay, s_tx->letters, sizeof(fluid_letter_t) * (size_t)s_noverlay);
+            }
+        }
         {   /* the picture's delay (s_view_ahead_us): the frame the drawer just finished, from its sim to its first window */
             const uint32_t pres = atomic_load(&s_pres_t);
             const int32_t lat = (int32_t)(pres - (uint32_t)view_t[0]);
@@ -2594,12 +2701,11 @@ static void fluid_task(void *arg) {
             static uint32_t look_was;
             static int cuts;
             const bool whole = s_draw && s_draw->m.whole, on = fluid_draw_morphing(s_draw);
-            fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
-            if (!on && fluid_draw_morphing(s_draw)) motion();   /* (its first frames read and send nothing: they can wait) */
-            if ((look ^ look_was) & ~FLUID_LOOK_DUST)
-                mole_diag_event(false, "look %08x -> %08x %s kept=%d running=%d st=%d", (unsigned)look_was, (unsigned)look,
-                                fluid_draw_morphing(s_draw) ? "change" : "at once", whole, on, s_cur);
-            if (s_draw && s_draw->m.cuts != cuts) { cuts = s_draw->m.cuts; mole_diag_event(false, "change waited to its limit, the rest made at once (%d)", cuts); }
+            /* (a say's words coming, or going back to the creature: the quick change, WORDS_IN_S / WORDS_OUT_S) */
+            static bool words_was;
+            const bool words = say_words() && !asking && !s_dark;
+            static int64_t into_t0;                     /* (a change into a say's words began: its log's length) */
+            /* (a change that ended: its line, before a new look's change starts over its stages) */
             static int ends;
             if (s_draw && s_draw->m.ends != ends) {     /* (where each change's reading of its new picture got to, by frame) */
                 const int *g = s_draw->m.dg;
@@ -2642,12 +2748,25 @@ static void fluid_task(void *arg) {
                                     j[0] / 1000.f, j[1] / 1000.f, j[2 + FLUID_MJ_GRAINS] / 1000.f, j[2 + FLUID_MJ_LINES] / 1000.f,
                                     j[2 + FLUID_MJ_READ] / 1000.f, j[2 + FLUID_MJ_SORT] / 1000.f, j[2 + FLUID_MJ_ALLOC] / 1000.f);
                 }
+                if (into_t0 && s_say_log.on && !s_say_log.logged && (unsigned)s_seen_ver == s_say_log.ver) {   /* (the say's own line: its change) */
+                    s_say_log.chg_f = g[FLUID_MD_FRAMES]; s_say_log.chg_ms = (int)((esp_timer_get_time() - into_t0) / 1000);
+                }
+                into_t0 = 0;
                 memset(lost, 0, sizeof(lost));
                 memset(p, 0, sizeof(s_draw->m.pace));
                 memset(s_draw->m.jslow, 0, sizeof(s_draw->m.jslow));
             }
+            fluid_draw_morph_quick(s_draw, words ? WORDS_IN_S : words_was && s_cur == ST_CREATURE && !asking && !s_dark ? WORDS_OUT_S : 0.f);
+            fluid_draw_morph_look(s_draw, look, molty_display_framebuffer(), ready);
+            if ((look ^ look_was) & ~FLUID_LOOK_DUST) { words_was = words; into_t0 = words && fluid_draw_morphing(s_draw) ? esp_timer_get_time() : 0; }
+            if (!on && fluid_draw_morphing(s_draw)) motion();   /* (its first frames read and send nothing: they can wait) */
+            if ((look ^ look_was) & ~FLUID_LOOK_DUST)
+                mole_diag_event(false, "look %08x -> %08x %s kept=%d running=%d st=%d", (unsigned)look_was, (unsigned)look,
+                                fluid_draw_morphing(s_draw) ? "change" : "at once", whole, on, s_cur);
+            if (s_draw && s_draw->m.cuts != cuts) { cuts = s_draw->m.cuts; mole_diag_event(false, "change waited to its limit, the rest made at once (%d)", cuts); }
             look_was = look;
         }
+        say_log();                                      /* (after the change that brought its words is known to have ended) */
         atomic_store(&s_dust_in, ready);
         {
             fluid_sim_snapshot(s_sim, s_frame, cfg.edge_mode == FLUID_EDGE_OFF);
@@ -2660,6 +2779,7 @@ static void fluid_task(void *arg) {
                 .dots = s_cur == ST_SCENE || s_hd.out || s_crisp ? s_sdots_d : s_word_dots && (s_cur == ST_TEXT || s_melt_t < 0.8f) ? s_tx->dots : NULL,
                 .scene = s_hd.gen != 0 || s_crisp, .dust = scene_hd_dust(&s_hd), .frame = s_crisp && s_cpk ? cpk_draw_frame(s_cpk) : 0,
                 .haze_live = s_haze_live, .haze_water = { s_haze_water[0], s_haze_water[1] },
+                .words = say_words() && !s_hd.out && !(s_ask.v && s_ask.scr.phase != FLUID_ASK_NONE),
             };
             /* the drawer is idle (s_idle); a scene breaking into dust keeps what it showed */
             if (s_crisp) {   /* a rigged creature's cells, as a scene's dots */
@@ -2709,6 +2829,8 @@ static void fluid_task(void *arg) {
         s_dstatus = fd_status(&s_dir);
         if (!s_dark) ask_compose();
         s_dask = s_ask.scr.whole && fluid_draw_morphing(s_draw) ? 0u : fluid_ask_tappable(&s_ask.scr, cfg.speed);   /* (whole: once on the glass) */
+        s_dword = s_dopts.words && !s_text_hidden && s_word < s_ntok ? SAY_TAG(s_seen_ver, s_word) : 0;
+        atomic_store(&s_words_away, s_sub || asking || s_dark);
         {   /* the dust's frame: worked out ahead (above), else here now; the next one ahead only while the drawer works out
              * none itself: a scene on the fine specks, no change of picture (a change works its dust out its own way) */
             const bool go = s_fine && s_dopts.fine == s_fine && s_cur == ST_SCENE && !s_hd.out && s_hd.dust < 1.f &&
@@ -2923,7 +3045,7 @@ esp_err_t mole_fluid_creature_init(void) {
     s_gx = s_gy = 0.f; s_touch_down = false;
     s_ask.scr.phase = FLUID_ASK_NONE; s_ask.scr.seq = s_ask_want.seq;     /* a question from before is gone */
     fluid_askview_destroy(s_ask.v); fluid_askview_destroy(s_ask.old); s_ask.v = s_ask.old = NULL;
-    s_dask = 0; atomic_store(&s_glass_ask, 0);
+    s_dask = 0; atomic_store(&s_glass_ask, 0); atomic_store(&s_glass_word, 0); s_dword = 0;
     s_follow = false; s_follow_word = 0; s_text_hidden = false;
     s_rg = (fluid_ring_t){ 0 }; s_pg = (fluid_progress_t){ 0 }; s_dov = (fluid_overlay_t){ 0 };   /* the fluid's own ring is in the sim */
     s_sim->p.relax_up = RATE_UP[ST_CREATURE]; s_sim->p.relax_down = RATE_DOWN[ST_CREATURE];
@@ -2975,6 +3097,7 @@ void mole_fluid_creature_deinit(void) {
         return;
     }
     atomic_store(&s_glass_ask, 0);                   /* nothing of the fluid on the panel now */
+    atomic_store(&s_glass_word, 0);
     scene_clear(&s_sp);
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (int q = 0; q < s_scene_nops; q++) scene_free(s_scene_ops[q].sc);
@@ -3557,6 +3680,26 @@ static uint32_t mood_tint(int mood) {
     case CM_LISTENING: return FLUID_RGB | 0x3ccf96u;   /* green */
     default:           return 0;                       /* idle, speaking: the palette's */
     }
+}
+
+bool mole_fluid_text_shown(unsigned text_ver, int word) {
+    if (!s_mutex || !atomic_load(&s_screen) || atomic_load(&s_words_away)) return true;   /* (nothing to wait for) */
+    const uint32_t t = atomic_load(&s_glass_word);
+    return t && SAY_TAG_VER(t) == (text_ver & 0x7FFFFu) && (int)SAY_TAG_WORD(t) >= word;
+}
+
+void mole_fluid_say_sound(unsigned text_ver, int gate_ms) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_say_in = (say_in_t){ text_ver, esp_timer_get_time(), gate_ms, -1 };
+    xSemaphoreGive(s_mutex);
+}
+
+void mole_fluid_say_spoken(unsigned text_ver, int words) {
+    if (!s_mutex) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_say_in.ver == text_ver) s_say_in.spoken = words;
+    xSemaphoreGive(s_mutex);
 }
 
 unsigned mole_fluid_text_ver(void) {

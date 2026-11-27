@@ -203,6 +203,14 @@ int  mole_fluid_gesture(const char *name, float *dur);
  *  sleepy blue, listening green; idle / speaking the palette's), until the next text. The
  *  creature itself shows the say's last mood when the words end (link_audio_tick). */
 void mole_fluid_cue_mood(int mood, unsigned text_ver);
+/** A say's word on the glass (link_audio.c's gate: its first sound waits for its first word): true once the panel shows
+ *  word `word` (or a later one) of the text text_ver whole, or when the screen will not show the reader's words now (off,
+ *  going dark, a question or a scene over them): nothing to wait for then. Any task. */
+bool mole_fluid_text_shown(unsigned text_ver, int word);
+/** A say's voice for its log line (mole_fluid.c "say ..."): its first sound goes to the speaker now, after gate_ms of
+ *  waiting for the glass; then the words the speaker reached (its cues), at its end. Any task. */
+void mole_fluid_say_sound(unsigned text_ver, int gate_ms);
+void mole_fluid_say_spoken(unsigned text_ver, int words);
 /** The reader's text version (bumped by every text set / append): a say captures it after
  *  setting its words and hands it to mole_fluid_cue_mood, which tints only while that text
  *  is still the one loaded. */

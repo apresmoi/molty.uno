@@ -259,7 +259,7 @@ fluid_draw_t *fluid_draw_create(int W, int H, int fb_w, int fb_h) {
 void fluid_draw_destroy(fluid_draw_t *d) {
     if (!d) return;
     FLUID_FREE(d->block); FLUID_FREE(d->sd_dist); FLUID_FREE(d->cd0); FLUID_FREE(d->csig); FLUID_FREE(d->shp0); FLUID_FREE(d->sh1); FLUID_FREE(d->near); FLUID_FREE(d->hdc); FLUID_FREE(d->hdcv);
-    mm_free(d->m.mm); mm_free(d->m.jfree); FLUID_FREE(d->m.colx); FLUID_FREE(d->why);
+    mm_free(d->m.mm); mm_free(d->m.jfree); FLUID_FREE(d->m.colx); FLUID_FREE(d->m.wg); FLUID_FREE(d->why);
     FLUID_FREE(d);
 }
 
@@ -1085,6 +1085,68 @@ static void shape_boxes(fluid_draw_t *d, const fluid_draw_opts_t *o) {
     }
 }
 
+/* A letter as the drawer draws it (fluid_draw_t.lt): its glyph (the real letter once the ink under it is in, a ramp glyph
+ * before), riding the surface (y follows the wave height hh), its colour by the ink and the accent (acc); its box in its
+ * cells' px. False: not drawn (a symbol before its ink is in). */
+static bool letter_glyph(const fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o, const fluid_letter_t *L,
+                         float ink, float m, float hh, float acc_s, fluid_glyph_t *g) {
+    const int W = s->W, H = s->H;
+    const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
+    const bool mono = pal != FLUID_PAL_PASTEL;
+    const float *lo = PAL[pal][0], *hi = PAL[pal][1], *ac = PAL[pal][2];
+    const char *ramp = o->ramp ? o->ramp : " .:-=+*#";
+    const int rmax = (int)strlen(ramp) - 1;
+    const float cw = (float)d->stage / W, ch = (float)d->stage / H;
+    const int ox = d->ox, oy = d->oy;
+    char c2;
+    if (L->mask && ink <= 0.36f + m * 1.5f) return false;   /* a symbol: whole, once the ink is in */
+    if (ink > 0.36f + m * 1.5f) c2 = L->ch;
+    else { int idx = (int)lrintf(fmaxf(0.f, ink - m) * rmax); c2 = ramp[idx < 1 ? 1 : idx > rmax ? rmax : idx]; }
+    float br = fminf(1.f, 0.55f + ink), r, gg, b;
+    if (mono) { r = lo[0] + (hi[0] - lo[0]) * br; gg = lo[1] + (hi[1] - lo[1]) * br; b = lo[2] + (hi[2] - lo[2]) * br; }
+    else if (L->rgb & FLUID_RGB) {                  /* its own colour (a question's button) */
+        if (L->acc) br = 1.f;                        /* accented = at full strength       */
+        r = (float)(L->rgb >> 16 & 255) * br; gg = (float)(L->rgb >> 8 & 255) * br; b = (float)(L->rgb & 255) * br;
+    } else { r = gg = b = 255.f * br; }
+    if (L->acc && (mono || !(L->rgb & FLUID_RGB))) {
+        float a = fmaxf(acc_s, 0.85f); if (a > 1.f) a = 1.f; r += (ac[0] - r) * a; gg += (ac[1] - gg) * a; b += (ac[2] - b) * a;
+    }
+    int gw = (int)(L->w * 0.8f), gh = (int)(L->h * 0.72f);
+    int margin = ((int)L->h - gh) / 2 - 1;
+    if (margin < 0) margin = 0;
+    float yo = -hh * 7.f;
+    if (yo > 3.f) yo = 3.f;
+    if (yo < -3.f) yo = -3.f;
+    int yoff = (int)lrintf(yo);
+    if (yoff > margin) yoff = margin;
+    if (yoff < -margin) yoff = -margin;
+    int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
+    int cx0 = ox + (int)floorf(L->x), cy0 = oy + (int)floorf(L->y), cx1 = ox + (int)ceilf(L->x + L->w), cy1 = oy + (int)ceilf(L->y + L->h);
+    if (L->mask) {
+        gw = (int)lrintf(L->w); gh = (int)lrintf(L->h); gx = ox + (int)lrintf(L->x); gy = oy + (int)lrintf(L->y);
+        /* a symbol seen through the water, like the dots (DOT_REFR): it drifts by the wave
+         * slope inside its own cleared cells, so nothing outside them needs a redraw */
+        const float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
+        const float ex = 2.f / W, ey = 2.f / H, kp = -DOT_REFR * cw;   /* the image moves against the slope */
+        int mx = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx + ex, sy) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx - ex, sy)) * kp);
+        int my = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy + ey) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy - ey)) * kp);
+        if (mx || my) {
+            const int i0 = (int)floorf(L->x / cw), i1 = (int)floorf((L->x + L->w) / cw - 0.001f);
+            const int j0 = (int)floorf(L->y / ch), j1 = (int)floorf((L->y + L->h) / ch - 0.001f);
+            cx0 = d->cx[i0 < 0 ? 0 : i0]; cx1 = d->cx[i1 > W - 1 ? W : i1 + 1];
+            cy0 = d->cy[j0 < 0 ? 0 : j0]; cy1 = d->cy[j1 > H - 1 ? H : j1 + 1];
+            mx = mx < cx0 - gx ? cx0 - gx : mx > cx1 - gx - gw ? cx1 - gx - gw : mx;
+            my = my < cy0 - gy ? cy0 - gy : my > cy1 - gy - gh ? cy1 - gy - gh : my;
+            gx += mx; gy += my;
+        }
+    }
+    g->gl = L->mask ? NULL : o->font(c2); g->c = rgb565_be((int)r, (int)gg, (int)b);
+    g->mask = L->mask; g->mw = L->mw; g->mh = L->mh;
+    g->x = (int16_t)gx; g->y = (int16_t)gy; g->w = (int16_t)gw; g->h = (int16_t)gh;
+    g->cx0 = (int16_t)cx0; g->cy0 = (int16_t)cy0; g->cx1 = (int16_t)cx1; g->cy1 = (int16_t)cy1;
+    return true;
+}
+
 static bool hdc_room(fluid_draw_t *d);
 static void morph_begin(fluid_draw_t *d);
 static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o);
@@ -1092,9 +1154,6 @@ static inline bool morph_frozen(const fluid_draw_t *d);
 static void morph_pass(fluid_draw_t *d, bool hd);
 int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
     const int W = s->W, H = s->H;
-    const int pal = (o->palette >= 0 && o->palette < FLUID_PAL_COUNT) ? o->palette : FLUID_PAL_PASTEL;
-    const bool mono = pal != FLUID_PAL_PASTEL;
-    const float *lo = PAL[pal][0], *hi = PAL[pal][1], *ac = PAL[pal][2];
     const char *ramp = o->ramp ? o->ramp : " .:-=+*#";
     fluid_draw_opts_t oo = *o; oo.ramp = ramp;
     const int rmax = (int)strlen(ramp) - 1;
@@ -1182,7 +1241,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
     struct { int li; float ink, hh, acc, m; } shown[FLUID_MAX_LETTERS];
     int nshown = 0;
     memset(d->skip, 0, (size_t)W * H);
-    for (int li = 0; li < o->nletters && li < FLUID_MAX_LETTERS && o->font && !hd; li++) {
+    for (int li = 0; li < o->nletters && li < FLUID_MAX_LETTERS && o->font && !hd && !(d->m.on && o->words); li++) {   /* (a say's
+                                                         * words: never in a change's new picture, drawn live over it) */
         const fluid_letter_t *L = &o->letters[li];
         if (L->ch == ' ') continue;
         float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
@@ -1313,58 +1373,18 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
     /* condensed letters ride the surface (y follows the wave height) and decode from
      * ramp glyphs into the real letter as ink arrives */
     d->nlt = 0;
+    int nreal = 0;                                       /* (letters drawn as themselves, not as ramp glyphs) */
     for (int n = 0; n < nshown; n++) {
         const fluid_letter_t *L = &o->letters[shown[n].li];
-        float ink = shown[n].ink, m = shown[n].m;
-        char c2;
-        if (L->mask && ink <= 0.36f + m * 1.5f) continue;   /* a symbol: whole, once the ink is in */
-        if (ink > 0.36f + m * 1.5f) c2 = L->ch;
-        else { int idx = (int)lrintf(fmaxf(0.f, ink - m) * rmax); c2 = ramp[idx < 1 ? 1 : idx > rmax ? rmax : idx]; }
-        float br = fminf(1.f, 0.55f + ink), r, g, b;
-        if (mono) { r = lo[0] + (hi[0] - lo[0]) * br; g = lo[1] + (hi[1] - lo[1]) * br; b = lo[2] + (hi[2] - lo[2]) * br; }
-        else if (L->rgb & FLUID_RGB) {                  /* its own colour (a question's button) */
-            if (L->acc) br = 1.f;                        /* accented = at full strength       */
-            r = (float)(L->rgb >> 16 & 255) * br; g = (float)(L->rgb >> 8 & 255) * br; b = (float)(L->rgb & 255) * br;
-        } else { r = g = b = 255.f * br; }
-        if (L->acc && (mono || !(L->rgb & FLUID_RGB))) {
-            float a = fmaxf(shown[n].acc, 0.85f); if (a > 1.f) a = 1.f; r += (ac[0] - r) * a; g += (ac[1] - g) * a; b += (ac[2] - b) * a;
-        }
-        int gw = (int)(L->w * 0.8f), gh = (int)(L->h * 0.72f);
-        int margin = ((int)L->h - gh) / 2 - 1;
-        if (margin < 0) margin = 0;
-        float yo = -shown[n].hh * 7.f;
-        if (yo > 3.f) yo = 3.f;
-        if (yo < -3.f) yo = -3.f;
-        int yoff = (int)lrintf(yo);
-        if (yoff > margin) yoff = margin;
-        if (yoff < -margin) yoff = -margin;
-        int gx = ox + (int)lrintf(L->x + (L->w - gw) * 0.5f), gy = oy + (int)lrintf(L->y) + margin + yoff;
-        int cx0 = ox + (int)floorf(L->x), cy0 = oy + (int)floorf(L->y), cx1 = ox + (int)ceilf(L->x + L->w), cy1 = oy + (int)ceilf(L->y + L->h);
-        if (L->mask) {
-            gw = (int)lrintf(L->w); gh = (int)lrintf(L->h); gx = ox + (int)lrintf(L->x); gy = oy + (int)lrintf(L->y);
-            /* a symbol seen through the water, like the dots (DOT_REFR): it drifts by the wave
-             * slope inside its own cleared cells, so nothing outside them needs a redraw */
-            const float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
-            const float ex = 2.f / W, ey = 2.f / H, kp = -DOT_REFR * cw;   /* the image moves against the slope */
-            int mx = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx + ex, sy) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx - ex, sy)) * kp);
-            int my = (int)lrintf((fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy + ey) - fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy - ey)) * kp);
-            if (mx || my) {
-                const int i0 = (int)floorf(L->x / cw), i1 = (int)floorf((L->x + L->w) / cw - 0.001f);
-                const int j0 = (int)floorf(L->y / ch), j1 = (int)floorf((L->y + L->h) / ch - 0.001f);
-                cx0 = d->cx[i0 < 0 ? 0 : i0]; cx1 = d->cx[i1 > W - 1 ? W : i1 + 1];
-                cy0 = d->cy[j0 < 0 ? 0 : j0]; cy1 = d->cy[j1 > H - 1 ? H : j1 + 1];
-                mx = mx < cx0 - gx ? cx0 - gx : mx > cx1 - gx - gw ? cx1 - gx - gw : mx;
-                my = my < cy0 - gy ? cy0 - gy : my > cy1 - gy - gh ? cy1 - gy - gh : my;
-                gx += mx; gy += my;
-            }
-        }
-        d->lt[d->nlt].gl = L->mask ? NULL : o->font(c2); d->lt[d->nlt].c = rgb565_be((int)r, (int)g, (int)b);
-        d->lt[d->nlt].mask = L->mask; d->lt[d->nlt].mw = L->mw; d->lt[d->nlt].mh = L->mh;
-        d->lt[d->nlt].x = (int16_t)gx; d->lt[d->nlt].y = (int16_t)gy; d->lt[d->nlt].w = (int16_t)gw; d->lt[d->nlt].h = (int16_t)gh;
-        d->lt[d->nlt].cx0 = (int16_t)cx0; d->lt[d->nlt].cy0 = (int16_t)cy0;
-        d->lt[d->nlt].cx1 = (int16_t)cx1; d->lt[d->nlt].cy1 = (int16_t)cy1;
+        if (!letter_glyph(d, s, o, L, shown[n].ink, shown[n].m, shown[n].hh, shown[n].acc, &d->lt[d->nlt])) continue;
+        nreal += !L->mask && d->lt[d->nlt].gl == o->font(L->ch);
         d->nlt++;
         drawn++;
+    }
+    {   /* a say's words all on the glass whole (the voice may start: mole_fluid's gate) */
+        int nw = 0;
+        for (int li = 0; li < o->nletters && li < FLUID_MAX_LETTERS; li++) nw += o->letters[li].ch != ' ';
+        d->words_whole = o->words && nw > 0 && nreal == nw;
     }
     {   /* each letter as it was (glyph, colour, place, mask): the cells it covers need not go again; a changed one's do */
         bool gone = false;                               /* a letter went: what it covered is not known here, all go */
@@ -1708,6 +1728,9 @@ static bool hdc_room(fluid_draw_t *d) {
 #define MP_RATE       4        /* its clock goes in quarter frames: 4 a frame; while the new look's dust is not in at
                                 * its start (built late): MP_SLOW a frame till paired, the dissolve a little slower    */
 #define MP_SLOW       3
+#define MP_RATE_OF(m) ((m)->qrate ? (int)(m)->qrate : MP_RATE)      /* (a say's words come and go quicker: fluid_draw_morph_quick) */
+#define MP_SLOW_OF(m) ((m)->qrate ? (int)(m)->qrate * MP_SLOW / MP_RATE : MP_SLOW)
+#define MP_STEP_OF(m) ((m)->qrate > 2 * MP_RATE ? (int)(m)->qrate / MP_RATE : 1)   /* (its pace's change a frame) */
 #define MP_NEAR_S     0.1f     /* .. and this long before what it waits for (the pairs' cloud points, the new lines):
                                 * 2 a frame, then 1, then it stands (never a jump: the cloud swirls on)               */
 #define MP_NQ         192      /* the lists' moments: quarter frames of the clock, 1.6 s                            */
@@ -1933,9 +1956,12 @@ static bool morph_maps(fluid_draw_t *d) {
     fluid_morph_t *m = &d->m;
     if (m->colx) return true;
     const int N = d->W * d->H;
-    uint8_t *p = FLUID_CALLOC((size_t)d->fb_w + d->fb_h + 3 * (size_t)N);
+    uint8_t *p = FLUID_CALLOC((size_t)d->fb_w + d->fb_h + 5 * (size_t)N);
     if (!p) return false;
     m->colx = p; m->rowy = p + d->fb_w; m->lc = m->rowy + d->fb_h; m->lcn = m->lc + N; m->ord = m->lcn + N;
+    m->wm = m->ord + N; m->wm2 = m->wm + N;
+    m->wg = FLUID_CALLOC(sizeof(fluid_glyph_t) * FLUID_MAX_LETTERS);
+    if (!m->wg) m->wm = NULL;                           /* (no room: a say's words come as the change's new picture) */
     memset(m->colx, 255, (size_t)d->fb_w); memset(m->rowy, 255, (size_t)d->fb_h); memset(m->ord, 255, (size_t)N);
     for (int i = 0; i < d->W; i++) for (int x = d->cx[i]; x < d->cx[i + 1]; x++) m->colx[x] = (uint8_t)i;
     for (int j = 0; j < d->H; j++) for (int y = d->cy[j]; y < d->cy[j + 1]; y++) m->rowy[y] = (uint8_t)j;
@@ -1949,6 +1975,11 @@ void fluid_draw_morph_lines(fluid_draw_t *d, const uint8_t *cells) {
 void fluid_draw_morph_order(fluid_draw_t *d, const uint8_t *order) {
     if (!d || !morph_maps(d)) return;
     if (order) memcpy(d->m.ord, order, (size_t)d->W * d->H); else memset(d->m.ord, 255, (size_t)d->W * d->H);
+}
+void fluid_draw_morph_quick(fluid_draw_t *d, float dur_s) {
+    if (!d) return;
+    const float r = dur_s > 0.f ? MP_LEN * 4.f / dur_s : 0.f;   /* (quarter frames a frame: its 1.12 s of clock in dur_s) */
+    d->m.qrate_next = (uint8_t)(r <= MP_RATE ? 0 : r >= 48.f ? 48 : (int)(r + 0.5f));
 }
 bool fluid_draw_morph_carries(const fluid_draw_t *d) { return d && d->m.snap && (d->m.on || d->m.whole) && d->m.colx && d->m.fulls < 2; }
 
@@ -1977,6 +2008,8 @@ static void morph_end(fluid_draw_t *d, bool cut) {
     m->whole = (m->look & (FLUID_LOOK_KEEP | FLUID_LOOK_GLASS)) && m->snap;
     if (m->forced && !cut) m->look &= ~FLUID_LOOK_DUST; /* (read without its dust: that comes as a change of its own) */
     m->forced = m->keep = false;
+    if (m->wn) { memset(m->wm, 0, (size_t)d->W * d->H); m->wn = 0; }   /* (the words drawn live: the drawer's own from here) */
+    m->wsig = 0;
 }
 
 void fluid_draw_morph_empty(fluid_draw_t *d, uint16_t *snap) {
@@ -1999,7 +2032,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     if (!((look ^ m->look) & ~FLUID_LOOK_DUST)) {
         const bool gain = (look & FLUID_LOOK_DUST) && !m->on && m->whole && snap && morph_maps(d);
         m->look = look;
-        if (gain) { m->ready = true; m->ready_at = 0; m->frames = 0; m->na = -1; m->mm = NULL; m->on = m->keep = true; m->forced = m->jhurry = false; m->held = 0; m->nheld = 0; m->seen_hd = false; m->pwait = 0; memset(m->dg, 0, sizeof(m->dg)); }
+        if (gain) { m->qrate = 0; m->ready = true; m->ready_at = 0; m->frames = 0; m->na = -1; m->mm = NULL; m->on = m->keep = true; m->forced = m->jhurry = false; m->held = 0; m->nheld = 0; m->seen_hd = false; m->pwait = 0; memset(m->dg, 0, sizeof(m->dg)); }
         return;
     }
     /* nothing kept to change from, or into a look the panel's mirror keeps (it writes over the kept glass): at once */
@@ -2015,6 +2048,7 @@ void fluid_draw_morph_look(fluid_draw_t *d, uint32_t look, uint16_t *snap, bool 
     m->look = look; m->ready = ready; m->ready_at = ready ? 0 : -1; m->frames = 0; m->na = -1;
     if (!m->on) m->mm = NULL;
     m->on = true; m->keep = m->forced = m->jhurry = false; m->held = 0; m->nheld = 0;
+    m->qrate = m->qrate_next;
     memset(m->dg, 0, sizeof(m->dg)); memset(m->top, 0, sizeof(m->top));
     m->seen_hd = false; m->pwait = 0;
 }
@@ -2078,6 +2112,7 @@ static int morph_read_old(fluid_draw_t *d, int budget) {
             const int k = j * W + i, x0 = d->cx[i], y0 = d->cy[j], w = d->cx[i + 1] - x0, h = d->cy[j + 1] - y0;
             const uint16_t key = d->key[k];
             mm->A.at[k] = (uint32_t)mm->A.n; mm->L0.at[k] = (uint32_t)mm->L0.n;
+            if (m->wn && m->wm[k]) continue;            /* (a say's words drawn live: never the change's to move) */
             for (int y = y0; y < y0 + h; y++) {
                 const uint16_t *row = m->snap + (size_t)y * fw;
                 for (int x = x0; x < x0 + w; x++) {
@@ -2714,6 +2749,7 @@ static int glide_at(const fluid_draw_t *d, const mglide_t *g, int n, int x1, int
 static inline uint16_t *gpx(const fluid_draw_t *d, int X, int Y) {
     const fluid_morph_t *m = &d->m;
     if (X < 0 || Y < 0 || X >= d->fb_w || Y >= d->fb_h || m->colx[X] == 255 || m->rowy[Y] == 255) return NULL;
+    if (m->wn && m->wm[m->rowy[Y] * d->W + m->colx[X]]) return NULL;   /* (a say's words drawn live there) */
     m->mm->rows[Y] = 1; m->mm->wpx++;
     return &m->snap[(size_t)Y * d->fb_w + X];
 }
@@ -2730,7 +2766,7 @@ static void gput(const fluid_draw_t *d, uint32_t e, uint16_t c, bool grain) {
 /* A mover drawn, what it covers kept (un), and taken off again: each frame every mover still moving is taken off (the
  * last drawn first), the still layers turn, and they are drawn again (so what a mover passes over is there after it) */
 static void mdraw(const fluid_draw_t *d, int x, int y, int z, uint16_t c, uint16_t *un) {
-    for (int q = 0; q < z * z; q++) { uint16_t *p = gpx(d, x + (q & 1), y + (q >> 1)); if (p) { un[q] = *p; *p = c; } }
+    for (int q = 0; q < z * z; q++) { uint16_t *p = gpx(d, x + (q & 1), y + (q >> 1)); if (p) { un[q] = *p; *p = c; } else un[q] = 0; }
 }
 static void moff(const fluid_draw_t *d, int x, int y, int z, const uint16_t *un) {
     for (int q = z * z - 1; q >= 0; q--) { uint16_t *p = gpx(d, x + (q & 1), y + (q >> 1)); if (p) *p = un[q]; }
@@ -2739,7 +2775,8 @@ static void moff(const fluid_draw_t *d, int x, int y, int z, const uint16_t *un)
 static void mrest(const fluid_draw_t *d, int x, int y, int z, const uint16_t *un) {
     for (int q = 0; q < z * z; q++) {
         const int X = x + (q & 1), Y = y + (q >> 1);
-        if (un[q] && X >= 0 && Y >= 0 && X < d->fb_w && Y < d->fb_h && d->m.colx[X] != 255 && d->m.rowy[Y] != 255) d->m.mm->dmg[d->m.rowy[Y] * d->W + d->m.colx[X]] = 1;
+        if (un[q] && X >= 0 && Y >= 0 && X < d->fb_w && Y < d->fb_h && d->m.colx[X] != 255 && d->m.rowy[Y] != 255 &&
+            !(d->m.wn && d->m.wm[d->m.rowy[Y] * d->W + d->m.colx[X]])) d->m.mm->dmg[d->m.rowy[Y] * d->W + d->m.colx[X]] = 1;
     }
 }
 
@@ -2973,7 +3010,7 @@ static bool morph_inline(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dr
  * clock, and what changes, straight into the kept glass: every mover still moving taken off, the still layers' moments
  * turned (from their lists: what turns now, everywhere at once), the movers drawn where they are now; its last frame
  * draws the cells that need it whole. The rows written go to the panel (d->span). */
-static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
+static void morph_step(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
     fluid_morph_t *m = &d->m;
     fluid_morph_mem_t *mm = m->mm;
     const int W = d->W, H = d->H, N = W * H;
@@ -2981,10 +3018,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     int64_t tp = now_us(), tq;
 #define MP_LAP(part) (tq = now_us(), pf[part] += (int)(tq - tp), tp = tq)
 #define MP_LEFT() morph_left(d)
-    memset(d->span, 0, sizeof(int16_t) * 2 * (size_t)H);
-    memset(d->dirty, 0, (size_t)N);
     if (!mm || mm->oj < H) return;                      /* (the old picture being read: nothing moves) */
-    memset(mm->rows, 0, (size_t)d->fb_h);
     mm->wpx = 0;
     /* the old picture in order, then (the drawer's one pass for its new look made) the pairs chosen and its lists */
     if (!mm->planned) {
@@ -3012,7 +3046,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         m->n = m->keep || (!mm->A.n && !mm->L0.n) ? mq(MP_BORN0) : 0;
         m->t = qtime(m->n);
         mm->slow = !m->ready && !m->keep;               /* (its dust built late: the dissolve a little slower) */
-        mm->rate = mm->slow ? MP_SLOW : MP_RATE;
+        mm->rate = mm->slow ? MP_SLOW_OF(m) : MP_RATE_OF(m);
         mm->started = true;                             /* (it moves this frame: the frames before sent nothing) */
     }
     if (mm->got & MGOT_FAIL) { morph_end(d, true); return; }   /* (the job had no room to read it) */
@@ -3022,12 +3056,15 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
      * lines their list), never past it; it stands there briefly at most: FLUID_MORPH_DUST_* for the new look's inputs
      * (then it is read as it is: its dust comes after the change), FLUID_MORPH_HOLD_* (the cloud) or FLUID_MORPH_LINES_*
      * in all, then what is missing is made at once */
-    const int base = mm->paired || !mm->slow ? MP_RATE : MP_SLOW, qend = mq(m->dur);
+    const int base = mm->paired || !mm->slow ? MP_RATE_OF(m) : MP_SLOW_OF(m), qend = mq(m->dur);
     int rate = base;
     const bool wc = !mm->paired && !m->keep, wl = !(mm->got & MGOT_LINES);
     if (wc) rate = wait_rate(m->n, mq(MP_MID), rate);
     if (wl) { const int r = wait_rate(m->n, mq(MP_NEW_LINES0), base); rate = r < rate ? r : rate; }
-    rate = rate < mm->rate - 1 ? (mm->rate - 1 < 0 ? 0 : mm->rate - 1) : rate > mm->rate + 1 ? mm->rate + 1 : rate;   /* (its pace changes a step a frame) */
+    {   /* (its pace changes a step a frame: a quarter frame, more on a quicker clock) */
+        const int st = MP_STEP_OF(m);
+        rate = rate < mm->rate - st ? (mm->rate - st < 0 ? 0 : mm->rate - st) : rate > mm->rate + st ? mm->rate + st : rate;
+    }
     if (wc && m->n + rate > mq(MP_MID)) rate = mq(MP_MID) - m->n;
     if (wl && m->n + rate > mq(MP_NEW_LINES0)) rate = mq(MP_NEW_LINES0) - m->n;
     if (rate < 0) rate = 0;
@@ -3057,7 +3094,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
         m->w++;
         m->n = m->n + rate < qend ? m->n + rate : qend;  /* (at its end it stands till every list and mover is there too) */
         mm->rate = rate;
-        if (rate < MP_RATE) m->dg[FLUID_MD_SLOW]++;
+        if (rate < MP_RATE_OF(m)) m->dg[FLUID_MD_SLOW]++;
     }
     mm->started = true;
     m->t = qtime(m->n);
@@ -3101,12 +3138,12 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
                 const int cnt = (int)(li->at[li->q + 1] - li->at[li->q]);
                 const int left = MP_LEFT() - room;
                 const bool fits = left >= (int)(cnt * lk * (l == 4 ? 128.f * MW_SHAPE : MW_ITEM + 2.f * MW_PX));
-                if (!fits && (forced || li->q > qn - 3 * MP_RATE || left <= 0)) break;   /* (no room: it waits; 3 frames late, a moment a frame still, inside the frame) */
+                if (!fits && (forced || li->q > qn - 3 * MP_RATE_OF(m) || left <= 0)) break;   /* (no room: it waits; 3 frames late, a moment a frame still, inside the frame) */
                 forced += !fits;
                 w0 = mm->wpx;
                 int whole = 0;
                 for (uint32_t i = li->at[li->q]; i < li->at[li->q + 1]; i++) {
-                    if (l == 4) whole += cell_draw(d, o, (int)li->e[i]);
+                    if (l == 4) { if (!(m->wn && m->wm[li->e[i]])) whole += cell_draw(d, o, (int)li->e[i]); }
                     else gput(d, li->e[i], li->col ? li->col[i] : 0, l == 2);
                 }
                 li->q++; done += cnt;
@@ -3163,7 +3200,7 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     for (int l = 0; caught && l < 5; l++) caught = mlist_over(L[l]);
     if (caught) {
         float wk = 0.f;
-        for (int k = 0; k < N; k++) if (mm->dmg[k]) wk += cell_whole(d, mm, k) ? cell_draw(d, o, k) * MW_SHAPE : cell_again(d, k) * MW_PX;
+        for (int k = 0; k < N; k++) if (mm->dmg[k] && !(m->wn && m->wm[k])) wk += cell_whole(d, mm, k) ? cell_draw(d, o, k) * MW_SHAPE : cell_again(d, k) * MW_PX;
         m->work += (int)wk;
         mm->last = true;
     }
@@ -3171,14 +3208,96 @@ static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_dra
     if (m->ready && !m->dg[FLUID_MD_READY]) m->dg[FLUID_MD_READY] = m->frames;
     if (!morph_inline(d, s, o)) return;
     MP_LAP(FLUID_MP_PAIR);
+#undef MP_LAP
+#undef MP_LEFT
+}
+
+/* A say's words over a change (fluid_draw_opts_t.words): drawn as they are now, live, straight into the kept glass, in
+ * their cells cleared as the reader clears them (the change never writes there: gpx), whatever the change is doing; the
+ * cells a word leaves are cleared, and written again at the end as the new picture has them (dmg). Before the change
+ * moves too: its old picture is read around them. Its px drawn, 0: nothing changed. */
+static int morph_words(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
+    fluid_morph_t *m = &d->m;
+    fluid_morph_mem_t *mm = m->mm;
+    const int W = d->W, H = d->H, N = W * H;
+    d->words_whole = false;
+    if (!m->wm) return 0;
+    fluid_glyph_t *const s_wg = m->wg;                  /* (this frame's words) */
+    if (!o->words || !o->font) {                        /* (another look: what was drawn live is the old picture now) */
+        if (m->wn) { memset(m->wm, 0, (size_t)N); m->wn = 0; }
+        m->wsig = 0;
+        return 0;
+    }
+    if (!mm) return 0;
+    uint8_t *const nw = m->wm2;
+    memset(nw, 0, (size_t)N);
+    const float cw = (float)d->stage / W, ch = (float)d->stage / H;
+    int ng = 0, want = 0;
+    uint32_t h = 2166136261u;
+#define WM_MIX(v) (h = (h ^ (uint32_t)(v)) * 16777619u)
+    for (int li = 0; li < o->nletters && li < FLUID_MAX_LETTERS; li++) {
+        const fluid_letter_t *L = &o->letters[li];
+        if (L->ch == ' ') continue;
+        want++;
+        const float sx = (L->x + L->w / 2) / d->stage * 2.f - 1.f, sy = (L->y + L->h / 2) / d->stage * 2.f - 1.f;
+        fluid_glyph_t *g = &s_wg[ng];
+        /* (whole, at once: its ink is in by the reader's rule, its place and colour on the water as it is now) */
+        if (!letter_glyph(d, s, o, L, 1.f, 0.f, fluid_frame_sample(s, s->h, 1.f / FQ_H, sx, sy), fluid_frame_sample_acc(s, sx, sy), g)) continue;
+        int i0 = (int)floorf(L->x / cw), i1 = (int)floorf((L->x + L->w) / cw - 0.001f);
+        int j0 = (int)floorf(L->y / ch), j1 = (int)floorf((L->y + L->h) / ch - 0.001f);
+        if (i0 < 0) i0 = 0;
+        if (j0 < 0) j0 = 0;
+        if (i1 > W - 1) i1 = W - 1;
+        if (j1 > H - 1) j1 = H - 1;
+        for (int j = j0; j <= j1; j++) for (int i = i0; i <= i1; i++) nw[j * W + i] = 1;
+        WM_MIX((uintptr_t)g->gl); WM_MIX((uintptr_t)g->mask); WM_MIX(g->c);
+        WM_MIX((uint16_t)g->x << 16 | (uint16_t)g->y); WM_MIX((uint16_t)g->w << 16 | (uint16_t)g->h);
+        WM_MIX((uint16_t)g->cx0 << 16 | (uint16_t)g->cy0); WM_MIX((uint16_t)g->cx1 << 16 | (uint16_t)g->cy1);
+        ng++;
+    }
+#undef WM_MIX
+    d->words_whole = want > 0 && ng == want;
+    if (h == m->wsig && (ng > 0) == (m->wn > 0)) return 0;   /* (as drawn) */
+    m->wsig = h;
+    int px = 0, n = 0;
+    for (int k = 0; k < N; k++) {
+        if (!m->wm[k] && !nw[k]) continue;
+        const int i = k % W, j = k / W, x0 = d->cx[i], x1 = d->cx[i + 1];
+        for (int y = d->cy[j]; y < d->cy[j + 1]; y++) { memset(m->snap + (size_t)y * d->fb_w + x0, 0, sizeof(uint16_t) * (size_t)(x1 - x0)); mm->rows[y] = 1; }
+        px += (x1 - x0) * (d->cy[j + 1] - d->cy[j]);
+        if (!nw[k]) mm->dmg[k] = 1;                     /* (left: its new picture at the end) */
+        n += nw[k];
+    }
+    const fluid_rect_t t = { m->snap, d->fb_w, 0, 0, d->fb_w, d->fb_h };
+    for (int q = 0; q < ng; q++) {
+        const fluid_glyph_t *g = &s_wg[q];
+        if (g->mask) draw_mask(&t, g->mask, g->mw, g->mh, g->x, g->y, g->w, g->h, g->c, g->cx0, g->cy0, g->cx1, g->cy1);
+        else draw_glyph(&t, g->gl, g->x, g->y, g->w, g->h, g->c, g->cx0, g->cy0, g->cx1, g->cy1);
+    }
+    memcpy(m->wm, nw, (size_t)N); m->wn = n;
+    m->work += (int)(px * MW_SHAPE);
+    return px;
+}
+
+/* A change's frame: the words drawn live over it, then its own step; the cell rows either wrote go to the panel, whole,
+ * straight from the glass (d->span) */
+static void morph_frame(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_opts_t *o) {
+    const int W = d->W, H = d->H;
+    memset(d->span, 0, sizeof(int16_t) * 2 * (size_t)H);
+    memset(d->dirty, 0, (size_t)W * H);
+    if (d->m.mm) memset(d->m.mm->rows, 0, (size_t)d->fb_h);
+    const int wpx = morph_words(d, s, o);
+    morph_step(d, s, o);
+    const int64_t t1 = now_us();
+    fluid_morph_mem_t *const mm = d->m.mm;              /* (none: the change ended in its step) */
+    if (!mm) return;
+    d->m.comp += wpx;
     for (int j = 0; j < H; j++) {                       /* (the cell rows written: whole, straight from the glass) */
         bool any = false;
         for (int y = d->cy[j]; y < d->cy[j + 1] && !any; y++) any = mm->rows[y];
         d->span[2 * j + 1] = (int16_t)(any ? W : 0);
     }
-    MP_LAP(FLUID_MP_MARKS);
-#undef MP_LAP
-#undef MP_LEFT
+    d->m.prof[FLUID_MP_MARKS] += (int)(now_us() - t1);
 }
 
 /* The top of each cells pass in a change: the old picture read from the glass, a share of a frame at a time, before the

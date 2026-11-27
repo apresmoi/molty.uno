@@ -35,6 +35,8 @@
 #define DEV_WAVE_COPY_US 0.05    /* a pixel of a wave's box copied from the kept glass (the same)                      */
 #define DEV_CELLS_MS     11.0    /* the drawer's cells pass (scene_test.c CELLS_MS; device logs: cells 9.8 to 12)       */
 #define DEV_SIM_MS       6.2     /* the sim task's own work (device log at e9f3195: anim wave.parts simw mean 6.2)     */
+#define DEV_SIM_TEXT_MS  28.8    /* .. with a say's words in the moving fluid (its whole step and the words' target every
+                                  * cell, every frame: device log 2026-11-27, the change into them, sim mean 27.5 to 30.1) */
 #define DEV_CPU_X        100.0   /* the device's cores do the firmware's own work this many times slower than the module
                                   * in a desktop browser: a fresh dust set builds in 0.45 to 0.8 s on the device (scene
                                   * drawer handover) and in 5.6 ms here (an M-series Mac, Node 22). Paces the work the
@@ -85,9 +87,10 @@ static void web_frame_after(void) {
                                             : s_sent.wins * DEV_WIN_MS + s_sent.px * DEV_PX_US / 1000.;
     const double cells = s_drew ? DEV_CELLS_MS : 0., draw = cells + send;
     const double floor_ms = (fd_asleep(&s_dir) ? FLUID_SLEEP_US : atomic_load(&s_screen) ? FLUID_FRAME_US : FLUID_OFF_POLL_MS * 1000) / 1000.;
-    const double work = draw > DEV_SIM_MS ? draw : DEV_SIM_MS;
+    const double sim = s_sim && s_cur == ST_TEXT && !s_sim->p.still ? DEV_SIM_TEXT_MS : DEV_SIM_MS;
+    const double work = draw > sim ? draw : sim;
     s_fi[FI_WINS] = (float)s_sent.wins; s_fi[FI_PX] = (float)s_sent.px; s_fi[FI_COMP] = (float)comp; s_fi[FI_WAVE] = wave;
-    s_fi[FI_CELLS_MS] = (float)cells; s_fi[FI_SEND_MS] = (float)send; s_fi[FI_DRAW_MS] = (float)draw; s_fi[FI_SIM_MS] = (float)DEV_SIM_MS;
+    s_fi[FI_CELLS_MS] = (float)cells; s_fi[FI_SEND_MS] = (float)send; s_fi[FI_DRAW_MS] = (float)draw; s_fi[FI_SIM_MS] = (float)sim;
     s_fi[FI_FRAME_MS] = (float)(work > floor_ms ? work : floor_ms);
     s_fi[FI_ANIM] = s_draw ? (float)s_draw->anim_on : 0.f;
     s_sent.wins = 0; s_sent.px = 0;

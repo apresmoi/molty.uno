@@ -38,6 +38,7 @@ static void web_overlay_dirty(fluid_draw_t *d, const fluid_overlay_t *ov);
 #include "creature_dots.h"             /* CD_VIEW_SIZE: the world a panel is wide (wm_pan) */
 #include "creature_clip.h"             /* a creature's habits by name (wm_habit) */
 #include "web_default_molty.h"
+#include <stdarg.h>
 const uint8_t *web_default_molty_end[] = { _binary_default_molty_start + sizeof(_binary_default_molty_start) };
 
 #ifdef __EMSCRIPTEN__
@@ -137,8 +138,18 @@ char *pkgc_bytes(const char *id, size_t *len) {
     return c;
 }
 
-/* the log and the timing histograms go nowhere */
-void mole_diag_event(bool important, const char *fmt, ...) { (void)important; (void)fmt; }
+/* the log and the timing histograms go nowhere (the host tests may read the log's lines: s_diag_tap) */
+static void (*s_diag_tap)(const char *line);
+void mole_diag_event(bool important, const char *fmt, ...) {
+    (void)important;
+    if (!s_diag_tap) return;
+    char line[256];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(line, sizeof(line), fmt, ap);
+    va_end(ap);
+    s_diag_tap(line);
+}
 void mole_diag_set_calm(uint32_t (*calm_ms)(void)) { (void)calm_ms; }   /* (no flash here: nothing to hold) */
 void mole_flash_motion(void) {}
 void mole_diag_sim_frame(uint32_t interval_us, uint32_t work_us) { (void)interval_us; (void)work_us; }
