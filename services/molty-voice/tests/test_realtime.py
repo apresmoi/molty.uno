@@ -121,6 +121,7 @@ def test_a_front_turn_ends_on_the_model_and_its_reply_streams_back():
     # create_response off: the box asks for the one reply itself, on the commit (rule 1)
     assert tds[0]["type"] == "semantic_vad" and tds[0]["create_response"] is False and tds[0]["interrupt_response"] is False
     assert len(s["creates"]) == 1
+    assert s["creates"][0]["max_output_tokens"] == brief.REPLY_MAX_TOKENS  # a plain reply cannot ramble
     assert tds[1:] == [None]
     # 16 kHz in -> 24 kHz to the provider (x1.5), streamed; nothing after the model ended the turn
     # (0.6 s of speech + its 0.5 s of silence, of the 1.5 s Molty recorded)
@@ -402,7 +403,9 @@ def test_a_new_turn_wins_the_answer_to_the_turn_before_is_context():
 
 def test_the_brief_sets_filler_by_default_and_hand_off_for_real_questions():
     for rule in ("Answer yourself ONLY when you already have what it takes", "When unsure, hand off", "echoes a few of the person's own words",
-                 "Never a bare \"one moment\"", "address the agent by name", "speak as it"):
+                 "Never a bare \"one moment\"", "agent by name", "speak as it", "ONE short spoken sentence, at most 12 words",
+                 "You are not an assistant", "never offer help", "Never explain a cause", "any complaint about how Molty behaves",
+                 "Without one, be neutral and brief"):
         assert rule in brief.BRIEF
     assert brief.TOOLS[0]["parameters"]["required"] == ["request"]
 
@@ -496,3 +499,31 @@ def test_every_turn_end_gets_its_one_reply_even_when_the_listen_ends_at_once():
 
     relay, fake, _ = asyncio.run(run(scenario, fake_kw={"auto_create_ms": 300}))
     assert len(relay.of("front.reply", stt="s1")) == 1 and len(fake.sessions[0]["creates"]) == 1
+
+
+def _ends(order: str):
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "stt.start", "id": "s1", "rate": 16000, "front": True})
+        if order == "model_first":
+            await relay.mic("s1", speech(500) + silence(700))
+            await relay.until(lambda: relay.of("stt.turn_end", id="s1"))
+        else:
+            await relay.mic("s1", speech(600))  # still speaking when Molty's end comes
+        await relay.send({"t": "stt.end", "id": "s1"})  # the device's end of the same turn, at once
+        await relay.until(lambda: relay.of("front.reply", stt="s1") and relay.of("tts.end", id=relay.of("front.reply", stt="s1")[0]["id"]), timeout=3)
+        await asyncio.sleep(0.3)
+
+    return scenario
+
+
+def test_the_models_end_and_the_devices_end_of_one_turn_give_one_commit_and_one_reply_either_order():
+    # live 2026-11-27 (rig run, turn 3 "Hmm"): the model ended the turn and 2 ms later Molty's end came; the box
+    # committed again (empty: an error), that error failed the reply, and the reply was then cancelled: no answer
+    for order, kw in (("model_first", {"commit_event_ms": 60}), ("device_first", {"ends_together": True})):
+        relay, fake, _ = asyncio.run(run(_ends(order), fake_kw={"transcript": "hmm", **kw}))
+        s = fake.sessions[0]
+        replies = relay.of("front.reply", stt="s1")
+        assert len(replies) == 1, order
+        end = relay.of("tts.end", id=replies[0]["id"])[0]
+        assert "error" not in end and replies[0]["id"] in relay.audio, order  # it was said
+        assert s["commits"] == 1 and len(s["creates"]) == 1 and s["cancels"] == 0, order

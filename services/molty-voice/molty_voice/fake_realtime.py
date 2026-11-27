@@ -25,7 +25,8 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
-                 reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True):
+                 reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True,
+                 commit_event_ms: int = 0, ends_together: bool = False):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -41,6 +42,12 @@ class FakeRealtime:
         self.auto_create_ms = auto_create_ms
         # as a model seen live: background sent as a system item ("Inner voice context: ...") is said with the next answer
         self.recite = recite
+        # the turn detection commits at once, but its `committed` event reaches the client this late (2 ms live:
+        # enough for the device's end of the same turn to arrive first). A commit of an empty buffer is an error.
+        self.commit_event_ms = commit_event_ms
+        # the device's end and the model's own end of one turn together: when turn detection is switched off
+        # mid speech, the model has just ended the turn itself (speech_stopped, its commit) before that
+        self.ends_together = ends_together
         self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
         self.threshold = threshold
         self.sessions: list[dict] = []
@@ -69,7 +76,7 @@ class FakeRealtime:
         # vad: the turn detection's settings (None: off, push to talk). Its speech state lives across
         # commits and clears, as a real detector's does: only a new turn_detection resets it.
         st = {"buf": [], "speech": False, "quiet": 0, "audio_ms": 0, "start_ms": 0, "active": None, "n": 0, "create": True, "vad": None,
-              "heard": "", "auto": None, "recited": 0}
+              "heard": "", "auto": None, "recited": 0, "pending_ms": 0}
         lock = asyncio.Lock()
 
         async def send(ev):
@@ -80,12 +87,19 @@ class FakeRealtime:
             st["n"] += 1
             return f"{p}_{st['n']}"
 
-        async def commit(by_vad: bool):
+        async def commit(by_vad: bool, event_id: str | None = None):
+            if not by_vad and st["pending_ms"] < 100:
+                sess["empty_commits"] = sess.get("empty_commits", 0) + 1
+                await send({"type": "error", "error": {"type": "invalid_request_error", "code": "input_audio_buffer_commit_empty", "event_id": event_id,
+                                                       "message": f"buffer too small. Expected at least 100ms of audio, but buffer only has {st['pending_ms']}ms of audio."}})
+                return
             item = nid("item")
             if by_vad:
                 st["speech"], st["quiet"] = False, 0
             sess["commits"] += 1
-            st["buf"] = []
+            st["buf"], st["pending_ms"] = [], 0
+            if by_vad and self.commit_event_ms:
+                await asyncio.sleep(self.commit_event_ms / 1000)
             await send({"type": "input_audio_buffer.committed", "item_id": item, "previous_item_id": None})
             turn = self.script[self.turn] if self.turn < len(self.script) else None
             self.turn += 1
@@ -170,8 +184,13 @@ class FakeRealtime:
                     inp = (ev["session"].get("audio") or {}).get("input") or {}
                     if "turn_detection" in inp:
                         td = inp["turn_detection"]
+                        was_speaking = st["vad"] is not None and st["speech"]
                         st["vad"], st["speech"], st["quiet"] = td, False, 0
                         st["create"] = bool(td.get("create_response", True)) if isinstance(td, dict) else False
+                        if td is None and self.ends_together and was_speaking:
+                            await send({"type": "input_audio_buffer.speech_stopped", "audio_end_ms": st["audio_ms"], "item_id": "pending"})
+                            st["pending_ms"] = 0
+                            asyncio.create_task(commit(True))
                         if td is None and st["auto"] is not None:  # turned off before its auto response: lost
                             st["auto"].cancel()
                             st["auto"] = None
@@ -182,6 +201,7 @@ class FakeRealtime:
                     for i in range(0, len(pcm), RATE // 50):  # 20 ms steps
                         w = pcm[i : i + RATE // 50]
                         st["audio_ms"] += 20
+                        st["pending_ms"] += 20
                         if st["vad"] is None:
                             continue
                         loud = float(np.sqrt(np.mean(w * w))) > self.threshold if w.size else False
@@ -192,12 +212,13 @@ class FakeRealtime:
                             st["quiet"] = 0 if loud else st["quiet"] + 20
                             if st["quiet"] >= self.silence_ms:
                                 await send({"type": "input_audio_buffer.speech_stopped", "audio_end_ms": st["audio_ms"], "item_id": "pending"})
-                                await commit(True)
+                                st["pending_ms"], st["speech"], st["quiet"] = 0, False, 0  # committed now, server side; its event may come later
+                                asyncio.create_task(commit(True))
                 elif t == "input_audio_buffer.commit":
-                    await commit(False)
+                    await commit(False, ev.get("event_id"))
                 elif t == "input_audio_buffer.clear":
                     sess["clears"] += 1
-                    st["buf"] = []
+                    st["buf"], st["pending_ms"] = [], 0
                 elif t == "conversation.item.create":
                     item = ev.get("item") or {}
                     if item.get("type") == "message":

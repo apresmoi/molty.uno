@@ -65,6 +65,8 @@ _ws_log = logging.getLogger("molty_voice.realtime.socket")
 _ws_log.setLevel(logging.WARNING)
 
 PROVIDER_RATE = 24000
+# The model ended a turn: its own commit comes at once (2 ms live); without it this long, the box commits.
+COMMIT_WAIT_S = 1.0
 # What the front keeps of the agent across sessions: its last lines, each and in all at most this long.
 # Lines older than the relay's longest conversation (15 min) are dropped.
 MEMORY_LINES, MEMORY_LINE, MEMORY_CHARS, MEMORY_MAX_AGE_S = 8, 500, 2000, 900.0
@@ -348,6 +350,12 @@ class RealtimeFront:
         await self._vad(None)
         if lst.committed or lst.finaled:
             return  # the turn detection committed it: its transcript is on its way
+        if lst.turned and lst.speech and not lst.hold:
+            # one turn, one end: the model ended it first (speech_stopped) and the provider commits it itself
+            # (its `committed` brings the reply). A second commit here would be empty and fail (live, run 6).
+            # Should that commit never come, the box commits after COMMIT_WAIT_S.
+            asyncio.get_running_loop().create_task(self._commit_later(lst))
+            return
         if not lst.speech or lst.samples < DEVICE_RATE // 10:
             # nothing worth a transcript (or a reply)
             log.info("listen %s: ended by Molty, nobody spoke", mid)
@@ -355,7 +363,17 @@ class RealtimeFront:
             await self._send({"type": "input_audio_buffer.clear"})
             await self._send_json({"t": "stt.final", "id": mid, "text": "", "ms": {"final": 0}})
             return
-        # Molty ended the turn itself (a tap, its window): commit what was heard, and answer it on a front listen
+        await self._commit(lst)
+
+    async def _commit_later(self, lst: _Listen) -> None:
+        await asyncio.sleep(COMMIT_WAIT_S)
+        if not lst.committed and self._listen is lst:
+            log.info("listen %s: no commit from the provider: the box commits", lst.mid)
+            await self._commit(lst)
+
+    async def _commit(self, lst: _Listen) -> None:
+        """Molty ended the turn (a tap, its window, the release), or the provider never committed it: commit, then the one reply."""
+        mid = lst.mid
         y = lst.rs.flush()
         if y.size:
             await self._send({"type": "input_audio_buffer.append", "audio": base64.b64encode(float_to_pcm16(y)).decode()})
@@ -461,16 +479,17 @@ class RealtimeFront:
         s = self._queue.pop(0)
         self._creating = s
         meta = {"molty": s.sid}
+        eid = {"event_id": f"rc_{s.sid}"}  # an error for this request names it (error.event_id)
         if s.kind == "inner":
             # the agent's answer it waited for, or the agent speaking up (per-response instructions: a bare system message gets reacted to)
             say = self._instructions() + "\n\n" + brief.inner(s.text, s.exact, s.awaited)
-            await self._send({"type": "response.create", "response": {"instructions": say, "tool_choice": "none", "metadata": meta}})
+            await self._send({"type": "response.create", **eid, "response": {"instructions": say, "tool_choice": "none", "metadata": meta}})
         elif s.kind == "plain":
-            await self._send({"type": "response.create", "response": {"instructions": brief.exactly(s.text), "tool_choice": "none", "metadata": meta}})
+            await self._send({"type": "response.create", **eid, "response": {"instructions": brief.exactly(s.text), "tool_choice": "none", "metadata": meta}})
         elif s.kind == "wait":
-            await self._send({"type": "response.create", "response": {"instructions": self._instructions() + "\n" + brief.STILL_WAITING, "tool_choice": "none", "metadata": meta}})
+            await self._send({"type": "response.create", **eid, "response": {"instructions": self._instructions() + "\n" + brief.STILL_WAITING, "tool_choice": "none", "metadata": meta}})
         else:  # the one reply to the person's turn
-            await self._send({"type": "response.create", "response": {"metadata": meta}})
+            await self._send({"type": "response.create", **eid, "response": {"max_output_tokens": brief.REPLY_MAX_TOKENS, "metadata": meta}})
 
     async def _on_created(self, resp: dict) -> None:
         rid = resp.get("id") if isinstance(resp.get("id"), str) else None
@@ -681,7 +700,9 @@ class RealtimeFront:
             self._queue.insert(0, s)
             return
         log.warning("realtime error %s: %s", code, msg)  # the provider's message: never our key
-        if s is not None:
+        # only an error that names our response request fails it (a turn's empty second commit never does)
+        eid = err.get("event_id")
+        if s is not None and (eid == f"rc_{s.sid}" or (not eid and not code.startswith("input_audio_buffer"))):
             self._creating = None
             await self._end_speech(s, error=f"realtime error {code}")
             await self._next()
