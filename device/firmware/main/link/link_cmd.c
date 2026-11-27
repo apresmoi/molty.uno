@@ -344,6 +344,7 @@ void link_cmd_init(void)
     link_cmd_register("say", link_audio_say); link_cmd_register("listen", link_audio_listen);
     link_cmd_register("listen_stop", link_audio_listen_stop);
     link_cmd_register("say_cancel", link_audio_say_cancel);
+    link_cmd_register("say_text", link_audio_say_text);
     link_cmd_register("gestures", cmd_gestures);
     link_cmd_register("volume", cmd_volume); link_cmd_register("imu", cmd_imu);
     link_cmd_register("buzz", haptic_cmd);

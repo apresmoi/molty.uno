@@ -860,6 +860,8 @@ static void begin(const audio_job_t *job, bool cued)
 }
 
 static esp_err_t adopt(const cJSON *args, const cJSON *local, cJSON **out);
+/* a say's text: 1..4096 bytes (the reader's) */
+static bool say_text_ok(const cJSON *text) { return cJSON_IsString(text) && text->valuestring[0] && strlen(text->valuestring) <= 4096; }
 
 static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
 {
@@ -880,7 +882,7 @@ static esp_err_t start(const cJSON *args, bool listen, cJSON **out)
     if (listen) { if (!link_listen_window(args, mole_fluid_listen_window(), &window, &rec_ms)) return ESP_ERR_INVALID_ARG; }
     else if (!cJSON_IsNumber(ms) || ms->valuedouble < 0 || ms->valuedouble > INT_MAX ||
              ms->valuedouble != ms->valueint) return ESP_ERR_INVALID_ARG;
-    if (!listen && (!cJSON_IsString(text) || !text->valuestring[0] || strlen(text->valuestring) > 4096)) return ESP_ERR_INVALID_ARG;
+    if (!listen && !say_text_ok(text)) return ESP_ERR_INVALID_ARG;
     /* say {cues: true} (cap say_cues): the frames carry word cues; the text follows the voice */
     const cJSON *cues = cJSON_GetObjectItemCaseSensitive(args, "cues");
     if (!listen && cues && !cJSON_IsBool(cues)) return ESP_ERR_INVALID_ARG;
@@ -1124,6 +1126,26 @@ esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **out)
     if (!result) return ESP_ERR_NO_MEM;
     cJSON_AddStringToObject(result, "job", j->valuestring);
     cJSON_AddBoolToObject(result, "cancelling", mine);
+    *out = result;
+    return ESP_OK;
+}
+
+/* cmd say_text {job, text} (cap say_text): the running say's whole text so far, sent again as it grows while the say
+ * plays (a voice whose words come with it): its words keep their place, the new ones show as the speaker reaches their
+ * cues (a cue may come before its word's text). A piece the device has already (the same again, an older one) changes
+ * nothing. Answers {job, taken}: false when that say is not the running one (ended, another job) or its words left the
+ * screen (another text since); a text that is not more of the say's (nor its beginning) is invalid_args. */
+esp_err_t link_audio_say_text(const cJSON *args, cJSON **out)
+{
+    const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job"), *text = cJSON_GetObjectItemCaseSensitive(args, "text");
+    if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job) || !say_text_ok(text)) return ESP_ERR_INVALID_ARG;
+    const esp_err_t e = s_busy && !s_listen && !strcmp(j->valuestring, s_job)
+                      ? mole_fluid_say_text(s_say_text_ver, text->valuestring, (int)strlen(text->valuestring)) : ESP_ERR_INVALID_STATE;
+    if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
+    cJSON *result = cJSON_CreateObject();
+    if (!result) return ESP_ERR_NO_MEM;
+    cJSON_AddStringToObject(result, "job", j->valuestring);
+    cJSON_AddBoolToObject(result, "taken", e == ESP_OK);
     *out = result;
     return ESP_OK;
 }

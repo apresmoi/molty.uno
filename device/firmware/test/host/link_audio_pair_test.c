@@ -131,6 +131,14 @@ void mole_fluid_act(int a) { mark_log(cute_act_name(a)); }
  * the version its say set, so a newer text (an update's progress) is never tinted */
 static unsigned text_ver = 7;
 unsigned mole_fluid_text_ver(void) { return text_ver; }
+/* a say's text further (mole_fluid.c): the same version, beginning with what the reader has */
+esp_err_t mole_fluid_say_text(unsigned v, const char *t, int len) {
+    const size_t have=strlen(sdk_text);
+    if (v!=text_ver) return ESP_ERR_INVALID_STATE;
+    if (memcmp(t,sdk_text,(size_t)len<have?(size_t)len:have)) return ESP_ERR_INVALID_ARG;
+    if ((size_t)len>have) memcpy(sdk_text,t,(size_t)len+1);
+    return ESP_OK;
+}
 static unsigned mark_ver;
 void mole_fluid_cue_mood(int m, unsigned v) { mark_ver = v; mark_log(link_mood_name(m)); }
 void mole_fluid_spoke(void) { spoke++; }
@@ -654,6 +662,36 @@ static void test_say_cues(void) {
     assert(say_with(",\"cues\":true"));
     assert(receive_cued(0,false,"[[0]]")==ESP_ERR_INVALID_ARG);
     complete(play()); assert(cue_ends==1 && !link_audio_busy());
+}
+
+/* cmd say_text (cap say_text): the running say's text so far, again as it grows: more of it is taken (the same version:
+ * the say goes on), a piece it has (again, older) changes nothing, a text that is not the say's is refused; another job,
+ * a listen, a say whose words left the screen: not taken. The cues of words still to come wait for them. */
+static bool say_text(const char *job, const char *text, esp_err_t *e) {
+    cJSON *a=cJSON_CreateObject(),*r=NULL; cJSON_AddStringToObject(a,"job",job); if (text) cJSON_AddStringToObject(a,"text",text);
+    *e=link_audio_say_text(a,&r); cJSON_Delete(a);
+    const bool taken=r && !strcmp(cJSON_GetObjectItem(r,"job")->valuestring,job) && cJSON_IsTrue(cJSON_GetObjectItem(r,"taken"));
+    cJSON_Delete(r); return taken;
+}
+static void test_say_text(void) {
+    esp_err_t e;
+    cue_n=0; cue_ends=0; cue_last=-9;
+    assert(say_with(",\"cues\":true")); const unsigned v=text_ver;
+    assert(receive_cued(0,false,"[[0,0],[1,500],[2,1000],[3,1500],[4,2000],[5,3000]]")==ESP_OK);   /* 4, 5: cues for words to come */
+    assert(say_text(s_job,"one two three four five six",&e) && e==ESP_OK && !strcmp(sdk_text,"one two three four five six") && text_ver==v);
+    assert(say_text(s_job,"one two three four five six",&e) && say_text(s_job,"one two three",&e) && !strcmp(sdk_text,"one two three four five six"));
+    assert(!say_text(s_job,"one two tree four five six seven",&e) && e==ESP_ERR_INVALID_ARG && !strcmp(sdk_text,"one two three four five six"));
+    assert(!say_text("other","one two three four five six seven",&e) && e==ESP_OK);
+    assert(!say_text(s_job,NULL,&e) && e==ESP_ERR_INVALID_ARG);
+    assert(!say_text(s_job,"",&e) && e==ESP_ERR_INVALID_ARG);
+    assert(receive_cued(1,true,NULL)==ESP_OK);
+    complete(play()); assert(cue_ends==1 && cue_last==5 && !link_audio_busy());
+    assert(!say_text(s_job,"one two three four five six seven",&e) && e==ESP_OK);   /* played out: not taken */
+    assert(say_with(",\"cues\":true")); text_ver++;                                  /* another text over its words */
+    assert(!say_text(s_job,"one two three four five",&e) && e==ESP_OK);
+    link_audio_cancel(); complete(play());
+    audio_job_t job; listen_job(100,&job);
+    assert(!say_text(job.job,"one two",&e) && e==ESP_OK); complete(record(&job));
 }
 
 /* nothing is spoken before the screen can show it: with the first sound in hand the words it starts with are revealed,
@@ -1217,7 +1255,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_text(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);

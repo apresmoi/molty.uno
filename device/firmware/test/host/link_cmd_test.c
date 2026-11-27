@@ -37,6 +37,7 @@ esp_err_t link_audio_say(const cJSON *a, cJSON **o) { (void)a;(void)o; return ES
 esp_err_t link_audio_listen(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_listen_stop(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 esp_err_t link_audio_say_cancel(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
+esp_err_t link_audio_say_text(const cJSON *a, cJSON **o) { (void)a;(void)o; return ESP_OK; }
 static uint32_t s_ext_hold_ms, s_ext_n;   /* link_audio_external_react calls (the relay's reaction over a listen) */
 void link_audio_external_react(uint32_t hold_ms) { s_ext_hold_ms = hold_ms; s_ext_n++; }
 static unsigned ask_cancels, ask_cmds;

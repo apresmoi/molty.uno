@@ -46,6 +46,7 @@ void link_audio_resume_hello(cJSON *hello);
 /** The relay's welcome: pick up or drop what was held, and learn whether it can hold at all. */
 void link_audio_resume_welcome(const cJSON *welcome);
 esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **result);
+esp_err_t link_audio_say_text(const cJSON *args, cJSON **result);
 /* Link task: the relay's welcome listed listen_adopt (true), or the link went down (false). */
 void link_audio_relay_adopts(bool on);
 /* Shake to talk: the sense task's IMU samples (g, esp_timer ms), every one. While a shake's
