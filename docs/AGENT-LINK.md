@@ -1090,8 +1090,8 @@ sound and places each hit on its exact sample (`rhythm_player.h`). Nothing beat 
 The tone player (`device/firmware/main/rhythm/wave_player.h`, `wave.h`) is the beat player's sibling on the same
 speaker: the agent sends the chord kinds, a note and a pitch once (`wave.play`), and Molty holds the chord by itself,
 each voice the beat player's own low drum with a beater's click on it, hit once a cycle. Slow it is a rhythm; past about
-20 hits a second the hits fuse into a note. It needs a speaker and answers to the `rhythm` cap (older firmware:
-`unknown_command`). Playing it stops the rhythm, and `rhythm.play` stops it: one player on the speaker.
+20 hits a second the hits fuse into a note. Cap `wave` (boards with a speaker); the relay refuses `wave.*` with
+`unsupported` to a Molty without it. Playing it stops the rhythm, and `rhythm.play` stops it: one player on the speaker.
 
 - **A chord kind** is `{id, label, semis, ratio, spell}`: up to 5 voices, `semis` above the root (0 first), `ratio` the
   voices' whole numbers (their hits a turn, up to 48, rising), `spell` the key its note names are spelt in. Up to 32
@@ -1104,8 +1104,11 @@ each voice the beat player's own low drum with a beater's click on it, hit once 
   and any of `note`, `pick`, `tuning`, `mute`, `paused`: a pitch glides in 30 ms, never restarts; a new kind or note
   while playing starts it again in its octave after a 12 ms fade. **`wave.stop`**: silence.
 - **The sound.** Under 24.5 Hz the hit itself from each hit (a new one chokes the last over 2 ms); over 32 Hz one cycle
-  of that same choked hit for each semitone, band-limited under 7.2 kHz by FFT (made once when a chord is first sent,
-  about 430 KB of PSRAM, about 0.4 s; freed when nothing plays); between, the two crossfaded, one waveform at one phase.
+  of that same choked hit for each semitone, band-limited under 7.2 kHz by FFT, between them the two crossfaded, one
+  waveform at one phase. The cycles (int16, about 257 KB of PSRAM with the hit) are made off the link task once a chord
+  is first sent, on a low-priority task with its stack in PSRAM, the ones a voice needs first: `wave.play` answers at
+  once, a voice starts on its own cycles a few tens of ms later, and the rest follow in about a second of idle time.
+  Freed when nothing plays.
   Each pitch to a 0.45 peak or a 0.2 RMS, the chord times 1.25 over its voices, the beat player's soft knee, 16 kHz.
   The speaker is shared and synced exactly as the rhythm's (its delay, its `sync` trim, its yield to a say or a listen).
 - **The scope** is the waves package's screen (a `wave` item, [PACKAGES.md](PACKAGES.md#layouts)): with none on screen
@@ -1116,7 +1119,7 @@ each voice the beat player's own low drum with a beater's click on it, hit once 
   turning fast the chosen note's next octave (a longer tick); a tap on a whole number up top (or a voice's dots while
   slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the middle stops it on the note it stopped at. `ring`
   events as the rhythm's (`pitch` value, `chord` index and id, `note` index); a `wave` event `{state, chord, note, hz}`
-  when the human plays or stops it. The accept button is the middle; the reject button or a held finger closes it.
+  when the human plays or stops it (opt-in for a webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
 
 ## Closing a screen
 
@@ -1145,6 +1148,7 @@ pairing). Rate-limited on the device. `shake`, `tap` and `button` reach agents t
 | `tap` | `{x, y, spot?, opened?, closed?, muted?}` | a finger touched the screen (boards with touch); 0..1 of the panel from the top left; ≤ 4/s. On a rhythm clock's drum dot: `spot` the drum, `muted` whether it is silent now (Molty muted it itself). On a scene's tap spot it also names the spot (`spot: "<id>"`), whatever tap is bound to, and Molty already shows that spot's reading, or opened the layout the spot names (`opened: "<layout>"`) and reads the spot over it once it is up; `closed: true`: the tap landed beside the spots of a layout so opened, and Molty went back to the scene under it ([PACKAGES.md](PACKAGES.md#layouts)) |
 | `ring` | `{spot, value}` · `{spot, index, label?, id?}` | a scene's wheel settled ([PACKAGES.md](PACKAGES.md#layouts)): the finger left a wheel where it moved it: a number (`value`) or a choice (`index`, `label`; `id`: the rhythm a pick chose, shown stopped until a tap in the middle plays it; `spot: "region"`: a pick's regions, one level up). Never one a click |
 | `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm, bpm}` | the beat player's state changed on the device itself: a tap in the middle or the accept button played it (`playing`) or stopped it on the clock, choosing (`paused`); the reject button, or its clock leaving the screen, stopped it and it left (`stopped`) ([Rhythm](#rhythm)) |
+| `wave` | `{state: "playing" \| "paused" \| "stopped", chord, note, hz}` | the tone player's state changed on the device itself: the centre or the accept button played it (`playing`) or stopped it to choose (`paused`); the reject button, or its scope leaving the screen, stopped it (`stopped`) ([Waves](#waves)) |
 | `scene` | `{why, pkg?, layout?, spot?}` | the scene on screen changed on the device itself, no command having asked: `why` `open` (a tap on `spot` opened `layout`), `back` (a tap beside it: the scene under it is up again), `close` (the human closed it: the reject button or a finger
 held a second, [Closing a screen](#closing-a-screen)) or `end` (a scene ran out: `layout` is the one under it or the next queued; neither `pkg` nor `layout`: nothing is up, the creature is back) |
 | `double_tap` | `{x, y}` | two taps within 350 ms, when bound to `event` (out of the box a double tap talks) |
@@ -1345,7 +1349,7 @@ flowchart TD
 | Step | Detail |
 |---|---|
 | Relay room | `DeviceRoom.onEvt`, over the device's WSS |
-| Allow list | `shake`, `tap`, `button`, `answer`, `ring`, `rhythm`, `scene`; the rest stays internal |
+| Allow list | `shake`, `tap`, `button`, `answer`, `ring`, `rhythm`, `wave`, `scene`; the rest stays internal |
 | Relay's own events | `utterance`, `utterance.partial`; `draft.used` / `draft.dropped` to one agent |
 | Cap | 30 a minute per device; the excess is dropped and counted |
 | Event ring | `ev:<seq>`, 200 events / 24 h, in Durable Object storage |
@@ -1367,6 +1371,7 @@ flowchart TD
 | `button` | `{id: "accept" \| "reject"}` |
 | `ring` | `{spot, value: number}` or `{spot, index: int 0..31, label?, id?}`: a wheel settled. Webhooks only when their `events` name it |
 | `rhythm` | `{state: "playing" \| "paused" \| "stopped", rhythm?, bpm}`. Webhooks only when their `events` name it |
+| `wave` | `{state: "playing" \| "paused" \| "stopped", hz, chord?, note?}`. Webhooks only when their `events` name it |
 | `answer` | `{job, index: int 0..4 \| null, label?: string, reason?: "timeout" \| "cancelled"}`, checked against the pending ask (see the `ask` wire bullet) |
 
 **Who Molty is.** The device's `creature` frame (Device events) is checked and bounded (`creatureData` in

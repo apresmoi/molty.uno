@@ -139,7 +139,7 @@ describe("scene event: the device changed its own screen", () => {
     expect(webhookWants(undefined, "scene")).toBe(false);
     expect(webhookWants(["scene", "tap"], "scene")).toBe(false);
     expect(webhookWants(undefined, "tap")).toBe(true);
-    expect(AGENT_EVENT_TYPES).toEqual(["shake", "tap", "double_tap", "button", "answer", "ring", "rhythm", "utterance", "utterance.partial", "draft.used", "draft.dropped", "creature", "dnd"]);
+    expect(AGENT_EVENT_TYPES).toEqual(["shake", "tap", "double_tap", "button", "answer", "ring", "rhythm", "wave", "utterance", "utterance.partial", "draft.used", "draft.dropped", "creature", "dnd"]);
   });
 });
 

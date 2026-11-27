@@ -76,8 +76,11 @@ function muteArg(v: unknown): string[] {
   if (!Array.isArray(v) || v.length > 4 || !v.every((x) => typeof x === "string" && RHYTHM_LAYER_RE.test(x))) throw invalid("mute must be a list of up to 4 layer ids");
   return v as string[];
 }
-// ---- the tone player (docs/AGENT-LINK.md "Waves"): chord kinds, a note and a pitch, sent once; Molty holds it. It shares
-// the beat player's speaker and its cap (`rhythm`): firmware without it answers unknown_command ----
+// ---- the tone player (docs/AGENT-LINK.md "Waves"): chord kinds, a note and a pitch, sent once; Molty holds it on the
+// beat player's speaker ----
+
+/** Firmware cap: wave.* (boards with a speaker). */
+export const WAVE_CAP = "wave";
 
 /** wave.play's chord kinds as JSON: up to 32 of about 90 bytes (the device checks each strictly). */
 export const MAX_WAVE_KINDS = 32;

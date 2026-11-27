@@ -2,8 +2,8 @@
 
 Shaped like molty-rhythm's. All go to `POST $MOLTY_RELAY/v1/devices/<device>/cmd` with
 `Authorization: Bearer <token>` (the molty skill's pairing), body `{"name": …, "args": {…}}`.
-The tone player shares the beat player's speaker: a Molty with `rhythm` in `relay.caps` has a speaker; firmware
-without the tone player answers `unknown_command`.
+A Molty with `wave` in `relay.caps` has the tone player (on the beat player's speaker); without it the relay answers
+`unsupported`.
 
 ## Show and play
 
@@ -34,10 +34,10 @@ without the tone player answers `unknown_command`.
 | `ring` | `{"spot":"chord","index":13,"label":"MAJOR SEVENTH","id":"major-7"}` | stopped, the rim was turned to another chord (its preview played) |
 | `ring` | `{"spot":"note","index":1,"label":"Db"}` | at the notes, the rim was turned to another note |
 | `tap` | `{"x":0.5,"y":0.13,"spot":"voice-2","muted":true}` | a drum was muted or brought back (its number up top, or its dots while slow) |
+| `wave` | `{"state":"playing","chord":"major","note":"C","hz":261.63}` | the human played it (`playing`), stopped it to choose (`paused`), or closed it (`stopped`) |
 | `scene` | `{"why":"close"}` | the human closed it (the other button, or a finger held a second) |
 
-Molty also sends `wave` `{"state":"playing"|"paused"|"stopped","chord","note","hz"}` when the human starts or stops
-it; a relay that does not list `wave` among its event types drops it (the `scene` event still says it closed).
+A webhook gets `ring` and `wave` only when its `events` names them; pull and ride-along carry them.
 
 ## Conventions
 

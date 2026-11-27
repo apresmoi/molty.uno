@@ -1278,6 +1278,10 @@ static void wave_frame(float rdt) {
     if (!f && !(f = heap_caps_calloc(1, sizeof(*f), MALLOC_CAP_SPIRAM))) return;
     rhythm_view_ahead(s_view_ahead_us);
     scene_wave_t *w = &f->w;
+    /* the glass behind (the drawer owed cells last frame: a new chord, a new level, much of the wave at once): the same
+     * picture again, still, until it caught up. Moving on would pile more on what it owes, and the glass would show old
+     * and new pieces mixed for as long as it moved */
+    if (w->on && s_draw && s_draw->nowed > 0) { w->still = true; scene_wave(sc, w); return; }
     *w = (scene_wave_t){ 0 };
     if (wave_now(&f->s)) {
         const wave_screen_t *s = &f->s;

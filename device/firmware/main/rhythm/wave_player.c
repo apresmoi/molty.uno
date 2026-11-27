@@ -7,10 +7,10 @@
 
 #ifdef ESP_PLATFORM
 #include "esp_heap_caps.h"
-#define WAV_CALLOC(n) heap_caps_calloc(1, (n), MALLOC_CAP_SPIRAM)
+#define WAV_MALLOC(n) heap_caps_malloc((n), MALLOC_CAP_SPIRAM)
 #define WAV_FREE(p)   heap_caps_free(p)
 #else
-#define WAV_CALLOC(n) calloc(1, (n))
+#define WAV_MALLOC(n) malloc(n)
 #define WAV_FREE(p)   free(p)
 #endif
 
@@ -25,7 +25,8 @@
 #define PLUCK_LEN 1.6f                  /* s: ... then it fades as a held one does                               */
 #define STRUM_MS  18.f
 #define TWO32     4294967296.f
-#define FFT_N     4096                  /* a cycle's samples for its spectrum                                    */
+#define FFT_N     WAV_TAB_N             /* a cycle's samples for its spectrum (the hit is under 7.2 kHz: its harmonics
+                                         * end by 294 at the lowest cycle, 1024 points hold them unfolded)        */
 
 /* the level over pitch: log2(f) from -1 (0.5 Hz) to 13 (8192 Hz), 4 points an octave; each pitch to a 0.45 peak or a
  * 0.2 RMS, whichever it reaches first (measured on this player with unit gain, the design's calibrate.mjs) */
@@ -74,20 +75,24 @@ static void fft(float *re, float *im, int n, const float *cs, const float *sn, b
     }
 }
 
-wav_tables_t *wav_tables_make(void) {
-    wav_tables_t *t = WAV_CALLOC(sizeof(wav_tables_t));
-    float *w = WAV_CALLOC(sizeof(float) * (2 * FFT_N + 2 * WAV_TAB_N + FFT_N + WAV_HIT_LEN + 128));   /* (scratch: off the caller's stack) */
-    if (!t || !w) { WAV_FREE(t); WAV_FREE(w); return NULL; }
-    float *re = w, *im = re + FFT_N, *tr = im + FFT_N, *ti = tr + WAV_TAB_N, *cs = ti + WAV_TAB_N, *sn = cs + FFT_N / 2, *src = sn + FFT_N / 2, *k = src + WAV_HIT_LEN;
-    /* the hit: the beat player's low drum and a beater's click (the rim's 1.8 kHz, 2 samples in, gone in a few ms) */
-    rhy_sound(RHY_LOW, src, WAV_HIT_LEN);
-    const float sr = WAV_RATE / 1000.f;
-    for (int i = 0; i < WAV_HIT_LEN; i++)
-        src[i] += 0.95f * sinf(6.2831853f * 1800.f * (float)i / WAV_RATE) * expf(-(float)i / (1.5f * sr)) * fminf(1.f, (float)i / 2.f);
-    /* band-limited under WAV_TOP (a 127-tap Blackman sinc: the drum's breath of noise reached 8 kHz), to a 0.5 peak */
+wav_tables_t *wav_tables_new(void) {
+    wav_tables_t *t = WAV_MALLOC(sizeof(wav_tables_t));   /* (not zeroed: 257 KB of PSRAM; each piece is written before it is read) */
+    if (!t) return NULL;
+    atomic_store(&t->hit_ready, false); atomic_store(&t->quit, false);
+    for (int i = 0; i < 4; i++) { atomic_store(&t->ready[i], 0); atomic_store(&t->want[i], 0); }
+    return t;
+}
+static inline bool has(_Atomic uint32_t *bits, int c) { return atomic_load(&bits[c >> 5]) >> (c & 31) & 1; }
+
+/* the hit: the beat player's low drum and a beater's click (the rim's 1.8 kHz, 2 samples in, gone in a few ms),
+ * band-limited under WAV_TOP (a 127-tap Blackman sinc: the drum's breath of noise reached 8 kHz), to a 0.5 peak */
+static void make_hit(wav_tables_t *t) {
     enum { L = 127 };
-    float pk = 0.f;
-    const float fc = WAV_TOP / WAV_RATE;
+    float *src = t->scratch, *k = src + WAV_HIT_LEN, pk = 0.f;
+    const size_t got = rhy_sound(RHY_LOW, src, WAV_HIT_LEN);
+    const float sr = WAV_RATE / 1000.f, fc = WAV_TOP / WAV_RATE;
+    for (int i = 0; i < WAV_HIT_LEN; i++)
+        src[i] = (i < (int)got ? src[i] : 0.f) + 0.95f * sinf(6.2831853f * 1800.f * (float)i / WAV_RATE) * expf(-(float)i / (1.5f * sr)) * fminf(1.f, (float)i / 2.f);
     for (int i = 0; i < L; i++) {
         const float m = (float)i - (L - 1) * 0.5f, win = 0.42f - 0.5f * cosf(6.2831853f * i / (L - 1)) + 0.08f * cosf(12.566371f * i / (L - 1));
         k[i] = (m == 0.f ? 2.f * fc : sinf(6.2831853f * fc * m) / (3.1415927f * m)) * win;
@@ -98,30 +103,53 @@ wav_tables_t *wav_tables_make(void) {
         t->hit[i] = y; pk = fmaxf(pk, fabsf(y));
     }
     for (int i = 0; i < WAV_HIT_LEN; i++) t->hit[i] *= 0.5f / pk;
+    t->hit[WAV_HIT_LEN] = t->hit[WAV_HIT_LEN + 1] = 0.f;
     t->hit_peak = 0.5f;
-    /* a cycle a semitone: the choked hit at that rate, its harmonics under WAV_TOP (by the next semitone's, so the
-     * blend between two never reaches over it) */
+    atomic_store(&t->hit_ready, true);
+}
+/* cycle c: the choked hit at its semitone's rate, its harmonics under WAV_TOP (by the next semitone's, so the blend
+ * between two never reaches over it) */
+static void make_cycle(wav_tables_t *t, int c) {
+    float *re = t->scratch, *im = re + FFT_N, *cs = im + FFT_N, *sn = cs + FFT_N / 2;
     for (int i = 0; i < FFT_N / 2; i++) { cs[i] = cosf(6.2831853f * i / FFT_N); sn[i] = sinf(6.2831853f * i / FFT_N); }
-    for (int c = 0; c < WAV_TABS; c++) {
-        const float f = wav_hz((float)(WAV_TAB_LO + c)), T = WAV_RATE / f;
-        const int K = (int)fminf(WAV_TAB_N / 2 - 1, floorf(WAV_TOP / wav_hz((float)(WAV_TAB_LO + c + 1))));
-        for (int i = 0; i < FFT_N; i++) { re[i] = cycle(t, f, (float)i / FFT_N * T); im[i] = 0.f; }
-        fft(re, im, FFT_N, cs, sn, false);
-        memset(tr, 0, sizeof(float) * 2 * WAV_TAB_N);
-        for (int h = 0; h <= K; h++) {
-            tr[h] = re[h] / FFT_N; ti[h] = im[h] / FFT_N;
-            if (h) { tr[WAV_TAB_N - h] = re[FFT_N - h] / FFT_N; ti[WAV_TAB_N - h] = im[FFT_N - h] / FFT_N; }
-        }
-        fft(tr, ti, WAV_TAB_N, cs, sn, true);
-        float p = 0.f;
-        for (int i = 0; i < WAV_TAB_N; i++) { t->tab[c][i] = tr[i]; p = fmaxf(p, fabsf(tr[i])); }
-        t->tab[c][WAV_TAB_N] = t->tab[c][0];
-        t->peak[c] = p > 0.f ? p : 1.f;
-    }
-    WAV_FREE(w);
-    return t;
+    const float f = wav_hz((float)(WAV_TAB_LO + c)), T = WAV_RATE / f;
+    const int K = (int)fminf(WAV_TAB_N / 2 - 1, floorf(WAV_TOP / wav_hz((float)(WAV_TAB_LO + c + 1))));
+    for (int i = 0; i < FFT_N; i++) { re[i] = cycle(t, f, (float)i / FFT_N * T); im[i] = 0.f; }
+    fft(re, im, FFT_N, cs, sn, false);
+    for (int h = K + 1; h <= FFT_N - K - 1; h++) re[h] = im[h] = 0.f;
+    fft(re, im, FFT_N, cs, sn, true);
+    float p = 0.f;
+    for (int i = 0; i < WAV_TAB_N; i++) p = fmaxf(p, fabsf(re[i]));
+    p = p > 0.f ? p / FFT_N : 1.f;
+    const float to = 32767.f / (p * FFT_N);
+    for (int i = 0; i < WAV_TAB_N; i++) t->tab[c][i] = (int16_t)lrintf(re[i] * to);
+    t->tab[c][WAV_TAB_N] = t->tab[c][0];
+    t->unit[c] = p / 32767.f; t->peak[c] = p;
+    atomic_fetch_or(&t->ready[c >> 5], 1u << (c & 31));
+}
+bool wav_tables_step(wav_tables_t *t) {
+    if (atomic_load(&t->quit)) return false;
+    if (!atomic_load(&t->hit_ready)) { make_hit(t); return true; }
+    int next = -1;
+    for (int c = 0; c < WAV_TABS && next < 0; c++) if (has(t->want, c) && !has(t->ready, c)) next = c;
+    for (int c = 0; c < WAV_TABS && next < 0; c++) if (!has(t->ready, c)) next = c;
+    if (next < 0) return false;
+    make_cycle(t, next);
+    return true;
+}
+bool wav_tables_made(wav_tables_t *t) {
+    if (!atomic_load(&t->hit_ready)) return false;
+    for (int c = 0; c < WAV_TABS; c++) if (!has(t->ready, c)) return false;
+    return true;
 }
 void wav_tables_free(wav_tables_t *t) { WAV_FREE(t); }
+/* cycles m and m + 1 made (blended between); else asked for first */
+static bool cycles(wav_tables_t *t, int m) {
+    const int m1 = m + 1 < WAV_TABS ? m + 1 : m;
+    if (has(t->ready, m) && has(t->ready, m1)) return true;
+    atomic_fetch_or(&t->want[m >> 5], 1u << (m & 31)); atomic_fetch_or(&t->want[m1 >> 5], 1u << (m1 & 31));
+    return false;
+}
 
 /* where rate f reads the cycles: the semitone under it (*m) and how far to the next (*u) */
 static inline void table_pos(float f, int *m, float *u) {
@@ -135,7 +163,8 @@ static inline float table_at(const wav_tables_t *t, int m, float u, float ph, bo
     if (i > WAV_TAB_N - 1) i = WAV_TAB_N - 1;
     const float w = p - (float)i;
     const int m1 = m + 1 < WAV_TABS ? m + 1 : m;
-    const float *a = t->tab[m], *b = t->tab[m1], va = a[i] + (a[i + 1] - a[i]) * w, vb = b[i] + (b[i + 1] - b[i]) * w;
+    const int16_t *a = t->tab[m], *b = t->tab[m1];
+    const float va = (a[i] + (a[i + 1] - a[i]) * w) * t->unit[m], vb = (b[i] + (b[i + 1] - b[i]) * w) * t->unit[m1];
     return norm ? va / t->peak[m] * (1.f - u) + vb / t->peak[m1] * u : va + (vb - va) * u;
 }
 
@@ -143,7 +172,7 @@ static inline float table_at(const wav_tables_t *t, int m, float u, float ph, bo
 
 static float s_in, s_out, s_glide, s_duck, s_pluck;   /* each sample's share of the way (the same for every player) */
 
-void wav_init(wav_player_t *p, const wav_tables_t *t) {
+void wav_init(wav_player_t *p, wav_tables_t *t) {
     s_in = 1.f - expf(-1.f / (IN_MS / 1000.f * WAV_RATE)); s_out = 1.f - expf(-1.f / (OUT_MS / 1000.f * WAV_RATE));
     s_glide = 1.f - expf(-1.f / (GLIDE_MS / 1000.f * WAV_RATE)); s_duck = 1.f - expf(-1.f / (DUCK_MS / 1000.f * WAV_RATE));
     s_pluck = expf(-1.f / (PLUCK_TAU * WAV_RATE));
@@ -185,11 +214,11 @@ static void apply(wav_player_t *p, const wav_chord_t *ch, float root, int mode, 
     if (again) p->H = 0;
     for (int i = 0; i < WAV_VOICES; i++) {
         wav_voice_t *q = &p->v[i];
-        if (i >= ch->n) { q->envT = 0.f; if (again) { q->env = 0.f; q->mode = WAV_HOLD; } continue; }
+        if (i >= ch->n) { q->envT = 0.f; q->gate = false; if (again) { q->env = 0.f; q->mode = WAV_HOLD; } continue; }
         q->n = ch->count[i]; q->semi = ch->semi[i];
         q->lft = log2f(pitch(p, i, p->root));
         if (again || q->env < 1e-4f) { q->lf = q->lft; control(q); }
-        if (again) restart(q);
+        if (again) { restart(q); q->gate = true; }
         q->mode = (uint8_t)mode;
         if (mode == WAV_PLUCK) { q->wait = (int)lrintf(i * STRUM_MS * WAV_RATE / 1000.f); q->t = 0; q->env = q->envT = 0.f; }
         else q->envT = q->mute ? 0.f : 1.f;
@@ -245,7 +274,7 @@ void wav_silence(wav_player_t *p) {
         wav_voice_t *q = &p->v[i];
         q->envT = 0.f;
         if (q->mode == WAV_PLUCK && q->t < (int)(PLUCK_LEN * WAV_RATE)) q->t = (int)(PLUCK_LEN * WAV_RATE);
-        q->wait = 0;
+        q->wait = 0; q->gate = false;
     }
 }
 void wav_yield(wav_player_t *p, bool yield) {
@@ -255,7 +284,7 @@ void wav_yield(wav_player_t *p, bool yield) {
 bool wav_active(const wav_player_t *p) {
     if (!p->t) return false;
     if (p->hold || p->later.on) return true;
-    for (int i = 0; i < WAV_VOICES; i++) if (p->v[i].env > 1e-5f || (p->v[i].mode == WAV_PLUCK && p->v[i].wait > 0)) return true;
+    for (int i = 0; i < WAV_VOICES; i++) if (p->v[i].env > 1e-5f || p->v[i].gate || (p->v[i].mode == WAV_PLUCK && p->v[i].wait > 0)) return true;
     return false;
 }
 
@@ -268,7 +297,8 @@ static void snapshot(wav_player_t *p) {
 
 size_t wav_fill(wav_player_t *p, int16_t *out, size_t n) {
     if (!wav_active(p) || (p->yield && p->duck < 0.003f && !p->later.on)) { memset(out, 0, n * sizeof(int16_t)); return 0; }
-    const wav_tables_t *t = p->t;
+    wav_tables_t *t = p->t;
+    if (!atomic_load(&t->hit_ready)) { memset(out, 0, n * sizeof(int16_t)); return n; }   /* (its first ms: the hit is being made) */
     const int in_n = (int)(IN_MS * WAV_RATE / 1000.f), pluck_n = (int)(PLUCK_LEN * WAV_RATE);
     for (size_t i = 0; i < n; i++) {
         if (p->n % WAV_VIEW_EVERY == 0) snapshot(p);
@@ -285,7 +315,16 @@ size_t wav_fill(wav_player_t *p, int16_t *out, size_t n) {
         for (int k = 0; k < WAV_VOICES; k++) {
             wav_voice_t *q = &p->v[k];
             q->lf += (q->lft - q->lf) * s_glide;
-            if (ctl) { control(q); if (!k) clock_of(p); }
+            if (ctl) {
+                control(q);
+                if (!k) clock_of(p);
+                const bool made = q->wt <= 0.f || cycles(t, q->tm);
+                const float want = made ? q->wt : 0.f;   /* (its cycles not made yet, gliding there: the hit itself) */
+                if (q->gate && made) { q->gate = false; q->tw = want; }   /* (a start waits for them: it begins on them) */
+                q->tw += (want - q->tw) * 0.25f;
+                if (fabsf(want - q->tw) < 0.004f) q->tw = want;
+            }
+            if (q->gate) { any = true; continue; }
             if (q->mode == WAV_PLUCK) {
                 if (q->wait > 0) { q->wait--; any = true; continue; }
                 q->t++;
@@ -300,9 +339,9 @@ size_t wav_fill(wav_player_t *p, int16_t *out, size_t n) {
             q->lastph = q->ph;
             if (q->env < 1e-6f) continue;
             float y = 0.f;
-            if (q->wt < 1.f) y = hit_at(t, q->s) + (q->pg > 0.f ? q->pg * hit_at(t, q->sp) : 0.f);
+            if (q->tw < 1.f) y = hit_at(t, q->s) + (q->pg > 0.f ? q->pg * hit_at(t, q->sp) : 0.f);
             if (q->pg > 0.f) { q->sp += 1.f; q->pg -= 1.f / q->d; }
-            if (q->wt > 0.f) y = y * (1.f - q->wt) + table_at(t, q->tm, q->tu, ph_of(q->ph), false) * q->wt;
+            if (q->tw > 0.f) y = y * (1.f - q->tw) + table_at(t, q->tm, q->tu, ph_of(q->ph), false) * q->tw;
             sum += y * q->g * q->env;
         }
         p->H += p->dH;
@@ -355,24 +394,26 @@ void wav_view(const wav_player_t *p, uint64_t n, wav_view_t *o) {
     }
 }
 
-void wav_trace(const wav_tables_t *t, const wav_view_t *v, float held, float rc, float amp, float persist, float *out, int npts) {
+void wav_trace(wav_tables_t *t, const wav_view_t *v, float held, float rc, float amp, float persist, float *out, int npts) {
     struct { float e, k, f, wt, u, T, p0; int m, n; } L[WAV_VOICES];
     const bool playing = v->hold;
     int nl = 0;
     float wts = 0.f;
-    for (int j = 0; t && j < v->nv && j < WAV_VOICES; j++) {
+    const bool hit = t && atomic_load(&t->hit_ready);
+    for (int j = 0; hit && j < v->nv && j < WAV_VOICES; j++) {
         const bool live = playing ? !(v->mute >> j & 1) : v->pluck[j] && v->env[j] > 1e-3f;
         if (playing && live) wts += 1.f;
         if (!live) continue;
         const float f = v->to[j] > 0.f ? v->to[j] : v->f[j] > 0.f ? v->f[j] : 262.f;
         /* (whole numbers: voice j turns n_j times the clock, exactly, and its outline stands still) */
         L[nl].e = v->env[j]; L[nl].f = f; L[nl].k = v->just ? (float)v->n[j] : v->f[j] / fmaxf(v->fc, 1e-6f); L[nl].n = v->n[j]; L[nl].p0 = v->ph[j];
-        L[nl].wt = table_weight(f); table_pos(f, &L[nl].m, &L[nl].u);
+        table_pos(f, &L[nl].m, &L[nl].u);
+        L[nl].wt = table_weight(f) > 0.f && cycles(t, L[nl].m) ? table_weight(f) : 0.f;
         L[nl].T = WAV_RATE / f;
         nl++;
     }
     if (!playing) wts = (float)(v->nv > 1 ? v->nv : 1);
-    const float reach = playing ? 0.45f + 0.55f * held : 1.f, fc = fmaxf(v->fc, 1e-6f), h = v->H;
+    const float reach = 1.f, fc = fmaxf(v->fc, 1e-6f), h = v->H;   /* (the whole reach at every speed: a slow hit plainly bounces on the glass) */
     for (int q = 0; q < npts; q++) {
         const float x = (float)q / npts, turns = playing ? frac(h - x) : 0.f;
         const float keep = playing ? reach * (held < 1.f ? expf(-turns / fc / persist) * (1.f - held) + held : 1.f) : 1.f;

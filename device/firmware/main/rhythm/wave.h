@@ -14,7 +14,8 @@
  *   screen    the waves package's scope (a scene's `wave` item) draws wave_now: the clock and the voices at the sample
  *             the speaker plays now (the rhythm's delay and trim, rhythm_heard_seen), the readout, the names. The
  *             sound lives as long as its picture: no wave item on screen for WAVE_ORPHAN_S stops it, and the tables
- *             are freed once nothing plays.
+ *             are freed once nothing plays (wave.play returns at once: they are made a piece at a time off the link
+ *             task, a voice's own first, wave_build_run).
  *   events    what the human changed (wave_take_event): sense.c (web: web_device.c) sends them.
  *
  * Plain C (cJSON); the lock and the speaker's clock are rhythm.h's.
@@ -46,7 +47,7 @@ typedef struct {
     int level;                              /* WAVE_AT_*                                                       */
     int index;                              /* the wheel's: the note (at the notes) or the chord kind          */
     wav_view_t v;                           /* the player at the sample heard as this frame is seen            */
-    const wav_tables_t *t;                  /* its tables (freed only on the fluid task: wave_orphan)          */
+    wav_tables_t *t;                        /* its tables (freed only on the fluid task: wave_orphan)          */
     int nv;                                 /* the chord kind's voices (its dots; the notes too: the kind chosen) */
     uint8_t count[WAV_VOICES];              /* ... their whole numbers                                          */
     uint32_t rgb[WAV_VOICES];               /* each voice's note's colour                                      */
@@ -93,6 +94,12 @@ typedef struct {
 } wave_ev_t;
 bool wave_take_event(wave_ev_t *e);
 cJSON *wave_event_frame(const wave_ev_t *e);
+
+/* the tables are made off the link task: wave_play hands them to the host (rhythm_dev.c: a low-priority task, its stack
+ * in PSRAM; the web module: at once), which runs wave_build_run and, once it ended, is reaped on the fluid task */
+void wave_build_spawn(void);
+void wave_build_reap(void);
+void wave_build_run(void);
 
 /* the speaker's share (rhythm_core.c, inside the rhythm's lock): samples, whether it makes them now, whether it wants
  * the speaker (it makes them, or waits for it to come back), a job's yield, and the samples made */

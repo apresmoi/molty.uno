@@ -65,8 +65,7 @@ A chord's dots a turn are its smallest whole numbers within 18 cents of the pian
 
 | `molty-waves:` says | do |
 |---|---|
-| `unsupported` | no speaker on this Molty (the 1.28): answer in words |
-| `unknown_command` | this Molty's firmware has no tone player yet: answer in words, mention an update |
+| `unsupported` | no tone player on this Molty (no `wave` cap: older firmware, or no speaker): answer in words, mention an update |
 | `not paired` | pair with the molty skill first |
 
 Agents without a shell send the commands themselves: [commands.md](references/commands.md).
