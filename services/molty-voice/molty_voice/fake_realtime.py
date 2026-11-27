@@ -24,7 +24,7 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
-                 reply=None, threshold: float = 0.02, absorb=None):
+                 reply=None, threshold: float = 0.02, absorb=None, final=None):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -33,6 +33,7 @@ class FakeRealtime:
         # a question it cannot answer: a holding line echoing the person's words, handed to the agent (brief.BRIEF)
         self.reply = reply or (lambda heard: (f"Ok, let me see... {heard.rstrip('?')}, one sec.", True) if "?" in heard or "what" in heard.lower() else ("Hi there!", False))
         self.absorb = absorb or (lambda thought: False)  # (an inner voice thought) -> stay silent?
+        self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
         self.threshold = threshold
         self.sessions: list[dict] = []
         self.port = 0
@@ -126,7 +127,7 @@ class FakeRealtime:
                 await asyncio.sleep(0.1 / self.speed)
             cancelled = st["active"] != rid
             st["active"] = None
-            await send({"type": "response.output_audio_transcript.done", "response_id": rid, "transcript": words})
+            await send({"type": "response.output_audio_transcript.done", "response_id": rid, "transcript": self.final(words)})
             out = [{"type": "function_call", "name": tool if isinstance(tool, str) else "hand_to_agent", "call_id": "call_1", "arguments": "{}"}] if tool else []
             await send({"type": "response.done", "response": {"id": rid, "status": "cancelled" if cancelled else "completed", "metadata": meta, "output": out,
                                                               "usage": {"input_token_details": {"audio_tokens": st["audio_ms"] // 100, "text_tokens": 300, "cached_tokens_details": {"audio_tokens": 0}},

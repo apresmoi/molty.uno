@@ -438,3 +438,24 @@ def test_context_with_no_session_opens_none_and_reaches_the_next_one():
     relay, fake, _ = asyncio.run(run(scenario))
     assert relay.sessions_then == 0
     assert "Inner voice context: The agent said: purring along nicely." in fake.sessions[0]["items"]
+
+
+def test_word_cues_and_texts_line_up_with_the_whole_line():
+    # the relay forwards each tts.text as the device's say_text (whole words, each continuing the last):
+    # cue i must be word i of that text, for every word, whatever its punctuation
+    line = "Hey Juan! It's 3:45, you've got 2 e-mails (both from Ana)... want them?"
+
+    async def scenario(relay, fake, bridge):
+        await relay.send({"t": "tts", "id": "t1", "text": line, "front": "inner", "exact": True})
+        await relay.until(lambda: relay.of("tts.end", id="t1"))
+        await relay.send({"t": "tts", "id": "t2", "text": "Hey Juan, all good.", "front": "inner", "exact": True})
+        await relay.until(lambda: relay.of("tts.end", id="t2"))
+
+    relay, fake, _ = asyncio.run(run(scenario, fake_kw={"final": lambda w: w.replace("Hey", "Hi", 1).replace("  ", " ")}))
+    for sid, said in (("t1", line), ("t2", "Hey Juan, all good.")):
+        assert [w["i"] for w in relay.of("tts.word", id=sid)] == list(range(len(said.split())))
+        assert [w["text"] for w in relay.of("tts.word", id=sid)] == said.split()
+        texts = [m["text"] for m in relay.of("tts.text", id=sid)]
+        for a, b in zip(texts, texts[1:]):
+            assert b == a or b.startswith(a + " ")
+        assert texts[-1] == said  # a final transcript that restates earlier words never replaces them

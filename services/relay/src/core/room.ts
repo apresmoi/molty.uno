@@ -109,7 +109,7 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, type FrontSpeech, RemoteVoiceProvider } from "../voice/remote.js";
-import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, innerResult, absorbedOr } from "./front.js";
+import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot, innerResult, absorbedOr, frontFollow } from "./front.js";
 import {
   type AgentPhrases,
   BUILTIN_PHRASES,
@@ -821,7 +821,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         const cfg = await this.voiceCfg();
         return frontWhyNot(cfg.front, cfg.mode, this.boxSocket()?.getMeta()?.box);
       },
-      play: (sp, args, takeover) => this.playFront(sp, args, takeover),
+      play: async (sp, args, takeover) => {
+        const pick = await this.pickVoice("tts");
+        if (!pick.ok || !pick.box) return fail(pick.ok ? BOX_OFFLINE : pick.error);
+        return this.startJob("say", { text: "…", ...args }, true, undefined, undefined, { ...(takeover && this.audioJob === takeover ? { takeover } : {}), prepared: { pick, feed: sp.feed, at: this.clock.now(), front: sp }, lead: RELAY_LEAD });
+      },
       listen: () => this.startJob("listen", { trigger: "front" }, true, undefined, undefined, { lead: RELAY_LEAD }),
       kv: this.kv,
       openTurn: () => this.openTurn?.id,
@@ -2103,7 +2107,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const front = prepared || args.opener === true || args.first_words === true ? undefined : await this.frontPrepare(text, args.exact === true);
     const pre = prepared ?? front ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
     if (ready) await ready;
-    if (typeof args.front_reply === "string") await this.deviceFree(args.front_reply as string);
+    // a front reply waits for the stopped listen's end frame (FRONT.deviceFreeMs at most)
+    const tail = this.traceTail;
+    if (tail && tail.buf.job === args.front_reply) await Promise.race([tail.over, sleep(this.clock, FRONT.deviceFreeMs)]);
     // prepared speech (an opener) goes to the device at once; the "running" write lands meanwhile
     const running = this.setJob(id, { status: "running" });
     if (!prepared) await running;
@@ -2501,7 +2507,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         text = (await frontText(ready.front, this.clock, tFirst)) || text;
         textWait = this.clock.now() - tFirst;
         absorb();
-        frontWords = speechWords(text).length;
+        // cap say_text: the rest as it comes, every word cued
+        frontWords = frontFollow(ready.front, this.liveSocket()?.getMeta()?.caps, text, this.clock, () => this.sayActive.has(id), (t) => this.sendCmd("say_text", { job: id, text: t })) ? undefined : speechWords(text).length;
       }
       if (!early) {
         sock = this.liveSocket();
@@ -4927,18 +4934,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     });
   }
 
-  private async playFront(sp: FrontSpeech, args: JsonObject, takeover?: string): Promise<Outcome> {
-    const pick = await this.pickVoice("tts");
-    if (!pick.ok || !pick.box) return fail(pick.ok ? BOX_OFFLINE : pick.error);
-    const prepared: Prepared = { pick, feed: sp.feed, at: this.clock.now(), front: sp };
-    return this.startJob("say", { text: "…", ...args }, true, undefined, undefined, { ...(takeover && this.audioJob === takeover ? { takeover } : {}), prepared, lead: RELAY_LEAD });
-  }
-
-  /** A front reply waits for the stopped listen's end frame (FRONT.deviceFreeMs at most). */
-  private async deviceFree(job: string) {
-    const tail = this.traceTail;
-    if (tail?.buf.job === job) await Promise.race([tail.over, sleep(this.clock, FRONT.deviceFreeMs)]);
-  }
 
   // ---------------- waiter plumbing ----------------
 
