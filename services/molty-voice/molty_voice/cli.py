@@ -6,10 +6,12 @@ import argparse
 import asyncio
 import json
 import logging
+import os
 import re
 import sys
 import urllib.error
 import urllib.request
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from . import __version__
@@ -88,6 +90,49 @@ def cmd_unpair(a: argparse.Namespace) -> int:
     return 0
 
 
+LOG_NAME = "molty-voice.log"
+
+
+class _PrivateLog(RotatingFileHandler):
+    """The run's log file, readable by its owner only (0600), rotated files too."""
+
+    def _open(self):
+        return os.fdopen(os.open(self.baseFilename, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600), "a", encoding=self.encoding)
+
+
+class _Redact(logging.Filter):
+    """Belt and braces: no secret the run holds (token, key) ever reaches the file, whatever a line says."""
+
+    def __init__(self, secrets: list[str]):
+        super().__init__()
+        self.secrets = [x for x in secrets if x and len(x) >= 8]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        for x in self.secrets:
+            msg = msg.replace(x, "<redacted>")
+        record.msg, record.args = msg, None
+        return True
+
+
+def log_to_file(path: Path, secrets: list[str], max_bytes: int = 1 << 20) -> logging.Handler:
+    """Every run appends its log lines (molty_voice's, INFO and up: never audio) to `path`, next to the
+    config, capped at two files of max_bytes (the current one and the one before)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lg = logging.getLogger("molty_voice")
+    for old in [x for x in lg.handlers if isinstance(x, _PrivateLog)]:
+        lg.removeHandler(old)
+        old.close()
+    h = _PrivateLog(path, maxBytes=max_bytes, backupCount=1, encoding="utf-8")
+    h.setLevel(logging.INFO)
+    h.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    h.addFilter(_Redact(secrets))
+    lg.addHandler(h)
+    if lg.getEffectiveLevel() > logging.INFO:
+        lg.setLevel(logging.INFO)
+    return h
+
+
 def cmd_run(a: argparse.Namespace) -> int:
     path = Path(a.config) if a.config else default_path()
     cfg = load(path)
@@ -127,6 +172,7 @@ def cmd_run(a: argparse.Namespace) -> int:
         return 2
     if cfg.default_voice not in cfg.voices:
         cfg.voices.insert(0, cfg.default_voice)
+    log_to_file(path.parent / LOG_NAME, [cfg.token, cfg.front_key(), cfg.api_key])
     logging.getLogger("molty_voice").info("molty-voice %s (%s engine) for %s via %s", __version__, cfg.engine, cfg.device_id, cfg.relay)
     try:
         asyncio.run(Bridge(cfg, usage_path=path.parent / "realtime-usage.json").run_forever())

@@ -103,3 +103,35 @@ def test_check_fails_when_the_round_trip_never_does(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cli.Bridge, "_make_prompt", make_prompt)
     assert cli.main(["--config", str(tmp_path / "none.json"), "check"]) == 1
+
+
+def test_run_appends_its_log_to_a_capped_private_file_without_secrets(tmp_path, monkeypatch):
+    import logging
+
+    from molty_voice.config import Config, save
+
+    path = tmp_path / "c.json"
+    save(Config(relay="http://r", device_id=DEVICE, token=TOKEN), path)
+
+    class FakeBridge:
+        def __init__(self, cfg, **_kw):
+            pass
+
+        async def run_forever(self):
+            logging.getLogger("molty_voice").info("listen s1: start (front) with %s", TOKEN)
+
+    monkeypatch.setattr(cli, "Bridge", FakeBridge)
+    assert main(["--config", str(path), "run"]) == 0
+    f = tmp_path / cli.LOG_NAME
+    text = f.read_text()
+    assert "listen s1: start (front)" in text and TOKEN not in text and "<redacted>" in text
+    assert stat.S_IMODE(f.stat().st_mode) == 0o600
+    # capped: one current file and one before it, never more
+    h = cli.log_to_file(f, [], max_bytes=2000)
+    for i in range(200):
+        logging.getLogger("molty_voice").info("line %d of a long run", i)
+    h.flush()
+    assert sorted(p.name for p in tmp_path.glob("molty-voice.log*")) == ["molty-voice.log", "molty-voice.log.1"]
+    assert all(p.stat().st_size <= 2100 for p in tmp_path.glob("molty-voice.log*"))
+    logging.getLogger("molty_voice").removeHandler(h)
+    h.close()
