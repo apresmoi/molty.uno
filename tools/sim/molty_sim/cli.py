@@ -1,4 +1,4 @@
-"""molty-sim run | check | measure | show | reflex-bench | reflex-turns | front — see tools/sim/README.md."""
+"""molty-sim run | check | measure | show | reflex-bench | reflex-turns | front: see tools/sim/README.md."""
 
 from __future__ import annotations
 
