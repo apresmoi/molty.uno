@@ -209,6 +209,7 @@ typedef struct {
     uint8_t count[5];                   /* each voice's whole number: its dots a turn                            */
     uint32_t rgb[5], muted;
     float H, fc;                        /* the clock: turns (0..1), turns a second                                */
+    float hand;                         /* where the hand is drawn, turns (the clock's, a frame apart: mole_fluid.c) */
     float ph[5], f[5], env[5];          /* each voice: its phase from its hit, its rate (Hz), its level           */
     bool pluck[5];                      /* ... ringing as a preview (stopped)                                    */
     const float *trace;                 /* SCENE_WAVE_PTS + 1 radii, NULL: the plain circle                      */

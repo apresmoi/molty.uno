@@ -1271,13 +1271,27 @@ static void wave_frame(float rdt) {
      * picture again, still, until it caught up. Moving on would pile more on what it owes, and the glass would show old
      * and new pieces mixed for as long as it moved */
     if (w->on && s_draw && s_draw->nowed > 0) { w->still = true; scene_wave(sc, w); return; }
+    /* while the hand shows, it moves on a frame of its own, the rest the frame after: a frame that moves it holds little
+     * else, so the drawer takes its old place and its new one whole, never one piece of each */
+    static bool hand_turn;
+    hand_turn = !hand_turn;
+    if (hand_turn && w->on && w->level == SCENE_WAVE_PLAYING && scene_wave_fuse(w->f[0]) < 0.99f && wave_now(&f->s)) {
+        w->hand = f->s.v.H; w->still = true;
+        scene_wave(sc, w);
+        return;
+    }
+    const float hand = w->hand;
     *w = (scene_wave_t){ 0 };
+    w->hand = hand;
     if (wave_now(&f->s)) {
         const wave_screen_t *s = &f->s;
         w->on = true; w->level = s->level; w->nv = s->nv; w->muted = s->v.mute; w->H = s->v.H; w->fc = s->v.fc;
         for (int j = 0; j < WAV_VOICES; j++) { w->count[j] = s->count[j]; w->rgb[j] = s->rgb[j]; w->ph[j] = s->v.ph[j]; w->f[j] = s->v.f[j]; w->env[j] = s->v.env[j]; w->pluck[j] = s->v.pluck[j]; }
         if (s->t) {
-            wav_trace(s->t, &s->v, s->v.hold ? scene_wave_fuse(s->v.f[0]) : 1.f, 0.5f, SCENE_WAVE_REACH, SCENE_WAVE_AFTERGLOW, f->trace, SCENE_WAVE_PTS);
+            /* (from 3 turns a second the afterglow holds, whole by 7: a faster hand would turn the whole outline every frame,
+             * more than the screen redraws in one) */
+            const float spin = fminf(1.f, fmaxf(0.f, (s->v.fc - 3.f) / 4.f)), held = fmaxf(scene_wave_fuse(s->v.f[0]), spin * spin * (3.f - 2.f * spin));
+            wav_trace(s->t, &s->v, s->v.hold ? held : 1.f, 0.5f, SCENE_WAVE_REACH, SCENE_WAVE_AFTERGLOW, f->trace, SCENE_WAVE_PTS);
             w->trace = f->trace;
         }
         w->name = s->name; w->top = s->top; w->big = s->big; w->unit = s->unit;

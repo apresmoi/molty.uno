@@ -296,12 +296,25 @@ static void test_speaker(void) {
  * windows the device sends reach the panel, which keeps the rest). Over a turn the screen may lag a few frames where
  * its drawer has no room (fluid_draw.c owes those cells to the next frame), but no pixel stays wrong for long, and once
  * the picture holds still the panel is the whole picture, exactly. */
+/* the hand's angle (its spoke, the only 0.03 wide), -999 none */
+static float hand_at(void) {
+    const scene_t *sc = s_sp.cur;
+    for (int q = sc ? sc->nfixed : 0; sc && q < sc->nitems; q++) if (sc->items[q].k == PK_TICKS && sc->items[q].w == 0.03f) return sc->items[q].a0;
+    return -999.f;
+}
+static int s_torn, s_moves;            /* frames that moved the hand and left cells for the next (a hand in two pieces for a
+                                        * frame), of the frames that moved it                                               */
 static int glass_lag(int nframes) {
     static uint16_t ref[S * S], age[S * S];
     memset(age, 0, sizeof age);
     int oldest = 0;
+    float hand = hand_at();
     for (int f = 0; f < nframes; f++) {
         frames(1);
+        const float now = hand_at();
+        s_torn += now != hand && s_draw->nowed > 0;
+        s_moves += now != hand && now > -999.f;
+        hand = now;
         if (fluid_draw_morphing(s_draw)) continue;
         const fluid_rect_t t = { ref, S, 0, 0, S, S };
         fluid_draw_rect(s_draw, &s_dopts, &t, true);
@@ -312,7 +325,7 @@ static int glass_lag(int nframes) {
 }
 static void test_glass(void) {
     static const struct { const char *chord, *more; } R[] = {
-        { "alone", "\"hz\":1" }, { "alone", "\"hz\":8" }, { "alone", "\"hz\":16" }, { "alone", "\"hz\":24" }, { "fifth", "\"hz\":3" },
+        { "alone", "\"hz\":1" }, { "alone", "\"hz\":8" }, { "alone", "\"hz\":16" }, { "alone", "\"hz\":24" }, { "fifth", "\"hz\":2" },
         { "major", "\"hz\":4.1" }, { "major", "\"hz\":12" }, { "minor", "\"hz\":20" }, { "7-sharp-9", "\"hz\":2" }, { "major-7", "\"paused\":true" },
     };
     wm_device(1);
@@ -329,7 +342,8 @@ static void test_glass(void) {
     wm_device(0);
     CHECK(worst <= WAVE_GLASS_LAG, "every state, 150 frames each: no pixel of the glass wrong more than %d frames running (at most %d)", WAVE_GLASS_LAG, worst);
     CHECK(still_off == 0, "held still: the glass is the whole picture (%d px off)", still_off);
-    printf("  glass   10 states in device mode: the panel at most %d frames behind the whole picture, none once still\n", worst);
+    CHECK(s_moves > 200 && s_torn * 50 <= s_moves, "the hand whole: at most one move in 50 leaves a piece for the next frame (%d of %d)", s_torn, s_moves);
+    printf("  glass   10 states in device mode: the panel at most %d frames behind the whole picture, none once still; the hand moved %d times, %d left a piece for a frame\n", worst, s_moves, s_torn);
 }
 
 /* ── cost: the 1.75C's frame in the device model ───────────────────────────────────────────────────────────────── */
@@ -392,7 +406,7 @@ static void snap(const char *dir, const char *name) {
 static void renders(const char *dir) {
     static const struct { const char *name, *chord, *more; int settle; } R[] = {
         { "1-slow-beat", "alone", "\"hz\":1.5", 50 }, { "2-sixteen-a-second", "alone", "\"hz\":16", 40 }, { "3-a-note-a3", "alone", "\"midi\":57", 40 },
-        { "4-a-fifth-slow", "fifth", "\"hz\":3", 50 }, { "5-a-fifth-c3", "fifth", "\"midi\":48", 40 }, { "6-c-major-slow", "major", "\"hz\":4", 50 },
+        { "4-a-fifth-slow", "fifth", "\"hz\":2", 50 }, { "5-a-fifth-c3", "fifth", "\"midi\":48", 40 }, { "6-c-major-slow", "major", "\"hz\":4", 50 },
         { "7-c-major-c4", "major", "\"midi\":60", 40 }, { "8-the-chooser", "major-7", "\"paused\":true", 20 },
     };
     wm_device(1);                                       /* (the panel as the device sends it: its changed windows only) */
