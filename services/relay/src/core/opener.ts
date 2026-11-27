@@ -10,6 +10,8 @@
 // Overlap (planReply): the agent reads the planned line, may claim a branch point (keep: m words),
 // and starts its reply with those m words; the relay stops the line there and plays the rest.
 
+import type { PcmFeed } from "./speech.js";
+
 export const FIRST_WORDS_MODES = ["off", "opener"] as const;
 export type FirstWordsMode = (typeof FIRST_WORDS_MODES)[number];
 
@@ -282,4 +284,36 @@ export function pushHistory(hist: OpenerMessage[], m: OpenerMessage): OpenerMess
   // one reply in two says (first words, then the answer) is one message
   if (last?.role === m.role) return [...kept.slice(0, -1), { ...m, text: `${last.text} ${text}`.slice(-OPENER.historyChars) }];
   return [...kept, { ...m, text }].slice(-OPENER.historyMessages);
+}
+
+/** First words playing for a turn (core/opener.ts): how far the stream got, and where it stops. */
+export interface LineState {
+  turn: string;
+  job: string;
+  text: string;
+  /** The line's words, as the device and the word cues count them. */
+  words: string[];
+  /** Each word's first sample on the stream (the TTS word cues: the box's own timing). */
+  starts: number[];
+  /** Samples sent to the device so far, and when they will all have played (relay clock). */
+  samples: number;
+  playEnd: number;
+  feed?: PcmFeed;
+  ended: boolean;
+  stop?: number;
+  keep?: number;
+  /** Its first answer took it: only that one continues it. */
+  replied?: boolean;
+}
+
+/** The line for planReply: words whose audio already went out can no longer be held back. */
+export function linePlay(l: LineState): LinePlay {
+  let sent = 0;
+  while (sent < l.words.length && l.starts[sent] !== undefined && l.starts[sent]! < l.samples) sent++;
+  return { words: l.words, sent: l.ended ? (l.stop ?? l.words.length) : sent, ended: l.ended, ...(l.stop !== undefined ? { stop: l.stop } : {}), ...(l.keep !== undefined ? { keep: l.keep } : {}) };
+}
+
+/** The sample the line's stream ends at (undefined: its end, or the next word's cue is not in yet). */
+export function lineCut(l: LineState | undefined): number | undefined {
+  return l?.stop !== undefined && l.stop < l.words.length ? l.starts[l.stop] : undefined;
 }

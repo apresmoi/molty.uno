@@ -304,3 +304,11 @@ async function* pcmFrom(it: AsyncIterator<Uint8Array>): AsyncGenerator<Int16Arra
     carry = carry.byteLength ? append(carry, r.value) : r.value;
   }
 }
+
+/** The last few ms of a cut stream fade out: no click where a word is cut off. */
+export function fadeOut(pcm: Int16Array): Int16Array {
+  const out = pcm.slice();
+  const n = Math.min(out.length, 160);
+  for (let i = 0; i < n; i++) out[out.length - n + i] = Math.round(out[out.length - n + i]! * (1 - (i + 1) / n));
+  return out;
+}

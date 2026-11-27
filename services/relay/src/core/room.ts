@@ -53,10 +53,10 @@ import {
   type WebhookRequest,
   type ActivityOwnerRequest,
 } from "./api.js";
-import { durationMs, bytesToPcm16, levels, pcm16ToBytes } from "./audio.js";
+import { durationMs, bytesToPcm16, fadeOut, levels, pcm16ToBytes } from "./audio.js";
 import { hasVoice, junkTranscript } from "./voiced.js";
 import { ASK_TITLE_CAP, HAPTIC_CAP, RHYTHM_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, DEVICE_NO_SPEECH_MS, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
-import { FIRST_WORDS_MODES, type FirstWordsMode, type LinePlay, OPENER, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
+import { FIRST_WORDS_MODES, type FirstWordsMode, type LineState, OPENER, lineCut, linePlay, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
 import { CALIBRATION, type DraftOutcome, type SpeechStats, addOutcome, addTurn, emptyStats, markMisfire, policyFor, speechSummary } from "./calibration.js";
@@ -109,7 +109,7 @@ import {
 import type { SttStream, VoiceProvider } from "../voice/types.js";
 import { ACTIVITY_LIMITS, ACTIVITY_PREFIX, ActivityLog, type Who, jobDraft, parseActivityQuery } from "./activity.js";
 import { BOX_OFFLINE, type FrontSpeech, RemoteVoiceProvider } from "../voice/remote.js";
-import { FRONT, FRONT_MODES, type FrontMode, type FrontTurn, frontTurnSummary, stopPhrase } from "./front.js";
+import { FRONT, FRONT_MODES, type FrontMode, FrontTalk, frontText, frontWhyNot } from "./front.js";
 import {
   type AgentPhrases,
   BUILTIN_PHRASES,
@@ -207,7 +207,7 @@ export interface RoomTimings {
   reactShowMs: number;
   /** partials: none before an open turn ran this long (PartialPolicy.lead_ms; a shorter turn gets none). */
   partialLeadMs: number;
-  /** Voice front (core/front.ts FRONT): "still waiting" after this; the utterance waits this long for the front's reply. */
+  /** Voice front (core/front.ts FRONT). */
   frontWaitMs: number;
   frontSaidWaitMs: number;
 }
@@ -431,11 +431,9 @@ interface ListenBuffer {
   pauses: PauseTracker;
   /** Molty's own reactions to what the human says (core/reflex.ts), when the owner turned it on. */
   reflex?: ReflexSession;
-  /** The voice front hears this listen and answers it itself (core/front.ts). */
+  /** Voice front (core/front.ts): a front listen, the person speaking, ended for a queued answer. */
   front?: boolean;
-  /** ...and the person has started speaking (its turn detection). */
   speaking?: boolean;
-  /** A front listen ended early, nobody speaking yet, for an agent's answer queued behind it: not "idle". */
   yielded?: boolean;
 }
 
@@ -467,7 +465,7 @@ interface VoiceCfg {
   liveliness?: Liveliness;
   /** First words (core/opener.ts): the box's small model starts the reply (absent = off: the filler). */
   first_words?: FirstWordsMode;
-  /** The voice front (core/front.ts): "on" = a box that offers it is Molty's conversational voice (absent = off). */
+  /** The voice front (core/front.ts), absent = off. */
   front?: "on";
 }
 /** The connected box's voice.hello (KV `vbox`). */
@@ -479,7 +477,6 @@ interface BoxInfo {
   tts: boolean;
   /** It runs the reflex classifier (stt.reflex). */
   reflex?: boolean;
-  /** It offers the voice front (voice.hello front), and its engine's name. */
   front?: boolean;
   engine?: string;
   since: number;
@@ -517,7 +514,7 @@ interface Prepared {
   cached?: boolean;
   /** ...synthesised just now on a cache miss (then cached). */
   fresh?: boolean;
-  /** Spoken by the voice front (core/front.ts): the device shows what it says, not the text asked for. */
+  /** Said by the voice front (core/front.ts). */
   front?: FrontSpeech;
 }
 
@@ -600,46 +597,6 @@ interface OpenerPlay {
   follow?: string;
   /** A misfire was counted for it already. */
   counted?: boolean;
-}
-
-/** First words playing for a turn (core/opener.ts): how far the stream got, and where it stops. */
-interface LineState {
-  turn: string;
-  job: string;
-  text: string;
-  /** The line's words, as the device and the word cues count them. */
-  words: string[];
-  /** Each word's first sample on the stream (the TTS word cues: the box's own timing). */
-  starts: number[];
-  /** Samples sent to the device so far, and when they will all have played (relay clock). */
-  samples: number;
-  playEnd: number;
-  feed?: PcmFeed;
-  ended: boolean;
-  stop?: number;
-  keep?: number;
-  /** Its first answer took it: only that one continues it. */
-  replied?: boolean;
-}
-
-/** The line for planReply: words whose audio already went out can no longer be held back. */
-function linePlay(l: LineState): LinePlay {
-  let sent = 0;
-  while (sent < l.words.length && l.starts[sent] !== undefined && l.starts[sent]! < l.samples) sent++;
-  return { words: l.words, sent: l.ended ? (l.stop ?? l.words.length) : sent, ended: l.ended, ...(l.stop !== undefined ? { stop: l.stop } : {}), ...(l.keep !== undefined ? { keep: l.keep } : {}) };
-}
-
-/** The sample the line's stream ends at (undefined: its end, or the next word's cue is not in yet). */
-function lineCut(l: LineState | undefined): number | undefined {
-  return l?.stop !== undefined && l.stop < l.words.length ? l.starts[l.stop] : undefined;
-}
-
-/** The last few ms of a cut stream fade out: no click where a word is cut off. */
-function fadeOut(pcm: Int16Array): Int16Array {
-  const out = pcm.slice();
-  const n = Math.min(out.length, 160);
-  for (let i = 0; i < n; i++) out[out.length - n + i] = Math.round(out[out.length - n + i]! * (1 - (i + 1) / n));
-  return out;
 }
 
 /** Everything a listen recorded, as one PCM16 clip. */
@@ -834,13 +791,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** Phrase syntheses in flight, by voice + text (deduped). */
   private readonly synthing = new Map<string, Promise<PhraseAudio | undefined>>();
   private readonly phraseCache: PhraseCache;
-  /** The hands-free conversation with the voice front, while one is going (core/front.ts). */
-  private front: { started: number; turns: number; ending?: string; waitTimer?: unknown; waitSeq?: number } | undefined;
-  /** Front listens by the box's stream id -> their job; the front's reply to each, and each turn's times. */
-  private readonly frontListens = new Map<string, string>();
-  private readonly frontReplies = new Map<string, FrontSpeech>();
-  private readonly frontTurns = new Map<string, FrontTurn>();
-  private readonly frontWaiters = new Map<string, Set<() => void>>();
+  private readonly ft: FrontTalk;
 
   constructor(deps: RoomDeps) {
     this.deviceId = deps.deviceId;
@@ -860,8 +811,25 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     this.classifier = deps.classifier;
     this.voiced = deps.voiced ?? ((pcm) => hasVoice(pcm));
     this.box = new RemoteVoiceProvider(() => this.boxSocket(), this.clock);
-    this.box.onFrontReply = (stt, sp) => void this.onFrontReply(stt, sp);
-    this.box.onFrontSession = (f) => void this.onFrontSession(f);
+    this.ft = new FrontTalk({
+      clock: this.clock,
+      box: this.box,
+      timings: () => this.t,
+      log: (msg, data) => this.log(msg, { device: this.deviceId, ...data }),
+      record: (e) => this.activity.record(e),
+      whyNot: () => this.frontWhyNot(),
+      play: (sp, args, takeover) => this.playFront(sp, args, takeover),
+      listen: () => this.startJob("listen", { trigger: "front" }, true, undefined, undefined, { lead: RELAY_LEAD }),
+      busy: () => !!this.audioJob || !!this.handoff,
+      online: () => !!this.liveSocket(),
+      agentSeq: () => this.agentSeq,
+      thinking: () =>
+        void this.sendCmd("mood", { mood: "thinking", hold_s: this.t.thinkHoldS }).then((m) => {
+          if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "thinking", error: m.error });
+        }),
+    });
+    this.box.onFrontReply = (stt, sp) => void this.ft.reply(stt, sp);
+    this.box.onFrontSession = (f) => void this.ft.session(f);
     this.activity = new ActivityLog({ deviceId: this.deviceId, kv: this.kv, clock: this.clock, log: this.log });
     this.audioKeep = new AudioKeep(this.kv, this.clock);
     this.phraseCache = new PhraseCache(this.kv, () => this.clock.now());
@@ -930,14 +898,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // A voice box that goes away fails its own requests at once (auto mode falls back, box mode fails).
     if (sock.getMeta()?.stage === "voice") {
       this.box.drop(sock);
-      if (sock.getMeta()?.box?.front && !this.boxSocket()) void this.frontEnd("box_gone");
+      if (sock.getMeta()?.box?.front && !this.boxSocket()) void this.ft.end("box_gone");
       if (sock.getMeta()?.box) void this.rewarmPhrases(); // auto mode: the cloud's voice speaks now
       return;
     }
     if (sock.getMeta()?.stage !== "live") return;
     // The runtime may still list the closing socket; anything else live is a replacement.
     if (this.liveSocket(sock)) return;
-    void this.frontEnd("device_offline");
+    void this.ft.end("device_offline");
     this.dropInFlight("device_offline", !!sock.getMeta()?.caps?.includes(RESUME_CAP));
   }
 
@@ -1084,8 +1052,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // the screen follows the device before the event is counted: the inbox's rate cap never costs it a change
     if (clean && frame.name === SCENE_EVENT) await this.screenTo((s) => sceneChanged(s, clean, this.clock.now()));
     if (clean && frame.name === "tap" && typeof clean.spot === "string") await this.screenTo((s) => tapped(s, clean.spot as string, this.clock.now()));
-    // a tap while Molty is not listening ends a hands-free conversation (a tap during a listen ends only that turn)
-    if (frame.name === "tap" && this.front && !this.listenBuf) await this.frontEnd("tap");
+    // a tap while not listening ends a front conversation
+    if (frame.name === "tap" && this.ft.live && !this.listenBuf) await this.ft.end("tap");
     if (clean) await this.appendEvent(frame.name, clean);
     if (clean) await this.activity.device(frame.name, clean);
   }
@@ -1119,7 +1087,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (typeof data.on !== "boolean") return;
     if (((await this.kv.get<boolean>(K.dnd)) ?? false) === data.on) return;
     await this.kv.put<boolean>(K.dnd, data.on);
-    if (data.on) await this.frontEnd("do_not_disturb");
+    if (data.on) await this.ft.end("do_not_disturb");
     await this.appendEvent(DND_EVENT, { on: data.on }, true);
   }
 
@@ -1308,7 +1276,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (dnd) return dnd;
     }
     if (cmd.name === "pkg.available") return this.available();
-    if (cmd.name === "front") return this.frontCommand(cmd.args);
+    if (cmd.name === "front") return this.ft.command(cmd.args);
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
     if (cmd.name === "act") {
@@ -1984,11 +1952,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (audio && this.audioJob) {
       if (opts.takeover !== undefined && this.audioJob === opts.takeover) {
         this.takeLock(id, opts.lead);
-        // whatever queued behind the job handing over now queues behind this one (a front reply taking its listen's lock)
+        // what queued behind the old holder queues behind this one
         if (this.handoff?.after === opts.takeover) this.handoff.after = id;
       } else if (opts.after !== undefined && this.audioJob === opts.after && !this.handoff) {
         ready = new Promise<void>((go) => (this.handoff = { after: opts.after!, job: id, go, ...(opts.lead !== undefined ? { lead: opts.lead } : {}) }));
-        // an answer queued behind a hands-free listen nobody has spoken into yet: the listen yields to it
+        // a front listen nobody spoke into yet yields to the answer
         const buf = this.listenBuf;
         if (buf?.job === opts.after && buf.front && !buf.speaking && !buf.ended) {
           buf.yielded = true;
@@ -2125,19 +2093,18 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runSay(id: string, args: JsonObject, created: number, ready?: Promise<void>, prepared?: Prepared) {
     const text = args.text as string;
     const voice = typeof args.voice === "string" ? args.voice : undefined;
-    // the voice front speaks it (core/front.ts): no text to speech, the front says the agent's answer
     const front = prepared || args.opener === true || args.first_words === true ? undefined : await this.frontPrepare(text, args.exact === true);
     const pre = prepared ?? front ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
     if (ready) await ready;
-    // the front's reply to a turn: the device must have ended that listen (listen_stop) before it can speak
-    if (typeof args.front_reply === "string") await this.deviceFree(args.front_reply);
+    if (typeof args.front_reply === "string") await this.deviceFree(args.front_reply as string);
     // prepared speech (an opener) goes to the device at once; the "running" write lands meanwhile
     const running = this.setJob(id, { status: "running" });
     if (!prepared) await running;
-    const fronted = !!(pre && "pick" in pre && pre.front);
+    const sp = pre && "pick" in pre ? pre.front : undefined;
+    const fronted = !!sp;
+    const replyOf = typeof args.front_reply === "string" ? args.front_reply : undefined;
     // a lead-in (a draft's opener, first words, the closing) hands the speaker on only once the
-    // device has played all of it (say.done): a say sent before that finds the device busy; so does the
-    // front's speech (the conversation listens again right after it)
+    // device has played all of it (say.done): a say sent before that finds the device busy (the front too)
     const r = pre && !("pick" in pre) ? pre : await this.speak(id, text, voice, args.opener === true || args.first_words === true || fronted, args.marks as SayMarks | undefined, pre);
     await running;
     const line = this.line?.job === id ? this.line : undefined;
@@ -2148,7 +2115,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (!r.ok) {
       await this.finishJob(id, { status: "failed", error: r.error });
-      if (fronted) this.frontAfter(typeof args.front_reply === "string" ? args.front_reply : undefined, pre && "pick" in pre ? pre.front : undefined);
+      if (fronted) this.ft.spoke(replyOf, sp);
       return;
     }
     const said = r.said ?? text;
@@ -2168,11 +2135,11 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (isRecord(args.turn)) timings.turn = this.answerTimings(args, r.start + (r.timings.first_audio as number));
     if (isRecord(args.client_timing)) timings.client = args.client_timing;
     this.logTimings(id, "say", timings);
-    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && said !== text && args.front_reply === undefined ? { asked: text } : {}), timings } });
+    await this.finishJob(id, { status: "done", result: { ms: r.ms, text: said, ...(fronted && said !== text && !replyOf ? { asked: text } : {}), timings } });
     await this.replyTrace(id, "say", args, timings);
     if (fronted) {
-      if (isRecord(args.turn) && typeof args.turn.id === "string") this.noteFrontAnswer(args.turn.id, args.called as number, r.start + ((r.timings.first_audio as number) ?? 0));
-      this.frontAfter(typeof args.front_reply === "string" ? args.front_reply : undefined, pre && "pick" in pre ? pre.front : undefined, r.start + ((r.timings.first_audio as number) ?? 0));
+      if (isRecord(args.turn) && typeof args.turn.id === "string") this.ft.answered(args.turn.id, args.called as number, r.start + ((r.timings.first_audio as number) ?? 0));
+      this.ft.spoke(replyOf, sp, r.start + ((r.timings.first_audio as number) ?? 0));
     }
   }
 
@@ -2190,8 +2157,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // out, and agents may speak again (never left human_speaking by a throw)
       if (trigger === "shake" || trigger === "front") await this.endTurn(id, r?.ok ? r : undefined, trigger);
       else if (r?.ok) await this.noteHeard(r);
-      // the front heard nothing (or the listen broke): the conversation is over, unless it yielded to an answer
-      if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.front && trigger === "front") void this.frontEnd(r?.ok ? "idle" : "listen_failed");
+      if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.ft.live && trigger === "front") void this.ft.end(r?.ok ? "idle" : "listen_failed");
     }
     if (!r.ok) return this.finishJob(id, { status: "failed", error: r.error });
     const timings: JsonObject = { queue: r.start - created, ...r.timings, total: this.clock.now() - created };
@@ -2200,7 +2166,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     await this.finishJob(id, { status: "done", result: { text: r.text, duration_ms: r.duration_ms, peak: r.peak, rms: r.rms, reason: r.reason, ...extra, timings } });
     // shake to talk: every agent got the utterance; nobody answers in time → Molty fills itself
     // (only when some agent is paired to answer at all; a draft's opener already answered)
-    // (the voice front answered it already: no filler)
     if (trigger === "shake" && !r.front && this.opener?.turn !== id && [...(await this.kv.list<TokenRecord>("tok:")).values()].some((t) => t.role !== "voice")) this.armFiller(id, r, seq);
   }
 
@@ -2252,7 +2217,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
   private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>) {
     const off = await this.voiceIsOff();
-    // the voice front speaks it (core/front.ts), else text to speech
     const front = args.say !== undefined ? await this.frontPrepare(args.say, args.exact === true) : undefined;
     const pre = front ?? (ready && args.say !== undefined && !off ? await this.prepareSpeech(args.say, args.voice) : undefined);
     if (ready) await ready;
@@ -2273,7 +2237,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       ms.speech = (s.timings.play as number) ?? 0;
       timings.say = s.timings;
       if (reply.turn) timings.turn = this.answerTimings(reply, s.start + (ms.tts_first_audio as number));
-      if (front && isRecord(reply.turn) && typeof reply.turn.id === "string") this.noteFrontAnswer(reply.turn.id, reply.called as number, s.start + (ms.tts_first_audio as number));
+      if (front && isRecord(reply.turn) && typeof reply.turn.id === "string") this.ft.answered(reply.turn.id, reply.called as number, s.start + (ms.tts_first_audio as number));
     } else if (reply.turn) timings.turn = this.answerTimings(reply);
     if (args.client_timing) timings.client = args.client_timing;
     // the human turn this talk answers, in that turn's trace (an `ev:"reply"` entry), once the say is over
@@ -2281,13 +2245,13 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     if (args.listen && !off) {
       const l = await this.record(id, args.listen_ms, { ...args.vad, ...(args.ring_color !== undefined ? { ring_color: args.ring_color } : {}), ...(args.ack !== undefined ? { ack: args.ack } : {}) });
       if (!l.ok) return this.finishJob(id, { status: "failed", error: l.error });
-      if (l.front && !l.text.trim() && !l.yielded) void this.frontEnd("idle");
+      if (l.front && !l.text.trim() && !l.yielded) void this.ft.end("idle");
       heard = l;
       Object.assign(result, { heard: l.text, reason: l.reason, duration_ms: l.duration_ms, peak: l.peak, rms: l.rms });
       if (l.speech_ms !== undefined) result.speech_ms = l.speech_ms;
-      // the voice front answered it already: what it said (no first words, no filler)
+      // the front answered already: no first words, no filler
       if (l.front) {
-        const f = await this.frontSaid(id, l);
+        const f = await this.ft.said(id, l.text);
         if (f) result.front = f;
       }
       const first = l.front ? undefined : await this.firstWords(id, l);
@@ -2317,10 +2281,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // before the job ends: a waiting talk / wait collects it while finishJob wakes them
     if (heard?.text.trim()) this.uncollected.add(id);
     await this.finishJob(id, { status: "done", result: { ...result, ms, timings } });
-    // the human spoke: the agent now thinks; nothing from it in time → Molty fills itself (the front answered already)
+    // the human spoke: the agent now thinks; nothing from it in time → Molty fills itself
     if (heard && !heard.front) this.armFiller(id, heard, seq);
-    // a talk that only spoke, in a hands-free conversation: Molty listens again
-    if (front && !args.listen) this.frontAfter(undefined, front.front);
+    if (front && !args.listen) this.ft.spoke(undefined, front.front);
     if (this.uncollected.has(id)) {
       const gen = this.roomGen;
       const words = heard!;
@@ -2481,9 +2444,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // synthesis: its round trip to the device no longer sits between the first audio and the
     // first frame. Elsewhere (the cloud can take a second) it waits for the first audio, so
     // the device never shows a say whose voice is still far off.
-    // cached audio is all there: cmd say with its exact length; the front's text is known only as it speaks
+    // cached audio is all there: cmd say with its exact length (the front: its text comes with its audio)
     const early = pick.box && !ready.cached && !ready.front;
-    // the voice front: the device shows what the front says (its transcript), as far as it is known by the first audio
     let frontWords: number | undefined;
     let textWait = 0;
     let sock: DeviceSocket | undefined;
@@ -2503,7 +2465,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // Inline [cues] (validated + stripped from `text` in commands.ts): [word, name] marks the
       // device fires as its playback reaches that word's cue. They ride only inside this say:
       // no separate mood/act cmd, no screenRev bump. Firmware without the cap gets none.
-      // (the front's own words: the agent's marks would land on the wrong words, so only with exact)
       if (cuesOn && marks?.length && sock!.getMeta()?.caps?.includes(SAY_MARKS_CAP) && (!ready.front || ready.front.mode === "exact")) deviceArgs.marks = marks;
       return this.sendCmd("say", deviceArgs);
     };
@@ -2529,13 +2490,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       }
       const tFirst = this.clock.now();
       if (ready.front) {
-        const sp = ready.front;
-        while (!sp.final && !feed.done && this.clock.now() - tFirst < FRONT.textHoldMs && !/[.!?…]$/.test(sp.said)) {
-          await Promise.race([sp.changed(), sleep(this.clock, Math.max(1, FRONT.textHoldMs - (this.clock.now() - tFirst)))]);
-        }
+        text = (await frontText(ready.front, this.clock, tFirst)) || text;
         textWait = this.clock.now() - tFirst;
         absorb();
-        text = sp.said.trim() || text;
         frontWords = speechWords(text).length;
       }
       if (!early) {
@@ -2858,7 +2815,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // also calls no_speech. Not when the agent tuned the device VAD itself (vad /
     // end_silence_ms), nor on the cloud path or older firmware: those keep the device VAD.
     const semantic = hold !== true && pick.box && extra.vad === undefined && extra.end_silence_ms === undefined && !!this.liveSocket()?.getMeta()?.caps?.includes("listen_stop");
-    // the voice front hears it and answers it itself (core/front.ts): only on the box that offers it
     const front = pick.box && (await this.frontOn());
     // Molty's reflex (core/reflex.ts): only on the box's streaming STT (its words while the human talks)
     if (pick.provider.sttStream && pick.box) buf.reflex = this.reflexFor(buf, pick.cfg);
@@ -2881,9 +2837,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         const sid = (buf.stream as { id?: unknown }).id;
         if (front && typeof sid === "string" && !buf.boxFailed) {
           buf.front = true;
-          this.frontListens.set(sid, id);
-          while (this.frontListens.size > 4) this.frontListens.delete(this.frontListens.keys().next().value!);
-          this.frontTurn();
+          this.ft.listening(sid, id);
         }
       } catch (e) {
         buf.reflex?.close();
@@ -3146,7 +3100,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     // no_speech (the box heard nobody, device VAD off; or no voice in the audio, whatever the box
     // made of it): as the device's own no_speech — no STT, transcript "", no chirp
     buf.reason = why === "no_speech" || !this.heardVoice(buf) ? "no_speech" : "turn_end";
-    if (buf.front && buf.reason === "turn_end") this.noteFrontEnd(buf.job, now);
+    if (buf.front && buf.reason === "turn_end") this.ft.turnEnded(buf.job, now);
     if (this.liveSocket()?.getMeta()?.caps?.includes("listen_stop")) {
       // the reason rides along so the device ends with it and applies its acknowledgement
       // rules to it: no_speech → no chirp, no thinking (older firmware ignores it: turn_end)
@@ -3235,7 +3189,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (frame.header.reason) buf.reason = frame.header.reason;
       if (frame.header.reason === "error") buf.captureFailed = true;
       if (frame.header.speech_ms !== undefined) buf.speech_ms = frame.header.speech_ms;
-      if (buf.front && buf.bytes > 0) this.noteFrontEnd(buf.job, buf.endAt);
+      if (buf.front && buf.bytes > 0) this.ft.turnEnded(buf.job, buf.endAt);
       // End of speech: show thinking right away, while STT runs (only when there was a voice).
       if (buf.bytes > 0 && buf.reason !== "no_speech" && buf.reason !== "error" && this.heardVoice(buf)) {
         buf.thinking = true;
@@ -3438,12 +3392,10 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         voice: await this.voiceName(),
       });
       if (r.opener) Object.assign(data, { opener: r.opener, opener_wpm: this.lineWpm });
-      // the voice front already answered: what it said, and whether it handed the turn to the agent
       if (r.front) {
-        const f = await this.frontSaid(id, r);
+        const f = await this.ft.said(id, r.text);
         if (f) data.front = f;
-        // "bye", "that's all": the front says goodbye, then the conversation ends
-        if (this.front && stopPhrase(text)) this.front.ending = "stop_phrase";
+        this.ft.heard(text); // "bye", "that's all": the front says goodbye, then the conversation ends
       }
       // an agent's opener is already playing: the turn is taken (others stay quiet)
       if (winner) data.claimed = true;
@@ -3455,8 +3407,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       // agent-facing, one per turn: not subject to the device event rate cap
       await this.appendEvent(UTTERANCE_EVENT, await this.withDevice(data, r.start), true);
       if (r.trace) r.trace.relay.utterance = this.clock.now() - r.trace.t0;
-      const ft = this.frontTurns.get(id);
-      if (ft) ft.utteranceAt = this.clock.now();
+      this.ft.uttered(id);
       await this.activity.record({
         ts: this.clock.now(),
         kind: "device",
@@ -3888,15 +3839,14 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const now = this.clock.now();
     // reflex: the box runs Molty's reflex classifier (stt.reflex; only boxes that say so are asked)
     const reflex = f.reflex === true && f.stt === true;
-    // the voice front, protocol version 1 (core/front.ts): it needs both halves; a newer version still speaks v1
+    // voice front v1 (core/front.ts): needs both halves
     const front = typeof f.front === "number" && f.front >= 1 && f.stt === true && f.tts === true;
     const engine = typeof f.engine === "string" ? f.engine : undefined;
     const was = meta.box;
     sock.setMeta({ ...meta, box: { stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(f.opener === true ? { opener: true } : {}), ...(front ? { front } : {}) } });
     const since = was ? ((await this.kv.get<BoxInfo>(K.vbox))?.since ?? now) : now;
     await this.kv.put<BoxInfo>(K.vbox, { name: f.name as string, version: (f.version as string | undefined) ?? "", voices, stt: f.stt, tts: f.tts, ...(reflex ? { reflex } : {}), ...(front ? { front } : {}), ...(engine ? { engine } : {}), since });
-    // the box stopped offering the front (its daily limit): the conversation is over, today's path serves
-    if (was?.front && !front) await this.frontEnd("box_unavailable");
+    if (was?.front && !front) await this.ft.end("box_unavailable");
     const cfg = await this.voiceCfg();
     sock.sendText(JSON.stringify({ t: "voice.welcome", device_id: this.deviceId, mode: cfg.mode, voice: cfg.voice ?? null }));
     this.log("voice box connected", { device: this.deviceId, stt: f.stt, tts: f.tts });
@@ -4034,9 +3984,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         else cfg.liveliness = req.liveliness;
       }
       await this.kv.put<VoiceCfg>(K.voiceCfg, cfg);
-      // the kill switch: the front off (or voice off / cloud) ends a conversation and closes the box's session now
+      // kill switch: no front -> the conversation and the box's session end now
       if (!(await this.frontOn())) {
-        await this.frontEnd("front_off");
+        await this.ft.end("front_off");
         this.box.frontEnd("front_off");
       }
       await this.activity.record({ ts: this.clock.now(), kind: "settings", ev: "voice", data: { mode: cfg.mode, voice: cfg.voice ?? null, ...(req.front !== undefined ? { front: cfg.front ?? "off" } : {}), ...(req.reflex !== undefined || req.reflex_compare !== undefined ? { reflex: cfg.reflex ?? "off", reflex_compare: !!cfg.reflex_compare } : {}), ...(req.liveliness !== undefined ? { liveliness: cfg.liveliness ?? DEFAULT_LIVELINESS } : {}) } });
@@ -4123,6 +4073,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const avail = { local, jev: !!this.reflexKeys.jev, openai: !!this.reflexKeys.openai };
     const mode = cfg.reflex ?? "off";
     const sttServing = await serving("stt");
+    const frontWhy = frontWhyNot(cfg.front, cfg.mode, connected?.getMeta()?.box);
     const now = mode === "off" ? null : resolveEngine(mode, { ...avail, local: local && sttServing === "box" });
     return {
       mode: cfg.mode,
@@ -4130,11 +4081,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       cloud: this.voice.name,
       serving: { tts: await serving("tts"), stt: sttServing },
       first_words: { mode: cfg.first_words ?? "off", available: !!connected?.getMeta()?.box?.opener },
-      // the voice front (core/front.ts): a realtime voice model on the owner's voice box
-      front: await (async () => {
-        const why = await this.frontWhyNot();
-        return { mode: cfg.front ?? "off", available: !!connected?.getMeta()?.box?.front, serving: why === null, ...(why && cfg.front === "on" ? { reason: why } : {}), conversation: !!this.front, engine: connected && info?.engine ? info.engine : null };
-      })(),
+      front: { mode: cfg.front ?? "off", available: !!connected?.getMeta()?.box?.front, serving: !frontWhy, ...(frontWhy && cfg.front === "on" ? { reason: frontWhy } : {}), conversation: this.ft.live, engine: (connected && info?.engine) || null },
       reflex: {
         mode,
         compare: !!cfg.reflex_compare,
@@ -4717,8 +4664,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async warmTexts(texts: string[]): Promise<void> {
     const v = await this.voiceNow();
     if (!v.ok) return;
-    // a voice box with a realtime engine bills every line on its owner's key: nothing is synthesised
-    // ahead (a phrase is made on its first play, then cached)
+    // a realtime box bills every line on its owner's key: no warming (made on first play)
     if (v.pick.box && this.boxSocket()?.getMeta()?.box?.front) return;
     const todo: string[] = [];
     for (const t of new Set(texts)) if (!(await this.phraseCache.has(v.vkey, t))) todo.push(t);
@@ -4946,31 +4892,24 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   // =====================================================================
-  // Voice front (core/front.ts, docs/AGENT-LINK.md "Voice front")
+  // Voice front (core/front.ts FrontTalk, docs/AGENT-LINK.md "Voice front")
   // =====================================================================
 
-  /** The front serves now: the owner turned it on, voice is neither off nor cloud only, and the connected box offers it. */
   private async frontOn(): Promise<boolean> {
     return (await this.frontWhyNot()) === null;
   }
 
-  /** Why the front does not serve now, in plain words for the owner (null: it does). */
   private async frontWhyNot(): Promise<string | null> {
     const cfg = await this.voiceCfg();
-    if (cfg.front !== "on") return "the voice front is off";
-    if (cfg.mode === "off" || cfg.mode === "cloud") return `voice mode is ${cfg.mode}: the voice front runs on your voice box (mode auto or box)`;
-    const s = this.boxSocket();
-    if (!s) return "no voice box is connected: run molty-voice with the realtime engine";
-    if (!s.getMeta()?.box?.front) return "the connected voice box offers no voice front (engine kyutai, an older molty-voice, or its daily limit is reached)";
-    return null;
+    return frontWhyNot(cfg.front, cfg.mode, this.boxSocket()?.getMeta()?.box);
   }
 
-  /** The agent's answer, said by the front (in its own words, or `exact`), when the front serves. */
+  /** The agent's answer, said by the front, when it serves. */
   private async frontPrepare(text: string, exact: boolean): Promise<Prepared | undefined> {
     if (!(await this.frontOn())) return undefined;
     const pick = await this.pickVoice("tts");
     if (!pick.ok || !pick.box) return undefined;
-    this.clearFrontWait(); // the agent is answering: no "still waiting"
+    this.ft.agentAnswering();
     try {
       const sp = this.box.frontSpeak(text, exact ? "exact" : "own");
       return { pick, feed: sp.feed, at: this.clock.now(), front: sp };
@@ -4979,180 +4918,17 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
   }
 
-  /** A front listen starts: the conversation begins (or goes on), the earlier turns' lines are written. */
-  private frontTurn() {
-    const now = this.clock.now();
-    if (!this.front) {
-      this.front = { started: now, turns: 0 };
-      void this.activity.record({ ts: now, kind: "voice_box", ev: "front.start", data: {} });
-    }
-    this.clearFrontWait();
-    this.front.turns++;
-    for (const job of [...this.frontTurns.keys()]) this.flushFrontTurn(job);
-  }
-
-  /** The person's turn in a front listen ended (the model's turn detection, or the device's own end). */
-  private noteFrontEnd(job: string, at: number) {
-    if (this.frontTurns.has(job)) return;
-    this.frontTurns.set(job, { endAt: at });
-    while (this.frontTurns.size > 8) this.flushFrontTurn(this.frontTurns.keys().next().value!);
-  }
-
-  /** The box's front answers a listen by itself: played at once, taking the listen's lock (its device listen is over). */
-  private async onFrontReply(sttId: string, sp: FrontSpeech) {
-    const job = this.frontListens.get(sttId);
-    if (!job || !this.front || !(await this.frontOn())) return sp.cancel();
+  private async playFront(sp: FrontSpeech, args: JsonObject, takeover?: string): Promise<Outcome> {
     const pick = await this.pickVoice("tts");
-    if (!pick.ok || !pick.box) return sp.cancel();
-    const ft = this.frontTurns.get(job);
-    if (ft) ft.replyAt = this.clock.now();
-    this.frontReplies.set(job, sp);
-    while (this.frontReplies.size > 4) this.frontReplies.delete(this.frontReplies.keys().next().value!);
-    this.notify(this.frontWaiters, job);
+    if (!pick.ok || !pick.box) return fail(pick.ok ? BOX_OFFLINE : pick.error);
     const prepared: Prepared = { pick, feed: sp.feed, at: this.clock.now(), front: sp };
-    const started = await this.startJob("say", { text: "…", front_reply: job }, true, undefined, undefined, { ...(this.audioJob === job ? { takeover: job } : {}), prepared, lead: RELAY_LEAD });
-    if (!started.ok) {
-      this.log("front reply not played", { device: this.deviceId, job, error: started.error });
-      sp.cancel();
-    }
+    return this.startJob("say", { text: "…", ...args }, true, undefined, undefined, { ...(takeover && this.audioJob === takeover ? { takeover } : {}), prepared, lead: RELAY_LEAD });
   }
 
-  /** The reply's end of turn in reach: the device ended the stopped listen (its end frame), or FRONT.deviceFreeMs. */
+  /** A front reply waits for the stopped listen's end frame (FRONT.deviceFreeMs at most). */
   private async deviceFree(job: string) {
     const tail = this.traceTail;
     if (tail?.buf.job === job) await Promise.race([tail.over, sleep(this.clock, FRONT.deviceFreeMs)]);
-  }
-
-  /** What the front answered the turn `job` (for its utterance / talk result): waits FRONT.saidWaitMs at most. */
-  private async frontSaid(job: string, r: Extract<ListenResult, { ok: true }>): Promise<JsonObject | undefined> {
-    if (!r.text.trim()) return undefined;
-    const deadline = this.clock.now() + this.t.frontSaidWaitMs;
-    if (!this.frontReplies.has(job)) await this.waitOn(this.frontWaiters, job, this.t.frontSaidWaitMs);
-    const sp = this.frontReplies.get(job);
-    if (!sp) return undefined;
-    const left = deadline - this.clock.now();
-    if (!sp.final && left > 0) await Promise.race([sp.ended, sleep(this.clock, left)]);
-    return { said: sp.said, waiting: sp.wait, ...(sp.final ? {} : { partial: true }) };
-  }
-
-  /** A job the front spoke has ended (`replyOf`: it was the reply to that turn): Molty listens again, or waits for the agent. */
-  private frontAfter(replyOf: string | undefined, sp: FrontSpeech | undefined, firstOut?: number) {
-    const ft = replyOf ? this.frontTurns.get(replyOf) : undefined;
-    if (ft) {
-      if (firstOut !== undefined) ft.replyOut = firstOut;
-      ft.waiting = !!sp?.wait;
-      // the model's own time, as the box measured it: its end of turn -> the reply's start -> its first audio
-      const b = sp?.boxMs ?? {};
-      if (typeof b.created === "number" || typeof b.first_audio === "number") ft.boxMs = ((b.created as number) ?? 0) + ((b.first_audio as number) ?? 0);
-    }
-    if (!this.front) return;
-    const wait = !!replyOf && !!sp?.wait;
-    // once the job's audio lock is released (startJob's finally): whatever queued behind it goes first
-    this.clock.setTimeout(() => void this.frontNext(wait), 0);
-  }
-
-  private async frontNext(wait: boolean) {
-    const c = this.front;
-    if (!c) return;
-    if (c.ending) return this.frontEnd(c.ending);
-    if (c.turns >= FRONT.maxTurns || this.clock.now() - c.started >= FRONT.maxMs) return this.frontEnd("limit");
-    if (this.audioJob || this.handoff) return; // something else speaks or listens: its end brings Molty back here
-    if (!this.liveSocket()) return this.frontEnd("device_offline");
-    if (!(await this.frontOn())) return this.frontEnd("front_off");
-    if (wait) {
-      // the front handed the turn to the agent: Molty thinks until its answer; none in time -> "still waiting", once
-      void this.sendCmd("mood", { mood: "thinking", hold_s: this.t.thinkHoldS }).then((m) => {
-        if (!m.ok) this.log("auto mood failed", { device: this.deviceId, mood: "thinking", error: m.error });
-      });
-      this.clearFrontWait();
-      c.waitSeq = this.agentSeq;
-      c.waitTimer = this.clock.setTimeout(() => void this.frontStillWaiting(c), this.t.frontWaitMs);
-      return;
-    }
-    // hands-free: listen again (a relay-owned lead-in: an agent's answer queues behind it, and it yields when nobody speaks)
-    const started = await this.startJob("listen", { trigger: "front" }, true, undefined, undefined, { lead: RELAY_LEAD });
-    if (!started.ok) this.log("front listen not started", { device: this.deviceId, error: started.error });
-  }
-
-  private async frontStillWaiting(c: NonNullable<DeviceRoom["front"]>) {
-    c.waitTimer = undefined;
-    if (this.front !== c || this.agentSeq !== c.waitSeq || this.audioJob || this.handoff) return;
-    const pick = await this.pickVoice("tts");
-    if (!pick.ok || !pick.box) return;
-    let sp: FrontSpeech;
-    try {
-      sp = this.box.frontSpeak("", "wait");
-    } catch {
-      return;
-    }
-    const started = await this.startJob("say", { text: "…", front_wait: true }, true, undefined, undefined, { prepared: { pick, feed: sp.feed, at: this.clock.now(), front: sp }, lead: RELAY_LEAD });
-    if (!started.ok) sp.cancel();
-  }
-
-  private clearFrontWait(c = this.front) {
-    if (c?.waitTimer !== undefined) this.clock.clearTimeout(c.waitTimer);
-    if (c) c.waitTimer = undefined;
-  }
-
-  /** The conversation is over: the box closes its session (its billing stops), each turn's line is written. */
-  private async frontEnd(reason: string) {
-    const c = this.front;
-    if (!c) return;
-    this.front = undefined;
-    this.clearFrontWait(c);
-    for (const job of [...this.frontTurns.keys()]) this.flushFrontTurn(job);
-    this.box.frontEnd(reason);
-    const now = this.clock.now();
-    this.log("front conversation ended", { device: this.deviceId, reason, turns: c.turns, ms: now - c.started });
-    await this.activity.record({ ts: now, kind: "voice_box", ev: "front.end", data: { reason, turns: c.turns, ms: now - c.started } });
-  }
-
-  /** The agent's answer to a front turn started playing: that turn's line is complete. */
-  private noteFrontAnswer(turn: string, called: number, firstOut: number) {
-    const ft = this.frontTurns.get(turn);
-    if (!ft) return;
-    ft.agentAt = called;
-    ft.agentOut = firstOut;
-    this.flushFrontTurn(turn);
-  }
-
-  /** One turn's times: a log line and one activity entry (kind trace, ev "front"), printed as one line. */
-  private flushFrontTurn(job: string) {
-    const ft = this.frontTurns.get(job);
-    if (!ft) return;
-    this.frontTurns.delete(job);
-    const { ms, line } = frontTurnSummary(ft);
-    this.log("front turn", { device: this.deviceId, job, ...ms });
-    void this.activity.record({ ts: ft.endAt, kind: "trace", ev: "front", job, data: { ...ms, ...(ft.waiting ? { waiting: true } : {}), line } });
-  }
-
-  /** The box's session opened / closed (its own limits, usage): for the owner's activity log. */
-  private async onFrontSession(f: Record<string, unknown>) {
-    if (f.state !== "open" && f.state !== "closed") return;
-    const data: JsonObject = { state: f.state };
-    if (typeof f.reason === "string") data.reason = f.reason.slice(0, 40);
-    if (typeof f.s === "number" && Number.isFinite(f.s)) data.s = Math.round(f.s);
-    if (typeof f.today_s === "number" && Number.isFinite(f.today_s)) data.today_s = Math.round(f.today_s);
-    if (isRecord(f.usage)) {
-      const u: JsonObject = {};
-      for (const [k, v] of Object.entries(f.usage).slice(0, 8)) if (/^[a-z_]{1,24}$/.test(k) && typeof v === "number" && Number.isFinite(v)) u[k] = Math.round(v);
-      data.usage = u;
-    }
-    await this.activity.record({ ts: this.clock.now(), kind: "voice_box", ev: "front.session", data });
-    // the box closed its session by itself (its idle, length or daily limit): the conversation cannot go on
-    if (f.state === "closed" && this.front && typeof f.reason === "string" && ["daily_cap", "max_session"].includes(f.reason)) await this.frontEnd(`box_${f.reason}`);
-  }
-
-  /** The agent's `front {context?, end?}`: silent background for the front, or the conversation's end. */
-  private async frontCommand(args: JsonObject): Promise<Outcome> {
-    if (!(await this.frontOn())) return { ok: true, result: { skipped: "front_off", reason: (await this.frontWhyNot()) ?? "" } };
-    const out: JsonObject = { conversation: !!this.front };
-    if (typeof args.context === "string") out.context = this.front ? this.box.frontContext(args.context) : false;
-    if (args.end === true) {
-      out.ended = !!this.front;
-      await this.frontEnd("agent");
-    }
-    return { ok: true, result: out };
   }
 
   // ---------------- waiter plumbing ----------------
