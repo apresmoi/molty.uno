@@ -188,11 +188,13 @@ cJSON *link_evt_rhythm_frame(const char *state, const char *rhythm, int bpm);
 /* {"t":"evt","name":"dnd","data":{"on":bool}}: do not disturb (power.h), after each welcome and each change. */
 cJSON *link_evt_dnd_frame(bool on);
 cJSON *link_evt_double_tap_frame(double x, double y);
-/* A say's watchdog: no audio at all is given up on far sooner than a stream that stops
- * (the relay's job has failed, or the link lost it; the creature is hidden meanwhile). */
+/* A say's watchdog (the audio task's: link_audio.c play): the speaker waiting dry_ms for audio
+ * that does not come, its first (the relay's job may still be synthesising) or, once it began,
+ * more after all it had was played (the relay's job failed, or its stream stalled in the socket;
+ * the creature is hidden meanwhile). */
 #define LINK_SAY_FIRST_AUDIO_MS 8000u
-#define LINK_SAY_STALL_MS       30000u
-bool link_say_stalled(uint32_t idle_ms, uint32_t frames);
+#define LINK_SAY_DRY_MS         4000u
+bool link_say_stalled(uint32_t dry_ms, bool started);
 /* A colour on the wire: "#rrggbb" (hex digits either case) → 0xRRGGBB. Anything else → false. */
 bool link_color_parse(const char *s, uint32_t *rgb);
 /* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a

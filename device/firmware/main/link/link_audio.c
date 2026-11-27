@@ -50,10 +50,9 @@ enum { STOP_NONE, STOP_TURN_END, STOP_NO_SPEECH, STOP_TAP };
 static atomic_int s_stop;
 static char s_job[LINK_STREAM_MAX];
 static uint32_t s_seq;
-static int64_t s_last_frame;
 static atomic_bool s_relay_resumes;                    /* the relay's welcome lists resume */
 static atomic_bool s_held;                             /* a drop: this job waits for the link */
-static int64_t s_held_at;                              /* link task */
+static int64_t s_held_at;                              /* link task: written before s_held */
 static char s_done_offline[LINK_STREAM_MAX];           /* a say played out while the link was down: its say.done (link task) */
 static atomic_uint s_gen;                              /* bumped by begin(): names one job */
 static atomic_uint s_gesture_req;                              /* a gesture's stop or cancel: gen << 1 | what */
@@ -179,11 +178,23 @@ static void say_gate(void)
     mole_fluid_say_sound(s_say_text_ver, (int)((esp_timer_get_time() - t0) / 1000));
 }
 
+/* A say whose audio does not come is given up here, on the audio task (link_say_stalled): never on the link task, which
+ * a stalled socket holds (its sends wait 10 s for the socket's lock, its reconnect for the socket's read to end: a say
+ * once sat 44 s that way). A drop the relay may resume (s_held) waits instead, its window at most, on this clock too. */
+static bool say_dry(int64_t *fed, bool started)
+{
+    const int64_t now = esp_timer_get_time();
+    if (!atomic_load(&s_held)) return link_say_stalled((uint32_t)((now - *fed) / 1000), started);
+    *fed = now;                          /* (resumed: the replay gets the whole wait again) */
+    return now - s_held_at > (int64_t)LINK_RESUME_WINDOW_MS * 1000;
+}
+
 static esp_err_t play(void)
 {
     esp_err_t e = molty_speaker_stream_begin(16000);
     if (e != ESP_OK) { if (s_cued) mole_fluid_text_cue_end(); return e; }
     bool first = true;
+    int64_t fed = esp_timer_get_time();  /* the last audio in hand (the say's start before any) */
     while (!atomic_load(&s_cancel)) {
         size_t n;
         void *pcm = xRingbufferReceiveUpTo(s_ring, &n, pdMS_TO_TICKS(50), PLAY_WRITE_BYTES);
@@ -193,6 +204,11 @@ static esp_err_t play(void)
             pcm = xRingbufferReceiveUpTo(s_ring, &n, 0, PLAY_WRITE_BYTES);
             if (!pcm) break;
         }
+        if (!pcm && say_dry(&fed, !first)) {
+            mole_diag_event(true, "audio.say stalled frames=%u%s", (unsigned)s_stat_frames, atomic_load(&s_held) ? " held" : "");
+            e = ESP_ERR_TIMEOUT; break;
+        }
+        if (pcm) fed = esp_timer_get_time();
         if (pcm && first) { first = false; say_gate(); }
         if (pcm) {
             e = molty_speaker_stream_write(pcm, n / 2);
@@ -830,7 +846,7 @@ static void begin(const audio_job_t *job, bool cued)
     strcpy(s_job, job->job);
     s_job_t0_ms = now_ms();
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
-    s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = job->listen; s_last_frame = esp_timer_get_time();
+    s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_busy = true; s_listen = job->listen;
     s_cued = cued; s_cue_next = 0;
     s_mark_fired = 0; s_mark_mood = -1;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
@@ -1041,8 +1057,9 @@ void link_audio_link_down(void)
 {
     const bool keep = atomic_load(&s_relay_resumes) && s_busy && atomic_load(&s_pend) != PEND_WAIT && !atomic_load(&s_cancel);
     if (!keep) { atomic_store(&s_held, false); link_audio_cancel(); return; }
-    if (!atomic_exchange(&s_held, true)) {
+    if (!atomic_load(&s_held)) {        /* (the time first: the audio task reads it once held) */
         s_held_at = esp_timer_get_time();
+        atomic_store(&s_held, true);
         mole_diag_event(false, "audio.held %s", s_listen ? "listen" : "say");
     }
 }
@@ -1075,8 +1092,7 @@ void link_audio_resume_welcome(const cJSON *welcome)
         if (cJSON_IsNumber(next) && !uplink_rewind(&s_up, (uint32_t)next->valuedouble)) s_up.drop++;
         up_unlock();
     }
-    if (ok) s_last_frame = esp_timer_get_time();
-    else link_audio_cancel();
+    if (!ok) link_audio_cancel();
     mole_diag_event(!ok, "audio.resume %s", ok ? "ok" : "refused");
     atomic_store(&s_held, false);
     if (ok && s_listen) up_kick();
@@ -1166,7 +1182,7 @@ esp_err_t link_audio_receive(const void *data, size_t len)
     if (n && xRingbufferSend(s_ring, pcm, n, pdMS_TO_TICKS(750)) != pdTRUE) {
         link_audio_cancel(); return ESP_ERR_NO_MEM;
     }
-    s_seq++; s_last_frame = esp_timer_get_time();
+    s_seq++;
     s_stat_frames++; s_stat_bytes += n;
     if (h.end) atomic_store(&s_end, true);
     return ESP_OK;
@@ -1183,7 +1199,6 @@ void link_audio_tick(void)
         mole_diag_event(true, "audio.held gave up");
         link_audio_cancel();
     }
-    if (!s_listen && link_say_stalled((uint32_t)((esp_timer_get_time() - s_last_frame) / 1000), s_stat_frames)) link_audio_cancel();
     esp_err_t e;
     if (xQueueReceive(s_done, &e, 0) != pdTRUE) return;
     drain(); /* worker has acknowledged completion; discard any late PCM */

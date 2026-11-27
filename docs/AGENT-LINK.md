@@ -293,7 +293,7 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   (`""`, `"."`, `"[BLANK_AUDIO]"`). No utterance, opener, filler or thinking follows. `speech_ms` alone never skips STT (firmware before this change sent `speech_ms:0` with
   `vad:false`). Older firmware sends no reason: STT as before, reason derived (`max` window
   full, `ended` stopped early, `no_speech` empty transcript).
-- `say_cancel` (cap `say_cancel`): relay sends `cmd say_cancel {job}` when a say / talk / quick job fails: the device stops waiting for that say's audio (`{job, cancelling}`; any other job is a no-op). Without audio a say also gives up by itself after 8 s (30 s once frames have arrived).
+- `say_cancel` (cap `say_cancel`): relay sends `cmd say_cancel {job}` when a say / talk / quick job fails: the device stops waiting for that say's audio (`{job, cancelling}`; any other job is a no-op). Without audio a say also gives up by itself, on the speaker's own clock (whatever the link is doing): after 8 s with none at all, and 4 s after its speaker played all it had once frames have arrived (no `say.done`, back to idle); a say held through a drop the relay may resume waits out the resume window (15 s) instead.
 - `gestures` (cap `gestures`): `cmd gestures {bindings?}` sets `{tap|double_tap|button_accept|button_reject: none|talk|event|stop}` (NVS) and answers `{bindings}`; a tap during a recording ends it with reason `tap`, whatever is bound.
 - `listen_stop` (cap `listen_stop`, boards with a mic): relay sends `cmd listen_stop {job, reason}`
   when its STT called the end of the listen (a [voice box](#voice-box) `stt.turn_end`): `reason`

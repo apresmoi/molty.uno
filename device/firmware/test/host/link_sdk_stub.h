@@ -167,6 +167,8 @@ esp_err_t httpd_register_uri_handler(httpd_handle_t, const httpd_uri_t *);
 
 extern int64_t sdk_now;
 extern void (*sdk_wait)(void);
+/* the tests: an empty ring's timed receive waits its ticks and runs this (NULL: returns at once, no time passes) */
+extern void (*sdk_ring_wait)(void);
 extern unsigned sdk_random, sdk_commits, sdk_erases;
 /* mutexes held right now; whether the last state set ran with one held */
 extern int sdk_locks; extern bool sdk_state_locked;
