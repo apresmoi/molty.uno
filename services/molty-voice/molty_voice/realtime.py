@@ -130,6 +130,7 @@ class RealtimeFront:
         self._creating: _Speech | None = None
         self._active: _Speech | None = None
         self._n = 0
+        self._context: list[str] = []  # silent context sent while no session is open: told to the next one
         self.capped = False
         self.close_reason = ""
 
@@ -212,6 +213,9 @@ class RealtimeFront:
                 self.close_reason = ""
                 self._vad_on = False
                 await self._send({"type": "session.update", "session": self._session()})
+                for text in self._context:
+                    await self._item("system", brief.context(text))
+                self._context = []
                 self._reader = asyncio.create_task(self._read(self._ws))
                 self._watch = asyncio.create_task(self._watchdog())
                 log.info("realtime: session open (%s, voice %s, %s turns) in %.0f ms", self.cfg.realtime_model, self.cfg.realtime_voice,
@@ -366,12 +370,16 @@ class RealtimeFront:
                 await self._send({"type": "response.cancel"})
 
     async def context(self, text: str) -> None:
-        if not await self._ensure():
+        if self._ws is None:
+            # never a session (billed) just for context: the next one is told
+            self._context = (self._context + [text])[-4:]
+            log.info("front: context, %d chars, kept for the next session", len(text))
             return
         log.info("front: context, %d chars", len(text))
         await self._item("system", brief.context(text))
 
     async def end(self, reason: str) -> None:
+        self._context = []  # the conversation is over: its context too
         await self._close(reason or "ended")
 
     async def close(self) -> None:
@@ -425,6 +433,8 @@ class RealtimeFront:
                 return
             s = _Speech(sid=self._new_id(), kind="reply", listen=lst.mid, t0=time.monotonic())
         s.rid = rid
+        if s.kind == "reply":
+            s.t0 = time.monotonic()  # its first_audio counts from here: ms.created already covers the turn's end to here
         self._active = s
         log.info("front %s (%s): response created", s.sid, s.kind)
         if s.kind == "reply":
