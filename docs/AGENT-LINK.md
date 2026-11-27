@@ -180,7 +180,11 @@ Header: `{"s":"<stream id>","seq":N,"kind":"pcm16","rate":16000,"end":bool}`.
   unknown `t`. What the device does with it: [Turn trace](#turn-trace) › listener reactions.
 - `say`: relay sends `cmd say {job,text,ms,rate:16000,voice?,cues?}`; device starts `speaking`
   and text immediately, then acknowledges. Relay sends 320 ms PCM frames (`s` = job id),
-  with three lead frames and paced delivery thereafter. TTS is streamed: the relay sends
+  paced to the device's playback whatever the audio's speed: the first frame at once, then never
+  more than 2 frames (640 ms, about 20 KB) in flight, well inside the ESP32's 32 KB TCP window (a
+  front reply's whole audio often exists before the say starts: a burst of several frames stalled
+  the device's TLS reads for seconds). Audio that arrives at real time goes out as it comes; a
+  cancelled say sends no more audio, only its end frame. TTS is streamed: the relay sends
   `cmd say` once the first sentence is synthesised — with the voice box, at once, in parallel
   with the synthesis (its first audio is ~0.25 s away) — and streams while the rest is still
   being synthesised, so `ms` is then an estimate (informational; exact when synthesis finished
