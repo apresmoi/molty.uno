@@ -7,10 +7,11 @@
 //     model ends the person's turn (listen_stop) and answers at once (front.reply), played like any say;
 //   - the agent still gets ONE `utterance` per turn, with `front: {said, waiting, role}` (what the front
 //     already answered, whether it handed the turn to the agent with a holding line, and that it speaks);
-//   - one voice: the agent's say / talk is never text to speech: its text is the front's inner thought
-//     (tts front:"inner", exact?), which the front voices at the next natural moment or absorbs (a
-//     repeat of what it said); the result says which (innerResult). An answer to a stale turn is only
-//     kept as context (FrontTalk.fate); a repeat gets the first one's job;
+//   - one voice: the agent's say / talk is never text to speech: it goes to the box (tts front:"inner",
+//     turn), whose session decides at once (molty_voice/realtime.py "state"): voiced only for the turn
+//     its front waits for (or between conversations), else context only (tts.end absorbed); the
+//     result says which (innerResult). An answer to a turn over a minute old is only kept as context
+//     (FrontTalk.fate); a repeat gets the first one's job;
 //   - hands-free: after Molty speaks, it listens again, until nobody speaks, a stop phrase, a tap, the
 //     agent's `front {end}`, the owner's switch, or the limits below.
 //
@@ -39,6 +40,8 @@ export const FRONT = {
    * set once per say). The model's text usually runs ahead of its audio; what is not in by then is not shown.
    */
   textHoldMs: 150,
+  /** The box decides at once whether an agent line is voiced: absorbed comes back within this, else it is voiced. */
+  verdictMs: 400,
   /** The device ends a stopped listen within one 100 ms chunk; a reply waits this long at most for its end frame. */
   deviceFreeMs: 600,
   /** A front say's text goes to the device as it grows (cap say_text): at most once this often, the final text always. */
@@ -55,22 +58,21 @@ export function stopPhrase(text: string): boolean {
 }
 
 /**
- * What becomes of an agent's answer to a turn (its in_reply_to) with the front on: it goes to the front
- * (which voices or absorbs it), or not at all, only kept as context: its turn is over TURN_HOLD_MS old,
- * or its conversation ended and the front had answered it.
+ * What becomes of an agent's answer to a turn (its in_reply_to) with the front on: it goes to the box,
+ * which voices it only when its front waits for that turn (molty_voice/realtime.py "state"), or not at
+ * all, only kept as context: its turn is over TURN_HOLD_MS old.
  */
-export type FrontFate = { speak: true } | { speak: false; reason: "old_turn" | "conversation_over" };
+export type FrontFate = { speak: true } | { speak: false; reason: "old_turn" };
 
 const INNER_HINT = {
   said: "the voice front said it for you, in its own words (`said`): you are its inner voice, not the speaker. It listens next: the person's words come as an utterance",
-  absorbed: "the voice front said nothing: it had said this already, and keeps it as context. Send only facts or decisions it lacks",
-  queued: "the voice front says it at the next natural moment (someone is speaking): molty_wait {job} for what it said",
+  absorbed: "not said: the voice front voices your line only when it handed the turn to you (front.waiting); it keeps this as context. Send only facts or decisions it lacks",
+  queued: "the voice front says it once the device is free: molty_wait {job} for what it said",
   old_turn: "this turn is over a minute old: not said, kept as the front's context",
-  conversation_over: "this conversation is over and the front had answered this turn: not said, kept as its context",
 } as const;
 
 /** What a say / talk got with the front on: the front is the speaker, the agent its inner voice. */
-export function innerResult(how: "said" | "absorbed" | "queued", said?: string, reason?: "old_turn" | "conversation_over"): JsonObject {
+export function innerResult(how: "said" | "absorbed" | "queued", said?: string, reason?: "old_turn"): JsonObject {
   return { spoken: how === "said", as: "inner", how, ...(said ? { said } : {}), ...(reason ? { reason } : {}), hint: INNER_HINT[reason ?? how] };
 }
 
@@ -79,6 +81,11 @@ export const FRONT_ROLE = "you are the inner voice: a voice front speaks for you
 
 /** The agent's standing persona line (`front {context, persona: true}`), kept per device: KV key. */
 const PERSONA = "front:persona";
+
+/** Speech by the front for a say / talk job (the room's Prepared). */
+export interface FrontPrepared {
+  front?: FrontSpeech;
+}
 
 /** A say / talk the front did not voice: done (it absorbed the thought), else failed. */
 export function absorbedOr(sp: FrontSpeech | undefined, error: string) {
@@ -140,6 +147,8 @@ export interface FrontHost {
   readonly kv: KV;
   /** A relay-owned hands-free listen. */
   listen(): Promise<Outcome>;
+  /** An agent line to the box's front (tts front:"inner", `turn`: the box's listen id it answers): speech, or undefined (no box). */
+  prepare(text: string, exact: boolean, turn?: string): Promise<FrontPrepared | undefined>;
   /** The relay's latest human turn (KV `turn`). */
   latestTurn(): Promise<{ id: string; at: number } | undefined>;
   jobStatus(job: string): Promise<JobStatus | undefined>;
@@ -168,7 +177,7 @@ export class FrontTalk {
   private readonly turns = new Map<string, FrontTurn>();
   private readonly waiting = new Map<string, () => void>();
   /** The last turns the person spoke in, oldest first: when each ended, whether the front answered it / handed it to the agent. */
-  private readonly past = new Map<string, { at: number; answered?: boolean; held?: boolean }>();
+  private readonly past = new Map<string, { at: number }>();
   /** Each agent's first answer to a turn (`<agent> <turn>` -> its job). */
   private readonly answers = new Map<string, string>();
 
@@ -185,7 +194,7 @@ export class FrontTalk {
   /** A front listen starts (`sid`: the box's stream): the conversation begins or goes on, earlier turns' lines are written. */
   listening(sid: string, job: string) {
     this.listens.set(sid, job);
-    while (this.listens.size > 4) this.listens.delete(this.listens.keys().next().value!);
+    while (this.listens.size > 16) this.listens.delete(this.listens.keys().next().value!);
     const now = this.h.clock.now();
     if (!this.c) {
       this.c = { started: now, turns: 0 };
@@ -221,6 +230,8 @@ export class FrontTalk {
   /** A listen is over: a front listen nobody spoke into (that did not yield to an answer) ends the conversation, a failed hands-free one too. */
   listened(r: { ok: true; front?: boolean; text: string; yielded?: boolean } | { ok: false } | undefined, handsFree = false, job?: string) {
     if (job && !(r?.ok && r.text.trim())) this.past.delete(job); // no words: not a turn after all
+    // the front answers that turn (REPLYING): never an idle end under it
+    if (job && this.replies.has(job)) return;
     if (r?.ok ? r.front && !r.text.trim() && !r.yielded : this.live && handsFree) void this.end(r?.ok ? "idle" : "listen_failed");
   }
 
@@ -235,7 +246,6 @@ export class FrontTalk {
     if (!job || !this.c || (await this.h.whyNot()) !== null) return sp.cancel();
     const t = this.turns.get(job);
     if (t) t.replyAt = this.h.clock.now();
-    this.spoken(job).answered = true;
     this.replies.set(job, sp);
     while (this.replies.size > 4) this.replies.delete(this.replies.keys().next().value!);
     this.waiting.get(job)?.();
@@ -271,7 +281,6 @@ export class FrontTalk {
     if (t) {
       if (firstOut !== undefined) t.replyOut = firstOut;
       t.waiting = !!sp?.wait;
-      if (t.waiting) this.spoken(replyOf!).held = true;
       // the model's own time, as the box measured it: its end of turn -> the reply's start -> its first audio
       const b = sp?.boxMs ?? {};
       if (typeof b.created === "number" || typeof b.first_audio === "number") t.boxMs = ((b.created as number) ?? 0) + ((b.first_audio as number) ?? 0);
@@ -317,38 +326,47 @@ export class FrontTalk {
     if (!started.ok) sp.cancel();
   }
 
-  /**
-   * An agent's answer to `turn` (in_reply_to), now (`latest`: the relay's latest turn record). Spoken
-   * when it still belongs to the moment; the answer the front is waiting for always is (but a minute
-   * on); the others are context or dropped (FrontFate).
-   */
+  /** An agent's answer to `turn` (in_reply_to), now (`latest`: the relay's latest turn record): FrontFate. */
   fate(turn: string, latest: { id: string; at: number } | undefined): FrontFate {
     const p = this.past.get(turn);
     const at = p?.at ?? (latest?.id === turn ? latest.at : undefined);
     if (at !== undefined && this.h.clock.now() - at > TURN_HOLD_MS) return { speak: false, reason: "old_turn" };
-    if (p?.held || this.live) return { speak: true }; // the front decides (it waits until nobody speaks)
-    let last: string | undefined;
-    for (const k of this.past.keys()) last = k;
-    const newer = (latest && latest.id !== turn) || (last !== undefined && last !== turn);
-    return newer || p?.answered ? { speak: false, reason: "conversation_over" } : { speak: true };
+    return { speak: true };
   }
 
   /**
-   * The front on, agent `hash`'s say / talk answering `turn` (in_reply_to): its answer to that turn
-   * again gets the first one's job (unless that failed); one to a stale turn (fate) is not voiced:
-   * the front keeps it as context, its job is done at once saying so. No `job`: to the front.
+   * The front on, agent `hash`'s say / talk (`turn`: its in_reply_to): a repeat for the same turn gets
+   * the first answer's job (unless that failed); one to a turn over a minute old only goes to the front
+   * as context. Else the line goes to the box with the box's id of that listen, and the box decides at
+   * once (molty_voice/realtime.py "state"): absorbed (context only) answers now with a done job, never
+   * queued for the speaker; voiced comes back as `prepared` speech for the say / talk job. Undefined:
+   * not the front's (off, no box: the room's own path).
    */
-  async lateAnswer(kind: "say" | "talk", hash: string, by: Who | undefined, turn: string | undefined, text: string | undefined): Promise<{ ok: true; result: JsonObject } | undefined> {
+  async lateAnswer(kind: "say" | "talk", hash: string, by: Who | undefined, turn: string | undefined, text: string | undefined, exact = false): Promise<{ ok: true; result: JsonObject; prepared?: FrontPrepared } | undefined> {
     if (text === undefined || !(await this.serving())) return undefined;
-    // to the front: until it is voiced or absorbed, the result says it waits (a talk's 202)
-    if (turn === undefined) return { ok: true, result: innerResult("queued") };
-    const first = this.answerOf(hash, turn);
-    const was = first && (await this.h.jobStatus(first));
-    if (was && was !== "failed") return { ok: true, result: { job: first!, repeated: true } };
-    const f = this.fate(turn, await this.h.latestTurn());
-    if (f.speak) return { ok: true, result: innerResult("queued") };
-    this.h.box.frontContext(`Your inner voice's late answer to something the person said earlier (not said aloud): ${text}`);
-    return { ok: true, result: { job: this.answerOf(hash, turn, await this.h.doneJob(kind, by, innerResult("absorbed", undefined, f.reason)))! } };
+    const done = async (result: JsonObject) => {
+      const job = await this.h.doneJob(kind, by, result);
+      this.answerOf(hash, turn, job);
+      return { ok: true as const, result: { job } };
+    };
+    if (turn !== undefined) {
+      const first = this.answerOf(hash, turn);
+      const was = first && (await this.h.jobStatus(first));
+      if (was && was !== "failed") return { ok: true, result: { job: first!, repeated: true } };
+      if (!this.fate(turn, await this.h.latestTurn()).speak) {
+        this.h.box.frontContext(`Your inner voice's late answer to something the person said earlier (not said aloud): ${text}`);
+        return done(innerResult("absorbed", undefined, "old_turn"));
+      }
+    }
+    // the box's listen id of that turn ("-": not one the front heard: the box keeps it as context)
+    const sid = turn === undefined ? undefined : ([...this.listens].find(([, j]) => j === turn)?.[0] ?? "-");
+    const prepared = await this.h.prepare(text, exact, sid).catch(() => undefined);
+    if (!prepared?.front) return undefined;
+    const sp = prepared.front;
+    await Promise.race([sp.ended, sleep(this.h.clock, FRONT.verdictMs)]);
+    if (sp.absorbed) return done(innerResult("absorbed"));
+    this.agentAnswering();
+    return { ok: true, result: innerResult("queued"), prepared };
   }
 
   /** The answer of agent `hash` to `turn` (its job), or records `job` as it (a retry of a failed one replaces it). */

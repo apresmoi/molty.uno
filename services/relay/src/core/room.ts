@@ -829,6 +829,12 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       listen: () => this.startJob("listen", { trigger: "front" }, true, undefined, undefined, { lead: RELAY_LEAD }),
       kv: this.kv,
       openTurn: () => this.openTurn?.id,
+      prepare: async (t, e, turn) => {
+        const pick = await this.pickVoice("tts");
+        if (!this.liveSocket() || !pick.ok || !pick.box) return undefined; // offline: no session
+        const sp = this.box.frontSpeak(t, "inner", e, turn);
+        return { pick, feed: sp.feed, at: this.clock.now(), front: sp };
+      },
       latestTurn: () => this.kv.get<TurnRecord>(K.turn),
       jobStatus: async (job) => (await this.kv.get<JobRecord>(K.job(job)))?.status,
       doneJob: async (kind, by, result) => {
@@ -1281,7 +1287,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const late = cmd.name === "say" ? await this.ft.lateAnswer("say", hash, by, cmd.in_reply_to, cmd.args.text as string) : undefined;
+    const late = cmd.name === "say" ? await this.ft.lateAnswer("say", hash, by, cmd.in_reply_to, cmd.args.text as string, cmd.args.exact === true) : undefined;
     if (late?.result.job) return late;
     // the human is talking: nothing that makes a sound or takes the screen (draft / react instead)
     if (HUSHED.includes(cmd.name) || (cmd.name === "state" && Object.keys(cmd.args).length > 0)) {
@@ -1371,7 +1377,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         const sayArgs = cmd.client_timing ? { ...cmd.args, client_timing: cmd.client_timing } : cmd.args;
         // its own opener is playing: this say queues behind it and starts the moment it ends
         const after = this.followUpOf(hash);
-        const started = await this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called), after ? { after } : {});
+        const started = await this.startJob("say", sayArgs, true, by, () => this.claimFor(hash, cmd.in_reply_to, called), { after, prepared: late?.prepared as Prepared });
+        if (!started.ok) late?.prepared?.front?.cancel();
         if (started.ok && after) this.noteFollow(after, started.result.job as string);
         if (started.ok) this.ft.answerOf(hash, cmd.in_reply_to, started.result.job as string);
         return started;
@@ -1580,7 +1587,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (e instanceof CommandError) return fail(e.code, e.message);
       throw e;
     }
-    const late = await this.ft.lateAnswer("talk", a.hash, this.who(a), args.in_reply_to, args.say);
+    const late = await this.ft.lateAnswer("talk", a.hash, this.who(a), args.in_reply_to, args.say, args.exact === true);
     let job = (late?.result.job as string) ?? "";
     if (!job) {
       const hush = this.humanSpeaking() ?? (await this.disturbs(args.in_reply_to));
@@ -1600,7 +1607,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (!pre.ok) return pre;
       await this.kv.put(K.lastAnswerer, a.hash); // a talk converses with the human: Molty's fillers are its own
       const after = this.followUpOf(a.hash);
-      const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0), after ? { after } : {});
+      const started = await this.startJob("talk", args as unknown as JsonObject, true, this.who(a), () => this.claimFor(a.hash, args.in_reply_to, t0), { after, prepared: late?.prepared as Prepared });
+      if (!started.ok) late?.prepared?.front?.cancel();
       if (!started.ok) return started;
       job = started.result.job as string;
       if (after) this.noteFollow(after, job);
@@ -2013,7 +2021,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
                 ? this.runQuick(id, args, now, ready)
                 : kind === "pkg"
                   ? this.runPkgInstall(id, args)
-                : this.runTalk(id, args as unknown as TalkArgs, now, ready);
+                : this.runTalk(id, args as unknown as TalkArgs, now, ready, opts.prepared);
     run
       .catch((e: unknown) => this.finishJob(id, { status: "failed", error: errorCode(e) }))
       .finally(() => {
@@ -2107,8 +2115,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   private async runSay(id: string, args: JsonObject, created: number, ready?: Promise<void>, prepared?: Prepared) {
     const text = args.text as string;
     const voice = typeof args.voice === "string" ? args.voice : undefined;
-    const front = prepared || args.opener === true || args.first_words === true ? undefined : await this.frontPrepare(text, args.exact === true);
-    const pre = prepared ?? front ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
+    const pre = prepared ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
     if (ready) await ready;
     // a front reply waits for the stopped listen's end frame (FRONT.deviceFreeMs at most)
     const tail = this.traceTail;
@@ -2227,9 +2234,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   }
 
   /** say (optional) then listen, one job holding the audio lock across both, so nothing slips in between. `ready`: as runSay. */
-  private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>) {
+  private async runTalk(id: string, args: TalkArgs, created: number, ready?: Promise<void>, front?: Prepared) {
     const off = await this.voiceIsOff();
-    const front = args.say !== undefined ? await this.frontPrepare(args.say, args.exact === true) : undefined;
     const pre = front ?? (ready && args.say !== undefined && !off ? await this.prepareSpeech(args.say, args.voice) : undefined);
     if (ready) await ready;
     await this.setJob(id, { status: "running" });
@@ -3092,6 +3098,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
 
   /** The relay's voice check (core/voiced.ts) on this listen's audio, once it is over: memoized. */
   private heardVoice(buf: ListenBuffer): boolean {
+    if (buf.front && buf.speaking) return true; // the front's model heard the person: its turn end is the truth
     const v = buf.voiced ?? (buf.bytes > 0 && this.voiced(listenPcm(buf)));
     if (buf.ended) buf.voiced = v;
     return v;
@@ -4905,20 +4912,6 @@ export class DeviceRoom implements AgentApi, OwnerApi {
   // =====================================================================
   // Voice front (core/front.ts FrontTalk, docs/AGENT-LINK.md "Voice front")
   // =====================================================================
-
-  /** The agent's answer, said by the front, when it serves. */
-  private async frontPrepare(text: string, exact: boolean): Promise<Prepared | undefined> {
-    if (!this.liveSocket() || !(await this.ft.serving())) return undefined; // offline: no session
-    const pick = await this.pickVoice("tts");
-    if (!pick.ok || !pick.box) return undefined;
-    this.ft.agentAnswering();
-    try {
-      const sp = this.box.frontSpeak(text, "inner", exact);
-      return { pick, feed: sp.feed, at: this.clock.now(), front: sp };
-    } catch {
-      return undefined;
-    }
-  }
 
   private jobId() {
     return `${this.deviceId}.j_${b64urlEncode(randomBytes(12))}`;

@@ -20,7 +20,8 @@
 // The voice front (docs/AGENT-LINK.md "Voice front"; a box whose hello says "front": 1, core/front.ts):
 //   relay → box  stt.start adds "front": true (answer this listen yourself at the turn's end; "hold": true,
 //                held to talk: the release ends it, never your turn detection)
-//   relay → box  {"t":"tts",…,"front":"inner"|"wait","exact"?} (the agent's thought: voiced or absorbed by the front /
+//   relay → box  {"t":"tts",…,"front":"inner"|"wait","exact"?,"turn"?} (an agent line, voiced only when the front waits
+//                for listen `turn` (or with no turn between conversations), else context: tts.end absorbed /
 //                "still waiting"), {"t":"front.context","text","persona"?}, {"t":"front.end","reason"}
 //   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
 //                {"t":"front.reply","id","stt","ms"?} then frames s=id, tts.word, {"t":"tts.text","id","text","final"?},
@@ -227,12 +228,12 @@ export class RemoteVoiceProvider implements VoiceProvider {
   // ---------------- the voice front ----------------
 
   /** The agent's thought (or "still waiting") for the box's front: tts {front: mode, exact?}. Throws when no box. */
-  frontSpeak(text: string, mode: "inner" | "wait", exact = false): FrontSpeech {
+  frontSpeak(text: string, mode: "inner" | "wait", exact = false, turn?: string): FrontSpeech {
     const ch = this.channel();
     const id = this.newId("t");
     const sp = this.frontOp(ch, id, mode);
     try {
-      ch.sendText(JSON.stringify({ t: "tts", id, text, front: mode, ...(exact ? { exact } : {}) }));
+      ch.sendText(JSON.stringify({ t: "tts", id, text, front: mode, ...(exact ? { exact } : {}), ...(turn !== undefined ? { turn } : {}) }));
     } catch {
       this.frontOps.get(id)?.end(new Error(BOX_OFFLINE));
     }

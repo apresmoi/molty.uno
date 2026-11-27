@@ -13,6 +13,7 @@ import base64
 import json
 import logging
 import re
+import time
 
 import numpy as np
 from websockets.asyncio.server import serve
@@ -24,7 +25,7 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
-                 reply=None, threshold: float = 0.02, absorb=None, final=None):
+                 reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -32,10 +33,19 @@ class FakeRealtime:
         # (transcript) -> (words to say, call hand_to_agent?)
         # a question it cannot answer: a holding line echoing the person's words, handed to the agent (brief.BRIEF)
         self.reply = reply or (lambda heard: (f"Ok, let me see... {heard.rstrip('?')}, one sec.", True) if "?" in heard or "what" in heard.lower() else ("Hi there!", False))
-        self.absorb = absorb or (lambda thought: False)  # (an inner voice thought) -> stay silent?
+        # a scripted conversation: each committed turn takes the next {heard, said, handoff} (then transcript / reply)
+        self.script = list(script or [])
+        self.turn = 0
+        # as a model seen live: an auto response (create_response) comes this late, and turn detection
+        # switched off before it (session.update turn_detection null) loses it
+        self.auto_create_ms = auto_create_ms
+        # as a model seen live: background sent as a system item ("Inner voice context: ...") is said with the next answer
+        self.recite = recite
         self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
         self.threshold = threshold
         self.sessions: list[dict] = []
+        # what happened when, for a rig's checks: open / close {active} / create {kind, speaking}
+        self.log: list[dict] = []
         self.port = 0
         self._server = None
 
@@ -55,9 +65,11 @@ class FakeRealtime:
         sess = {"auth": bool(ws.request.headers.get("authorization")), "path": ws.request.path, "updates": [], "items": [], "creates": [],
                 "appended": 0, "commits": 0, "clears": 0, "closed": False, "cancels": 0}
         self.sessions.append(sess)
+        self.log.append({"t": time.monotonic(), "ev": "open"})
         # vad: the turn detection's settings (None: off, push to talk). Its speech state lives across
         # commits and clears, as a real detector's does: only a new turn_detection resets it.
-        st = {"buf": [], "speech": False, "quiet": 0, "audio_ms": 0, "start_ms": 0, "active": None, "n": 0, "create": True, "vad": None}
+        st = {"buf": [], "speech": False, "quiet": 0, "audio_ms": 0, "start_ms": 0, "active": None, "n": 0, "create": True, "vad": None,
+              "heard": "", "auto": None, "recited": 0}
         lock = asyncio.Lock()
 
         async def send(ev):
@@ -75,9 +87,18 @@ class FakeRealtime:
             sess["commits"] += 1
             st["buf"] = []
             await send({"type": "input_audio_buffer.committed", "item_id": item, "previous_item_id": None})
-            heard = self.transcript if self.transcript is not None else "hello molty"
+            turn = self.script[self.turn] if self.turn < len(self.script) else None
+            self.turn += 1
+            heard = turn["heard"] if turn else self.transcript if self.transcript is not None else "hello molty"
+            delay = (turn or {}).get("auto_create_ms", self.auto_create_ms)
+            st["heard"] = heard
             if by_vad and st["create"]:  # a client's own commit never makes a response by itself
-                asyncio.create_task(respond(heard, None))
+
+                async def auto():
+                    await asyncio.sleep(delay / 1000)
+                    st["auto"] = None
+                    await respond(heard, None)
+                st["auto"] = asyncio.create_task(auto())
 
             async def transcribe():
                 await asyncio.sleep(0.25)
@@ -96,18 +117,25 @@ class FakeRealtime:
             st["active"] = rid
             await send({"type": "response.created", "response": {"id": rid, "status": "in_progress", "metadata": meta}})
             instr = (req or {}).get("instructions") or ""
+            kind = ("auto" if req is None else "reply" if not instr else "inner" if "The thought:" in instr
+                    else "wait" if "still working" in instr else "plain")
+            self.log.append({"t": time.monotonic(), "ev": "create", "kind": kind, "speaking": st["speech"]})
             m = re.search(r"(?:word for word, and nothing else|The thought): (.*)$", instr, re.S)
             tool = False
-            if m and "The thought" in instr and self.absorb(m.group(1).strip()):
-                words, tool = "", "stay_silent"
-            elif m:
+            if m:
                 words = ("Ok, got it: " if "waiting for this" in instr else "So, " if "own spoken words" in instr else "") + m.group(1).strip()
-            elif "has not answered yet" in instr:
-                words = "Still waiting on that, one moment."
+            elif "still working on the person's request" in instr:
+                words = "Still on it, one moment."
             elif req is not None and sess["items"] and sess["items"][-1].startswith("Inner voice: "):
                 words = "Okay, that's a neat vibe, let me translate that briefly."  # what a model did with a bare system message
             else:
-                words, tool = self.reply(heard)
+                heard = heard or st["heard"]
+                turn = next((t for t in self.script if t["heard"] == heard), None)
+                words, tool = (turn["said"], bool(turn.get("handoff"))) if turn else self.reply(heard)
+            if self.recite and instr:
+                pending = [i[len("Inner voice context: "):] for i in sess["items"][st["recited"]:] if isinstance(i, str) and i.startswith("Inner voice context: ")]
+                st["recited"] = len(sess["items"])
+                words = " ".join(pending + [words]).strip()
             await asyncio.sleep(self.first_audio_ms / 1000)
             n = max(1, len(words.split()))
             total = int(RATE * 0.3 * n) if words else 0  # 300 ms a word
@@ -144,6 +172,9 @@ class FakeRealtime:
                         td = inp["turn_detection"]
                         st["vad"], st["speech"], st["quiet"] = td, False, 0
                         st["create"] = bool(td.get("create_response", True)) if isinstance(td, dict) else False
+                        if td is None and st["auto"] is not None:  # turned off before its auto response: lost
+                            st["auto"].cancel()
+                            st["auto"] = None
                     await send({"type": "session.updated", "session": ev["session"]})
                 elif t == "input_audio_buffer.append":
                     pcm = np.frombuffer(base64.b64decode(ev["audio"]), dtype="<i2").astype(np.float32) / 32768
@@ -183,3 +214,4 @@ class FakeRealtime:
                     st["active"] = None
         finally:
             sess["closed"] = True
+            self.log.append({"t": time.monotonic(), "ev": "close", "active": st["active"] is not None})
