@@ -23,7 +23,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#define LINK_CMD_MAX 32
+#define LINK_CMD_MAX 48
 static struct { const char *name; link_cmd_handler_t handler; } s_registry[LINK_CMD_MAX];
 static size_t s_count;
 static char s_mood[16] = "idle";
