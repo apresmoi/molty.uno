@@ -94,6 +94,7 @@ Every shape except `tap_zone` also takes `color`.
 | `tap_zone` | see [Taps](#taps) | nothing: a place to tap |
 | `beat_clock` | `radius`, `dot` | the rhythm Molty plays, as a clock (see [A clock and a wheel](#a-clock-and-a-wheel)) |
 | `wheel` | `id`, `radius`, `grab_from`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a ring at the edge the finger turns |
+| `wave_ring` | `radius` | the chord Molty plays, on one circle (in a `beat_clock`'s place; its wheels set `pitch` and `pick`) |
 | `centre_tap` | `radius` | nothing: a tap in the middle plays and stops the clock |
 
 ```yaml
@@ -206,7 +207,10 @@ draw:
   to the next one. `sets: tempo` or `pick` drives the beat player. Each click ticks the motor (`tick_ms` at `tick`
   percent; left out, Molty's own). The agent hears one `ring` event when it settles. `face: 0` is up while the clock
   plays (or with no clock), `face: 1` while it is stopped.
-- `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` on the screen.
+- `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` (or a `wave_ring`) on the screen.
+- `wave_ring` draws the chord `wave.play` sent (the molty-waves skill): each voice's hits as dots joined as its shape,
+  the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch, its `sets: pick` wheel the chord
+  kinds (one level up, the notes), its `centre_tap` goes down a level and plays and stops.
 - Sent with regions (`rhythm.play`'s `regions`), a `sets: pick` wheel shows one region's rhythms, the region's name small
   above: a tap on it goes up to the regions, and `centre_tap` there opens the one chosen.
 
