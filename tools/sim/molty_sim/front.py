@@ -60,7 +60,12 @@ def load_clip(path: str | None) -> Clip:
     return Clip(pcm=resample(x, rate, 16000) if rate != 16000 else x, text=Path(path).name)
 
 
-async def front_run(wavs: list[str], live: bool, out: Path, agent_ms: int, answer: str, fake_first_audio_ms: int) -> int:
+async def front_run(wavs: list[str], live: bool, out: Path, agent_ms: int, answer: str, fake_first_audio_ms: int, script_path: str | None = None) -> int:
+    from . import front_script
+
+    script = front_script.load(script_path) if script_path else None
+    for t, w in zip(script.turns if script else [], wavs):
+        t.wav = w  # --live: the recordings, one per turn in order
     out.mkdir(parents=True, exist_ok=True)
     procs: list[stack.Proc] = []
     voice_cfg = out / "voice.json"
@@ -86,7 +91,8 @@ async def front_run(wavs: list[str], live: bool, out: Path, agent_ms: int, answe
         else:
             from molty_voice.fake_realtime import FakeRealtime
 
-            fake = await FakeRealtime(first_audio_ms=fake_first_audio_ms, transcript="what is on my calendar today?").__aenter__()
+            fake = await FakeRealtime(first_audio_ms=fake_first_audio_ms, transcript="what is on my calendar today?",
+                                      script=front_script.fake_script(script) if script else None).__aenter__()
             args += ["--realtime-url", fake.url]
             env = {"MOLTY_REALTIME_KEY": "fake-local-key", "OPENAI_API_KEY": ""}
         bridge = stack.Proc("molty-voice", stack.bridge_cmd(voice_cfg, *args), out / "bridge.log", env=env)
@@ -97,6 +103,8 @@ async def front_run(wavs: list[str], live: bool, out: Path, agent_ms: int, answe
         if not (vs.get("front") or {}).get("serving"):
             raise RuntimeError(f"the front is not serving: {vs.get('front')}")
 
+        if script:
+            return await _scripted(script, dev, rest, device_id, out, fake)
         clips = [load_clip(w) for w in (wavs or [None])]
         heard_at: dict[str, float] = {}
         order = iter(clips)
@@ -180,6 +188,64 @@ async def front_run(wavs: list[str], live: bool, out: Path, agent_ms: int, answe
             await fake.__aexit__(None, None, None)
         voice_cfg.unlink(missing_ok=True)  # the voice token
         shutil.rmtree(out / "wrangler", ignore_errors=True)
+
+
+async def _scripted(script, dev: SimDevice, rest: Rest, device_id: str, out: Path, fake) -> int:
+    """The script's turns on the sim device's mic, the fake agent answering every utterance, then the checks."""
+    from . import front_script
+
+    clips = iter([front_script.clip(t, i) for i, t in enumerate(script.turns)])
+    dev.mic_for = lambda job: Mic(next(clips, None))
+    pump = EventPump(rest)
+    pump.start()
+    lines: list[asyncio.Task] = []
+
+    async def line(after_s: float, say: str, turn_id: str) -> None:
+        await asyncio.sleep(after_s)
+        try:
+            r = await rest.talk(say, in_reply_to=turn_id)
+            print(f"  agent: {say[:60]!r} for {turn_id[-6:]}: {json.dumps({k: r.get(k) for k in ('status', 'spoken', 'how', 'said') if k in r})}", flush=True)
+        except Exception as e:  # noqa: BLE001 - an error is part of the record
+            print(f"  agent: {say[:60]!r} for {turn_id[-6:]}: {e}", flush=True)
+
+    async def agent() -> None:
+        while True:
+            got = await pump.next(120)
+            if got is None:
+                return
+            e = got[1]
+            if e.get("type") != "utterance":
+                continue
+            d = e["data"]
+            f = d.get("front") or {}
+            print(f"  utterance {d.get('text')!r} (front said {f.get('said')!r}, waiting={f.get('waiting')})", flush=True)
+            t = next((t for t in script.turns if t.heard == d.get("text")), None)
+            for after_s, say in (t.agent if t else []):
+                lines.append(asyncio.create_task(line(after_s, say, d["turn_id"])))
+
+    agent_task = asyncio.create_task(agent())
+    t0 = time.monotonic()
+    await dev.shake()
+    ended = None
+    for _ in range(400):
+        await asyncio.sleep(0.5)
+        entries = await activity(rest, dev.link_code)
+        ended = next((e for e in entries if e.get("ev") == "front.end"), None)
+        if ended and all(x.done() for x in lines):
+            break
+    await asyncio.sleep(3)  # whatever a late line still sets off (a session, a say)
+    agent_task.cancel()
+    await pump.stop()
+    entries = await activity(rest, dev.link_code)
+    rows, bad = front_script.check(script, entries, fake.log if fake is not None else None)
+    print(f"\nscript {script.name}: conversation ended {json.dumps((ended or {}).get('data'))} after {time.monotonic() - t0:.1f} s\n")
+    print(front_script.table(rows))
+    print("\nchecks: " + ("all passed" if not bad else f"{len(bad)} failed"))
+    for b in bad:
+        print("  FAIL " + b)
+    (out / "activity.json").write_text(json.dumps(entries, indent=1))
+    print(f"\nlogs: {out}")
+    return 1 if bad else 0
 
 
 async def activity(rest: Rest, link: str) -> list[dict]:

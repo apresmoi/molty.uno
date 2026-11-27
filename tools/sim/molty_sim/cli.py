@@ -84,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     fr.add_argument("--answer", default=None, help="what the agent answers when the front hands it the turn")
     fr.add_argument("--fake-first-audio-ms", type=int, default=300, help="the fake provider's time to its first audio (default 300)")
     fr.add_argument("--runs-dir", help="where the logs go (default tools/sim/runs)")
+    fr.add_argument("--script", help="a scripted conversation (tools/sim/scenarios/front-*.yaml): the person's turns, the front's and the agent's behaviour, then the checks")
 
     a = p.parse_args(argv)
     logging.basicConfig(level=logging.DEBUG if getattr(a, "verbose", False) else logging.WARNING, format="%(asctime)s %(name)s %(message)s")
@@ -119,7 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         from .run import SIM_DIR as _SIM
 
         out = (Path(a.runs_dir) if a.runs_dir else _SIM / "runs") / f"front-{_time.strftime('%Y%m%d-%H%M%S')}"
-        return asyncio.run(front_run(a.wav, a.live, out, a.agent_ms, a.answer or ANSWER, a.fake_first_audio_ms))
+        return asyncio.run(front_run(a.wav, a.live, out, a.agent_ms, a.answer or ANSWER, a.fake_first_audio_ms, a.script))
     if a.cmd == "show":
         d = json.loads((Path(a.run_dir) / "report.json").read_text())
         print(report.shake_table(d["turns"], d["summary"]) if d["turns"] and "arm" in d["turns"][0] else report.table(d["turns"], d["summary"]))

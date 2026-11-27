@@ -1,0 +1,64 @@
+"""molty-sim front --script (molty_sim/front_script.py): the checks over a whole conversation, offline."""
+
+from molty_sim import front_script as fs
+
+SCRIPT = fs.Script(name="t", turns=[
+    fs.Turn(heard="hey molty", agent=[(13, "Just lounging on your desk like a proper cat, Juan.")]),
+    fs.Turn(heard="it seems that", agent=[(12, "Mrrp, I am listening.")]),
+    fs.Turn(heard="what is on my calendar?", front="handoff", agent=[(9, "Standup at ten.")]),
+])
+
+
+def trace(ts, job, **d):
+    return {"ts": ts, "kind": "trace", "ev": "front", "job": job, "data": {"reply_first_audio": 450, **d}}
+
+
+def reply(ts, said):
+    return {"ts": ts, "kind": "job", "op": "say", "ok": True, "data": {"said": said, "timings": {"front": {"created": 200}}}}
+
+
+def agent(ts, said=None):
+    return {"ts": ts, "kind": "job", "op": "talk", "agent": "Dude", "ok": True, "data": {"said": said} if said else {"as": "inner"}}
+
+
+def good():
+    return [
+        {"ts": 0, "kind": "voice_box", "ev": "front.start", "data": {}},
+        {"ts": 100, "kind": "voice_box", "ev": "front.session", "data": {"state": "open"}},
+        trace(1000, "j1"), reply(1100, "Hey there!"),
+        trace(6000, "j2"), reply(6100, "Go on?"),
+        agent(14000),  # the turn-1 greeting: context only
+        trace(15000, "j3", waiting=True), reply(15100, "Ok, let me see... your calendar, one sec."),
+        agent(24000, "Ok, got it: Standup at ten."),
+        {"ts": 40000, "kind": "voice_box", "ev": "front.end", "data": {"reason": "idle"}},
+    ]
+
+
+def test_a_good_conversation_passes():
+    rows, bad = fs.check(SCRIPT, good(), [{"ev": "open"}, {"ev": "create", "kind": "reply", "speaking": False}, {"ev": "close", "active": False}])
+    assert bad == []
+    assert [r["state"] for r in rows] == ["answered", "answered", "handed off"]
+
+
+def test_run5_fails_every_way_it_went_wrong():
+    e = [
+        {"ts": 0, "kind": "voice_box", "ev": "front.start", "data": {}},
+        trace(1000, "j1"), reply(1100, "Hey there!"),
+        trace(6000, "j2", reply_first_audio=None),  # no reply
+        agent(7000, "So, Just lounging on your desk like a proper cat, Juan."),  # voiced for a turn not handed off
+        {"ts": 9000, "kind": "voice_box", "ev": "front.end", "data": {"reason": "idle"}},  # under turn 2's (missing) reply
+        {"ts": 12000, "kind": "voice_box", "ev": "front.session", "data": {"state": "open"}},  # a session for a context line
+        agent(12500, "Just lounging on your desk like a proper cat, Juan. So, Mrrp, I am listening."),  # recited
+    ]
+    _, bad = fs.check(SCRIPT, e, [{"ev": "create", "kind": "inner", "speaking": True}, {"ev": "close", "active": True}])
+    kinds = {b.split(":")[0] for b in bad}
+    assert kinds == {"one_reply", "first_audio", "agent_waiting", "never_twice", "not_cut", "no_session", "not_over_them"}
+
+
+def test_the_script_loads_and_its_clips():
+    s = fs.load(fs.Path(__file__).parents[1] / "scenarios" / "front-run5.yaml")
+    assert [t.front for t in s.turns] == ["answer", "answer", "answer", "handoff"]
+    assert s.turns[1].auto_create_ms == 400 and not s.turns[2].voiced
+    c = fs.clip(s.turns[0], 0)
+    assert abs(c.speech[0][0] - 0.5) < 1e-6 and len(c.pcm) > 16000
+    assert fs.fake_script(s)[3]["handoff"] is True

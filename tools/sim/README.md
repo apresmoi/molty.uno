@@ -48,6 +48,31 @@ uv run molty-sim front --wav /tmp/q.wav --live                  # the real provi
 `--live` passes the key from this command's environment to the bridge child process only; the run
 directory keeps the logs (no key in them) and deletes the bridge's voice token at the end.
 
+### Scripted conversations (`molty-sim front --script`)
+
+A whole conversation, end to end, with its checks: a script of the person's turns (what they say,
+the pause before, how long, voiced or not), what the fake provider's front does with each (answers
+itself, or a holding line and a hand-off), and a fake agent that behaves like a real webhook agent
+(it answers EVERY utterance seconds later with a chatty line in_reply_to that turn, sometimes twice).
+`scenarios/front-run5.yaml` is the fifth live run (2026-11-27) as a script.
+
+```sh
+cd services/relay && pnpm install --frozen-lockfile && cd ../..
+cd tools/sim && .venv/bin/molty-sim front --script scenarios/front-run5.yaml
+# the real provider: one WAV per turn, in order; the key only in this shell's environment
+.venv/bin/molty-sim front --script scenarios/front-run5.yaml --live --wav /tmp/t1.wav --wav /tmp/t2.wav --wav /tmp/t3.wav --wav /tmp/t4.wav
+```
+
+It prints one row per turn (heard, answered / handed off / NO REPLY, what Molty said, first audio,
+hand-off) and the checks, and exits 1 when one fails: `one_reply` (exactly one front response per
+turn), `agent_waiting` (an agent line is voiced only for a turn the front handed off), `never_twice`
+(no agent line spoken twice), `not_over_them` (no response created while the person speaks; fake
+provider only), `not_cut` (no end while a reply is made or the front waits for an answer that comes),
+`first_audio` (the script's bound), `no_session` (no box session opened for a line that is only
+context). With `--live` the front's behaviour is the real model's: the script's `front` / `said`
+are ignored, the agent's lines and the checks are the same. The run directory keeps
+`activity.json` and the logs (no key in them).
+
 ## Run it (from clean state)
 
 ```sh
