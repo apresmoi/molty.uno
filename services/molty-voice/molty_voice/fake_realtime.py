@@ -24,13 +24,15 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
-                 reply=None, threshold: float = 0.02):
+                 reply=None, threshold: float = 0.02, absorb=None):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
         self.transcript = transcript  # what the "person" said (None: "hello molty")
         # (transcript) -> (words to say, call hand_to_agent?)
-        self.reply = reply or (lambda heard: ("Let me check on that.", True) if "?" in heard or "what" in heard.lower() else ("Hi there!", False))
+        # a question it cannot answer: a holding line echoing the person's words, handed to the agent (brief.BRIEF)
+        self.reply = reply or (lambda heard: (f"Ok, let me see... {heard.rstrip('?')}, one sec.", True) if "?" in heard or "what" in heard.lower() else ("Hi there!", False))
+        self.absorb = absorb or (lambda thought: False)  # (an inner voice thought) -> stay silent?
         self.threshold = threshold
         self.sessions: list[dict] = []
         self.port = 0
@@ -93,10 +95,12 @@ class FakeRealtime:
             st["active"] = rid
             await send({"type": "response.created", "response": {"id": rid, "status": "in_progress", "metadata": meta}})
             instr = (req or {}).get("instructions") or ""
-            m = re.search(r"(?:word for word, and nothing else|The answer): (.*)$", instr, re.S)
+            m = re.search(r"(?:word for word, and nothing else|The thought): (.*)$", instr, re.S)
             tool = False
-            if m:
-                words = ("So, " if "own spoken words" in instr else "") + m.group(1).strip()
+            if m and "The thought" in instr and self.absorb(m.group(1).strip()):
+                words, tool = "", "stay_silent"
+            elif m:
+                words = ("Ok, got it: " if "waiting for this" in instr else "So, " if "own spoken words" in instr else "") + m.group(1).strip()
             elif "has not answered yet" in instr:
                 words = "Still waiting on that, one moment."
             elif req is not None and sess["items"] and sess["items"][-1].startswith("Inner voice: "):
@@ -105,7 +109,7 @@ class FakeRealtime:
                 words, tool = self.reply(heard)
             await asyncio.sleep(self.first_audio_ms / 1000)
             n = max(1, len(words.split()))
-            total = int(RATE * 0.3 * n)  # 300 ms a word
+            total = int(RATE * 0.3 * n) if words else 0  # 300 ms a word
             sent = 0
             parts = words.split()
             said = 0
@@ -123,7 +127,7 @@ class FakeRealtime:
             cancelled = st["active"] != rid
             st["active"] = None
             await send({"type": "response.output_audio_transcript.done", "response_id": rid, "transcript": words})
-            out = [{"type": "function_call", "name": "hand_to_agent", "call_id": "call_1", "arguments": "{}"}] if tool else []
+            out = [{"type": "function_call", "name": tool if isinstance(tool, str) else "hand_to_agent", "call_id": "call_1", "arguments": "{}"}] if tool else []
             await send({"type": "response.done", "response": {"id": rid, "status": "cancelled" if cancelled else "completed", "metadata": meta, "output": out,
                                                               "usage": {"input_token_details": {"audio_tokens": st["audio_ms"] // 100, "text_tokens": 300, "cached_tokens_details": {"audio_tokens": 0}},
                                                                         "output_token_details": {"audio_tokens": sent * 20 // RATE, "text_tokens": n}}}})
