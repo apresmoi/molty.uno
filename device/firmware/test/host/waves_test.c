@@ -252,12 +252,15 @@ static void test_rim(void) {
     const int fine = tick_now();
     wheel_turn(1, false); wheel_turn(1, false);
     const int note = tick_now();
+    wheel_turn(1, false); wheel_turn(1, false);         /* (held, then a fine step, before the motor took the note's) */
+    const int kept = tick_now();
     wheel_turn(1, true);
     const int oct = tick_now();
     const int dial = scene_dial(s_sp.cur, 0);
     CHECK(dial >= 0 && fine == (s_sp.cur->items[dial].tick_ms << 8 | s_sp.cur->items[dial].tick) && (fine >> 8) < 22 && (fine & 255) < 80 &&
           note == WAVE_NOTE_TICK && oct == WAVE_LAND_TICK && (note >> 8) > (fine >> 8) && (note >> 8) < (oct >> 8),
           "felt: a fine step %d ms at %d, a note %d ms at %d, an octave %d ms at %d", fine >> 8, fine & 255, note >> 8, note & 255, oct >> 8, oct & 255);
+    CHECK(kept == WAVE_NOTE_TICK, "clicks faster than the motor's gap share one tick, the strongest: the note's (%d ms)", kept >> 8);
     wm_rhythm("wave.stop", NULL); frames(30);
     printf("  rim     25 cents a click to C5 (a note every fourth, held a click), a semitone to C6, a whole tone above; beats in tenths, fifths, wholes; the magnet; the ticks\n");
 }

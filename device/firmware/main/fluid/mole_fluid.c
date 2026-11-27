@@ -982,7 +982,9 @@ static void wheel_turn(int clicks, bool fast) {
         wave_where(&level, &s_wh.w.index, &s_wh.w.value, &land);
         s_wh.w.flash = 1.f;
         s_hold.on = false;
-        atomic_store(&s_tick_plan, moved == WAVE_TURN_OCTAVE ? WAVE_LAND_TICK : moved == WAVE_TURN_NOTE ? WAVE_NOTE_TICK : d->tick_ms << 8 | d->tick);
+        /* (clicks faster than the motor's gap share one tick: the strongest of them, so a note between fine steps is felt) */
+        const int plan = moved == WAVE_TURN_OCTAVE ? WAVE_LAND_TICK : moved == WAVE_TURN_NOTE ? WAVE_NOTE_TICK : d->tick_ms << 8 | d->tick;
+        if (!atomic_load(&s_ticks) || (plan >> 8) >= (atomic_load(&s_tick_plan) >> 8)) atomic_store(&s_tick_plan, plan);
         atomic_fetch_add(&s_ticks, abs(clicks));
         return;
     }
@@ -3921,6 +3923,7 @@ bool mole_fluid_scene_up(void) { return atomic_load(&s_scene_up); }
 void mole_fluid_scene_close(void) { atomic_store(&s_close_req, 1); motion(); }
 int mole_fluid_take_closed(void) { return atomic_exchange(&s_closed_buzz, 0); }
 
+bool mole_fluid_ticks_waiting(void) { return atomic_load(&s_ticks) > 0; }
 int mole_fluid_take_ticks(int *ms, int *strength) {
     const int plan = atomic_load(&s_tick_plan);
     *ms = plan >> 8; *strength = plan & 255;
