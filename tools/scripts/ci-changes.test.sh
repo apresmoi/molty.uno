@@ -77,7 +77,6 @@ AGENTS.md                                                        |
 THIRD_PARTY_NOTICES.md                                           |
 LICENSE                                                          |
 # pictures no build reads
-device/creatures/catalog/thumbs/cute-duck.webp                   |
 device/firmware/main/fluid/sketch.png                            |
 skills/molty-astro/assets/maps/moon.png                          |
 skills/molty-astro/assets/signs/leo.svg                          |
@@ -141,7 +140,6 @@ device/creatures/js/clip-pack.js                                 | firmware_test
 device/creatures/molty/duck.molty                                | creatures firmware_test
 device/creatures/tools/molty-export.mjs                          | creatures
 device/creatures/tools/act-golden.mjs                            | firmware_test
-device/creatures/catalog/catalog.json                            |
 device/creatures/index.html                                      |
 device/creatures/js/main.js                                      |
 # packages, schema, skills

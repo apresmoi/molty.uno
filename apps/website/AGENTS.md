@@ -170,7 +170,7 @@ Never deploy or publish from here; nothing in this package does.
   CSS-driven off `<html data-theme>` (set before paint); fails if any frame before a click shows
   another label (the old `[ theme ]` → `[ dark ]` flash) or a click does not flip it.
 - `pnpm og` regenerates `public/og.png` from the live landing (needs the preview running).
-- `pnpm readme` (`docs/assets/molty-hero*`) and `pnpm og-options` (`scripts/og/`) were written
-  for the Moltys that emerged from the page fluid and drive that old slot protocol: they do not
-  run against the screens yet. Port or drop them before the next README / OG refresh.
+- `pnpm readme` (`scripts/readme/generate.mjs`) regenerates the GitHub README's hero
+  (`docs/assets/molty-hero.webp`, `-light.webp`): the firmware's built module (`make web-molty`)
+  stepped frame by frame in headless Chromium, no server, no network. Commit the two files.
 - `dist/llms.txt`, `llms-full.txt` and raw `docs/*.md` come from `scripts/generate-llms-txt.mjs`.

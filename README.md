@@ -125,8 +125,9 @@ first flash from source: [docs/HARDWARE.md](docs/HARDWARE.md).
 [Changelog](CHANGELOG.md) ·
 [Contributing](CONTRIBUTING.md)
 
-The hero above is rendered from the website's own components: in `apps/website`, run
-`pnpm build && pnpm preview`, then `pnpm readme` ([generate.mjs](apps/website/scripts/readme/generate.mjs)).
+The picture at the top is drawn by the firmware's own renderer: in `apps/website`, run
+`pnpm install && pnpm readme` ([generate.mjs](apps/website/scripts/readme/generate.mjs); it needs
+Playwright's Chromium: `pnpm exec playwright install chromium`).
 
 ## Licence
 

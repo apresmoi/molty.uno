@@ -76,8 +76,8 @@ jobs_for() {
     device/creatures/molty/*) echo creatures firmware_test ;;
     device/creatures/tools/act-golden.mjs) echo firmware_test ;;
     device/creatures/tools/*) echo creatures ;;
-    # the browser viewer (pages, its own modules, the catalog): no CI job builds or tests it
-    device/creatures/*.html|device/creatures/js/*|device/creatures/catalog/*) echo none ;;
+    # the browser viewer (its pages and its own modules): no CI job builds or tests it
+    device/creatures/*.html|device/creatures/js/*) echo none ;;
 
     # ── device/firmware ───────────────────────────────────────────────────────────
     # main/: the image; the host tests; the website's Molty hashes these folders' sources
