@@ -118,6 +118,8 @@ esp_err_t link_audio_init(void) { return ESP_OK; }
 esp_err_t link_pair_init(void) { return ESP_OK; }
 void link_cmd_init(void) {}
 void link_audio_cancel(void) {}
+bool link_audio_probe(void) { return false; }
+void link_audio_pong(void) {}
 void link_audio_link_down(void) {}
 void link_audio_resume_hello(cJSON *hello) { (void)hello; }
 void link_audio_resume_welcome(const cJSON *welcome) { (void)welcome; }

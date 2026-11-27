@@ -923,7 +923,12 @@ static void test_link_drop(void) {
 
 /* the speaker's wait for audio that does not come (link_audio.c say_dry): stopped by the test past a minute */
 static int64_t stall_t0;
-static void stall_wait(void) { if (sdk_now-stall_t0>60000000) link_audio_cancel(); }
+static bool relay_hears;            /* the link task's part: a dry say's ping answered (link_audio_probe, its pong) */
+static unsigned probes;
+static void stall_wait(void) {
+    if (link_audio_probe()) { probes++; if (relay_hears) link_audio_pong(); }
+    if (sdk_now-stall_t0>60000000) link_audio_cancel();
+}
 /* The hang of 2026-11-27 (research/voice-front-live): one say ends, the next begins 30 ms later, its stream stops after
  * five frames (stalled in the socket, which holds the link task: it never ticks). The speaker gives up by itself
  * LINK_SAY_DRY_MS after its last audio, the say ends failed (no say.done), back to idle, and the listen after it works.
@@ -939,12 +944,41 @@ static void test_say_stall(void) {
     assert(took>=LINK_SAY_DRY_MS*1000ll && took<=(LINK_SAY_DRY_MS+100)*1000ll);
     complete(e); assert(sent==before && !link_audio_busy() && !strcmp(sdk_mood,"idle"));
     audio_job_t job; listen_job(1000,&job); complete(record(&job)); assert(bin_ends==1 && !link_audio_busy());
+    /* a slow voice, not a stuck socket: the relay's pong came, the speaker waits LINK_SAY_LIVE_MS (one ping a dry spell) */
+    begin_say(); receive_pcm(0,false);
+    stall_t0=sdk_now; probes=0; relay_hears=true; sdk_ring_wait=stall_wait; e=play(); sdk_ring_wait=NULL; relay_hears=false;
+    assert(e==ESP_ERR_TIMEOUT && probes==1 && sdk_now-stall_t0>=LINK_SAY_LIVE_MS*1000ll && sdk_now-stall_t0<=(LINK_SAY_LIVE_MS+100)*1000ll);
+    complete(e);
     relay_resumes(true);
     begin_say(); receive_pcm(0,false); link_audio_link_down(); assert(link_audio_held());
     stall_t0=sdk_now; sdk_ring_wait=stall_wait; e=play(); sdk_ring_wait=NULL;
     assert(e==ESP_ERR_TIMEOUT && sdk_now-stall_t0>LINK_RESUME_WINDOW_MS*1000ll && sdk_now-stall_t0<=(LINK_RESUME_WINDOW_MS+100)*1000ll);
     complete(e); assert(!link_audio_busy() && !link_audio_held());
     relay_resumes(false);
+}
+
+/* A front say (the voice makes its words as it speaks): its text has 3 words, its cues run to word 15, all its audio (3.84 s) is in
+ * with the end flag. Nothing in the say waits for the screen (the gate waits for word 0 alone, 70 ms at most; a cue past
+ * the text only raises the reader's mark): it plays at the speaker's pace and ends within its audio and a frame; the link
+ * task never ticks meanwhile. (Written against the hypothesis that such cues hold the audio: it holds on the code before
+ * this branch's say_text commits too.) */
+static void advance_by_audio(const int16_t *pcm, size_t n) { (void)pcm; sdk_now+=(int64_t)n*1000/16; }   /* 16 kHz in real time */
+static void test_front_say(void) {
+    char a[256]; snprintf(a,sizeof(a),"{\"job\":\"j_front\",\"text\":\"one two three\",\"ms\":4480,\"rate\":16000,\"cues\":true}");
+    cJSON *args=cJSON_Parse(a),*res=NULL; sdk_text[0]=0; cue_n=0; cue_ends=0; glass_at=0;
+    assert(link_audio_say(args,&res)==ESP_OK); cJSON_Delete(args); cJSON_Delete(res);
+    audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE);
+    for (unsigned f=0;f<12;f++) {                          /* 12 frames of 320 ms (the ring holds 12.8); word k at k * 240 ms */
+        char w[96] = "["; size_t at=1;
+        for (unsigned k=0;k<16;k++) if (k*3840u>=f*5120u && k*3840u<(f+1)*5120u) at+=(size_t)snprintf(w+at,sizeof(w)-at,"%s[%u,%u]",at>1?",":"",k,k*3840u);
+        snprintf(w+at,sizeof(w)-at,"]");
+        assert(receive_cued(f,f==11,w)==ESP_OK);
+    }
+    const int64_t t0=stall_t0=sdk_now; sdk_on_speaker_write=advance_by_audio; sdk_ring_wait=stall_wait;
+    esp_err_t e=play(); sdk_on_speaker_write=NULL; sdk_ring_wait=NULL;
+    const int64_t took=sdk_now-t0, audio=12ll*320000;
+    assert(e==ESP_OK && took<=audio+320000 && cue_ends==1 && cue_last==15);
+    complete(e); assert(!strcmp(field("name"),"say.done") && !link_audio_busy());
 }
 
 static void test_tap_and_watchdog(void) {
@@ -1255,7 +1289,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_text(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_text(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_front_say(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);

@@ -190,11 +190,15 @@ cJSON *link_evt_dnd_frame(bool on);
 cJSON *link_evt_double_tap_frame(double x, double y);
 /* A say's watchdog (the audio task's: link_audio.c play): the speaker waiting dry_ms for audio
  * that does not come, its first (the relay's job may still be synthesising) or, once it began,
- * more after all it had was played (the relay's job failed, or its stream stalled in the socket;
- * the creature is hidden meanwhile). */
+ * more after all it had was played. Dry LINK_SAY_PROBE_MS, it asks the relay (a ping): heard
+ * (its pong came, so the socket carries what the relay sends) it waits LINK_SAY_LIVE_MS, past
+ * the relay's own TTS timeout (20 s, after which it ends the stream itself); not heard, the
+ * stream is stuck in the socket: LINK_SAY_DRY_MS. */
 #define LINK_SAY_FIRST_AUDIO_MS 8000u
+#define LINK_SAY_PROBE_MS       1000u
 #define LINK_SAY_DRY_MS         4000u
-bool link_say_stalled(uint32_t dry_ms, bool started);
+#define LINK_SAY_LIVE_MS        25000u
+bool link_say_stalled(uint32_t dry_ms, bool started, bool heard);
 /* A colour on the wire: "#rrggbb" (hex digits either case) → 0xRRGGBB. Anything else → false. */
 bool link_color_parse(const char *s, uint32_t *rgb);
 /* An optional colour field (listen's "ring_color"): absent → *rgb = -1 and true; a

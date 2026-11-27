@@ -47,6 +47,9 @@ void link_audio_resume_hello(cJSON *hello);
 void link_audio_resume_welcome(const cJSON *welcome);
 esp_err_t link_audio_say_cancel(const cJSON *args, cJSON **result);
 esp_err_t link_audio_say_text(const cJSON *args, cJSON **result);
+/* Link task: a say's speaker went dry and asks whether the relay hears it (true once: send a ping); its pong came. */
+bool link_audio_probe(void);
+void link_audio_pong(void);
 /* Link task: the relay's welcome listed listen_adopt (true), or the link went down (false). */
 void link_audio_relay_adopts(bool on);
 /* Shake to talk: the sense task's IMU samples (g, esp_timer ms), every one. While a shake's
