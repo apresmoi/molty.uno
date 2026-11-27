@@ -1,6 +1,6 @@
 {
   "name": "molty",
-  "description": "Connect your agent to Molty, the round desk device that talks: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks.",
+  "description": "Connect your agent to Molty, the creature your AI agent speaks through: pair with a tap, talk and listen in one call per turn, ask tap-button questions, show moods, and answer when your human shakes Molty and speaks.",
   "author": {
     "name": "apresmoi",
     "url": "https://github.com/apresmoi"

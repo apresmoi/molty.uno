@@ -12,33 +12,29 @@ name: CI
 #   hygiene (always)                           ci-ok (needs all; the one stable check)
 #
 # Path filters: `changes` diffs the PR (base...head) or the push (before..after) and
-# tools/scripts/ci-changes.sh maps the paths to jobs; a job runs only when something
-# it reads changed. The map, from what each job's code/config actually reads:
+# tools/scripts/ci-changes.sh maps the paths to jobs. The rule: a job runs only if its
+# result can depend on a changed file. The map's table names, per path, the jobs whose
+# builds, tests or checks read it, found from their code (ci-changes.test.sh checks the
+# imports and the reads each job makes); in short:
 #
-#   console, console-e2e  device/console/**, device/creatures/** (vite @viewer/@molty
-#                         aliases; e2e loads frog.molty)
-#   firmware, boards      device/firmware/** (not test/), tools/scripts/firmware-*,
-#                         and everything console runs on (it bakes the console page);
-#                         console + boards run whenever firmware does (artifact, matrix)
-#   firmware-test         device/firmware/**, device/creatures/molty/** (cute_build.sh),
-#                         the JS creature player + mood engine + actions (creature_build.sh)
-#   relay                 services/relay/**, skills/molty/** (skill.test.ts),
-#                         docs/AGENT-LINK.md (events.test.ts)
+#   console, console-e2e  device/console/**, the fluid engine it imports
+#   firmware, boards      device/firmware/** but test/ and web/, the creature packages it
+#                         bakes, tools/scripts/firmware-*, and all console runs on
+#   firmware-test         device/firmware/**, the JS players, packages, packages/tools,
+#                         schema, the rhythm library
+#   relay                 services/relay/**, skills/molty/SKILL.md, docs/AGENT-LINK.md
 #   cli                   apps/cli/**
-#   python                services/molty-voice/**, tools/sim/** (the sim installs
-#                         molty-voice editable: a voice change runs both suites)
-#   creatures             device/creatures/**
-#   website               apps/website/**, docs/**, root *.md (CONTRIBUTING.md is
-#                         synced), device/creatures/** (@creatures, @molty-files, synced
-#                         READMEs, @molty-catalog),
-#                         device/firmware/boards/** (repoBoards.ts, setup-match.test.ts)
-#   hygiene               always (secrets, paths, licences, versions, skill: check-skill
-#                         reads the relay sources, so a relay change is covered here)
-#   everything            .github/**, Makefile, VERSION (baked into console, firmware,
-#                         relay, cli), .gitignore, .gitattributes, ci-changes.*, any
-#                         path no rule knows, a manual run, a new branch / force push
-#   no job (hygiene only) plugin manifests, LICENSE,
-#                         tools/scripts/{hygiene.sh,check-skill.mjs,version.mjs}
+#   python                services/molty-voice/**, tools/sim/**, the relay's reflex
+#   creatures             the exporter, the kit specs, the committed .molty files
+#   website               apps/website/**, every .md under docs/ and skills/, README,
+#                         CONTRIBUTING, board.json and board photos, the web Molty and
+#                         the sources it is built from, the packages it imports
+#   VERSION, .gitignore   console, firmware, relay, cli, python (they bake VERSION);
+#                         creatures (its check lists untracked files)
+#   everything            this file, ci-changes.*, Makefile, .gitattributes, a path no
+#                         rule knows, a manual run, a new branch / force push
+#   no job (hygiene only) markdown and pictures no build reads, the other workflows,
+#                         plugin manifests, the hygiene/skill/package checks
 #
 # A job that `needs` a possibly-skipped job uses !cancelled() plus explicit result
 # checks, so it is not skipped transitively and never runs on a failed upstream.
@@ -55,9 +51,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its older run. Runs on main are never cancelled:
+# each push maps only its own before..after range, so a cancelled run would leave that
+# push's changes untested.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # Shared by the console/relay/website jobs. Matches docs/HARDWARE.md.
@@ -300,12 +299,31 @@ jobs:
           name: console-dist
           path: device/console/dist
 
+      # The image builds through ccache (its IDF_CCACHE_ENABLE=1); keeping ccache's store
+      # between runs skips recompiling ESP-IDF's unchanged sources. Main's runs save it,
+      # every run restores the newest one for its board. A miss only costs the full build.
+      - name: Restore compiler cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.name }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.name }}-
+
       # GitHub replaces the image's entrypoint, so every step sources export.sh itself.
       # Own build dir + sdkconfig per board (device/firmware/build/<name>/); checks the image tag.
       - name: Build
         run: |
+          export CCACHE_DIR="$GITHUB_WORKSPACE/.ccache" CCACHE_BASEDIR="$GITHUB_WORKSPACE" CCACHE_MAXSIZE=400M
           . "$IDF_PATH/export.sh" > /dev/null
           tools/scripts/firmware-build.sh "${{ matrix.board }}"
+          ccache --show-stats || true
+
+      - name: Save compiler cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: .ccache
+          key: ccache-${{ matrix.name }}-${{ github.sha }}
 
       - name: App size vs OTA slot (fail above 90%)
         run: tools/scripts/firmware-size.sh "device/firmware/build/${{ matrix.name }}" "${{ matrix.name }}"
@@ -465,19 +483,12 @@ jobs:
       - name: Check out
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      # Every later step is skipped (not failed) on a branch without apps/website/.
-      - name: Report missing website
-        if: hashFiles('apps/website/package.json') == ''
-        run: echo "::notice::apps/website/ not present on this ref; skipping"
-
       - name: Set up pnpm
-        if: hashFiles('apps/website/package.json') != ''
         uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
         with:
           version: ${{ env.PNPM_VERSION }}
 
       - name: Set up Node
-        if: hashFiles('apps/website/package.json') != ''
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -485,23 +496,19 @@ jobs:
           cache-dependency-path: apps/website/pnpm-lock.yaml
 
       - name: Install dependencies
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm install --frozen-lockfile
 
       - name: Check
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm check
 
       # /setup's board matcher against the real device/firmware/boards/**/board.json
       - name: Test
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm test
 
       - name: Build
-        if: hashFiles('apps/website/package.json') != ''
         working-directory: apps/website
         run: pnpm build
 

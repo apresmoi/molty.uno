@@ -8,7 +8,7 @@ device/creatures/
 ├── js/
 │   ├── cute/         cute kit: kit.js (defineCreature) + one file per creature pack — see cute/README.md
 │   ├── fluid/        fluid-of-characters engine (sim, targets, renderer, speed reader, sound)
-│   ├── setup/        fluid-stage.js: the setup mock's round screen + the website's thumbnails
+│   ├── setup/        fluid-stage.js: the setup mock's round screen
 │   ├── mood.js       mood engine (idle, listening, thinking, speaking, happy, sleepy, surprised)
 │   ├── actions.js    one-shot actions (nod, wiggle, glances, yawn, …): MoodEngine.act(name);
 │   │                 the firmware twin is cute_act.h, pinned by tools/act-golden.mjs
@@ -17,7 +17,6 @@ device/creatures/
 │   ├── catalog.js    viewer roster
 │   └── main.js       viewer UI
 ├── molty/            the 29 exported .molty files
-├── catalog/          their names + fluid thumbnails (made for the website's old gallery; nothing reads them now)
 ├── tools/            molty-export.mjs (spec → .molty), molty-behaviours.mjs (hook stand-ins),
 │                     act-golden.mjs (actions.js → the firmware's act_golden.txt)
 ├── index.html        creature viewer: moods, pokes, autopilot, device preview, compare A|B
@@ -29,7 +28,7 @@ device/creatures/
 ## Open the viewers
 
 ```sh
-python3 -m http.server -d creatures 8000
+python3 -m http.server -d device/creatures 8000
 # http://localhost:8000          creature viewer
 # http://localhost:8000/fluid.html
 ```
