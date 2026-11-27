@@ -1,49 +1,69 @@
-# The fifth live run of the voice front (2026-11-27, research/voice-front-live/turn5-*), as a script:
-# `cd tools/sim && .venv/bin/molty-sim front --script scenarios/front-run5.yaml`
+# The fifth live run of the voice front (2026-11-27, research/voice-front-live/turn5-*), as a script, with the
+# rig's first live run's turns 5 and 6. Fake provider:
+#   cd tools/sim && .venv/bin/molty-sim front --script scenarios/front-run5.yaml
+# Live (the WAVs in research/voice-front-live/wav/, one per turn in order; the key only in the shell's environment):
+#   .venv/bin/molty-sim front --script scenarios/front-run5.yaml --live --wav ../../research/voice-front-live/wav/t1.wav ... --wav .../t6.wav
 #
-# The agent ("Dude") answers EVERY utterance 9 to 14 s later with a chatty line in_reply_to that turn,
-# once a retry. What went wrong live, and what each turn here sets off:
-#   turn 1  the front answers a greeting itself; Dude's own greeting for it comes 13 s later, while the
-#           person is on turn 2 (live: it was voiced, as the answer to turn 2)
-#   turn 2  the model ends the turn and its own auto response comes late (auto_create_ms): live, turn
-#           detection went off at the listen's end first and no reply ever came
-#   turn 3  a short, pitchless turn the model takes for speech: live, the relay's own voice check said
-#           nobody spoke and ended the conversation as idle under the front's reply
-#   turn 4  a real question: the front hands it off; Dude's answer comes 9 s later and is the one agent
-#           line that may be voiced
+# The agent ("Dude") answers EVERY utterance 7 to 16 s later with a line in_reply_to that turn, once a retry.
+# `front` is what the front must do (the fake provider does it; live, the check `handoff` holds the real model
+# to it). What went wrong live, and what each turn sets off:
+#   turn 1  the front answers a greeting itself; Dude's own greeting for it comes 13 s later, during turn 2
+#           (live: it was voiced, as the answer to turn 2)
+#   turn 2  a complaint about Molty: a hand-off. The model ends the turn and its own auto response comes late
+#           (auto_create_ms): live, turn detection went off at the listen's end first and no reply ever came
+#   turn 3  a short, pitchless turn the model takes for speech: live, the relay's own voice check said nobody
+#           spoke and ended the conversation as idle under the front's reply
+#   turn 4  a question about the person's data: a hand-off; Dude's answer is voiced, "ok, got it"
+#   turn 5  a question about memory: a hand-off (live, the rig's first run)
+#   turn 6  a goodbye: the conversation ends after a short one
 name: run5
 first_audio_ms: 2500
 turns:
-  - heard: "hey molty, how is it going"
+  - heard: "hey molty, how is it going?"
     front: answer
-    said: "Hey, just hanging out, listening for your cues. What's on your mind?"
+    said: "Hey! Good to hear you."
     pause_s: 0.5
     agent:
       - after_s: 13
         say: "Just lounging on your desk like a proper cat, Juan. What are you up to tonight?"
-  - heard: "it seems that you are speaking twice"
-    front: answer
-    said: "Hmm, sorry about that. Go on?"
+  - heard: "it seems that you are speaking twice."
+    front: handoff
+    said: "Hmm, speaking twice, let me look."
     pause_s: 3.0
     auto_create_ms: 400
     agent:
-      - after_s: 12
-        say: "Mrrp, I am listening."
-      - after_s: 16
-        say: "Mrrp, I am listening."
-  - heard: "mm"
+      - after_s: 9
+        say: "That was me answering a turn twice, Juan. Sorry, it should be fixed now."
+      - after_s: 13
+        say: "That was me answering a turn twice, Juan. Sorry, it should be fixed now."
+  - heard: "hmm."
     front: answer
-    said: "Okay, let me hear what you want to ask or share."
+    said: "Mm-hm?"
     pause_s: 0.4
     speech_s: 0.7
     voiced: false
     agent:
       - after_s: 9
-        say: "Purring along nicely, still here on your desk."
+        say: "Mrrp, I am listening."
   - heard: "what is on my calendar today?"
     front: handoff
-    said: "Ok, let me see... your calendar for today, one sec."
+    said: "Ok, let me see... your calendar today, one sec."
     pause_s: 1.0
     agent:
       - after_s: 9
         say: "You have the team standup at ten and the dentist at three."
+  - heard: "thanks. and what was the last thing i asked you to remember?"
+    front: handoff
+    said: "Hmm, the last thing you asked, let me look."
+    pause_s: 1.0
+    agent:
+      - after_s: 7
+        say: "You asked me to remember to buy oat milk on the way home."
+  - heard: "okay, bye."
+    front: answer
+    said: "Bye!"
+    pause_s: 0.8
+    ends: true
+    agent:
+      - after_s: 8
+        say: "Bye Juan, purr."

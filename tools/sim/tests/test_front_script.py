@@ -35,7 +35,8 @@ def good():
 
 
 def test_a_good_conversation_passes():
-    rows, bad = fs.check(SCRIPT, good(), [{"ev": "open"}, {"ev": "create", "kind": "reply", "speaking": False}, {"ev": "close", "active": False}])
+    end = {"ts": 40000, "kind": "voice_box", "ev": "front.end", "data": {"reason": "idle"}}
+    rows, bad = fs.check(SCRIPT, good(), [{"ev": "open"}, {"ev": "create", "kind": "reply", "speaking": False}, {"ev": "close", "active": False}], end)
     assert bad == []
     assert [r["state"] for r in rows] == ["answered", "answered", "handed off"]
 
@@ -50,15 +51,25 @@ def test_run5_fails_every_way_it_went_wrong():
         {"ts": 12000, "kind": "voice_box", "ev": "front.session", "data": {"state": "open"}},  # a session for a context line
         agent(12500, "Just lounging on your desk like a proper cat, Juan. So, Mrrp, I am listening."),  # recited
     ]
-    _, bad = fs.check(SCRIPT, e, [{"ev": "create", "kind": "inner", "speaking": True}, {"ev": "close", "active": True}])
+    rows, bad = fs.check(SCRIPT, e, [{"ev": "create", "kind": "inner", "speaking": True}, {"ev": "close", "active": True}], e[4])
     kinds = {b.split(":")[0] for b in bad}
-    assert kinds == {"one_reply", "first_audio", "agent_waiting", "never_twice", "not_cut", "no_session", "not_over_them"}
+    assert kinds == {"one_reply", "first_audio", "agent_waiting", "never_twice", "not_cut", "no_session", "not_over_them", "all_turns"}
+    assert rows[2]["state"] == "MISSING"  # turn 3 never happened
+
+
+def test_a_hung_run_fails_long_or_unhanded_replies_too():
+    e = [trace(1000, "j1"), reply(1100, "Hey! I'm doing well, thanks for asking. I'm here and ready to help with anything you want."),
+         trace(6000, "j2"), reply(6100, "Go on?"), trace(15000, "j3"), reply(15100, "Your calendar has three things.")]
+    _, bad = fs.check(SCRIPT, e, None, None)  # never ended
+    assert any(b.startswith("all_turns: the conversation never ended") for b in bad)
+    assert any(b.startswith("short: turn 1") for b in bad)
+    assert any(b.startswith("handoff: turn 3") for b in bad)
 
 
 def test_the_script_loads_and_its_clips():
     s = fs.load(fs.Path(__file__).parents[1] / "scenarios" / "front-run5.yaml")
-    assert [t.front for t in s.turns] == ["answer", "answer", "answer", "handoff"]
-    assert s.turns[1].auto_create_ms == 400 and not s.turns[2].voiced
+    assert [t.front for t in s.turns] == ["answer", "handoff", "answer", "handoff", "handoff", "answer"]
+    assert s.turns[1].auto_create_ms == 400 and not s.turns[2].voiced and s.turns[-1].ends
     c = fs.clip(s.turns[0], 0)
     assert abs(c.speech[0][0] - 0.5) < 1e-6 and len(c.pcm) > 16000
     assert fs.fake_script(s)[3]["handoff"] is True
