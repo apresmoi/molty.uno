@@ -1868,7 +1868,13 @@ line), IDLE (no session).
    turn detection went off right after the turn's end). A turn has one end: the model's and
    Molty's may arrive in either order or together, the first wins and the second is a no-op (no
    second, empty commit); a provider error fails only the request it names (`event_id`). A plain
-   reply is one short sentence (at most about 12 words; `max_output_tokens` caps it).
+   reply is one short sentence (at most about 12 words). **Filler by default, by rule:** the turn
+   is the agent's (WAITING) unless every phrase of the person's words is small talk (greetings,
+   how-are-you, thanks, acknowledgements, goodbyes, hums: `molty_voice/brief.py` `answers_alone`),
+   whether or not the model called its hand-off tool; the reply's end waits for the transcript for
+   that (1 s at most; it comes about 0.3 s after the turn). No output token cap on a reply: live,
+   one cut two replies before their hand-off call. Every response's end is logged with its status
+   and reason.
 2. **An agent line that replies to turn T** (`in_reply_to`) is voiced only when the front is
    WAITING for T: at once, a short bridge ("Ok, got it:", the box's own) and the agent's words,
    then LISTENING. A voiced agent line is a read-aloud job out of band (`response.create` with
