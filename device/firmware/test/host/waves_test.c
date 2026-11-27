@@ -15,6 +15,8 @@
  *              a still outline at a note in whole numbers (nothing drawn again frame after frame)
  *   speaker    one player at a time: a rhythm stops the chord and the chord the rhythm; no circle on screen stops it
  *   close      the reject button and a finger held a second close it, and the chord stops
+ *   glass      device mode (only the windows the device sends reach the panel): over ten states the panel is never more
+ *              than WAVE_GLASS_LAG frames behind the drawer's whole picture, and held still it is that picture exactly
  *   cost       the device's frame (the 1.75C's model) against the creature's, playing and turning
  *   renders    with a third argument, the screen at a few states as PNG there (slow, 16 a second, a note, a fifth, a
  *              major chord, the chooser, the notes)
@@ -26,6 +28,7 @@
 #include <time.h>
 
 static int s_pass, s_fail;
+#define WAVE_GLASS_LAG 3               /* frames (a tenth of a second) */
 #define CHECK(cond, ...) do { if (cond) s_pass++; else { s_fail++; printf("FAIL %s:%d: ", __FILE__, __LINE__); printf(__VA_ARGS__); printf("\n"); } } while (0)
 #define DT 16667u
 #define S 466
@@ -289,6 +292,46 @@ static void test_speaker(void) {
     printf("  speaker one player at a time; no circle for 2 s stops it; the buttons and a held finger close it\n");
 }
 
+/* ── the glass: what the panel shows against the drawer's whole picture, frame after frame (device mode: only the
+ * windows the device sends reach the panel, which keeps the rest). Over a turn the screen may lag a few frames where
+ * its drawer has no room (fluid_draw.c owes those cells to the next frame), but no pixel stays wrong for long, and once
+ * the picture holds still the panel is the whole picture, exactly. */
+static int glass_lag(int nframes) {
+    static uint16_t ref[S * S], age[S * S];
+    memset(age, 0, sizeof age);
+    int oldest = 0;
+    for (int f = 0; f < nframes; f++) {
+        frames(1);
+        if (fluid_draw_morphing(s_draw)) continue;
+        const fluid_rect_t t = { ref, S, 0, 0, S, S };
+        fluid_draw_rect(s_draw, &s_dopts, &t, true);
+        fluid_draw_overlay(s_draw, &t, s_dopts.palette, &s_kept.ov);
+        for (int q = 0; q < S * S; q++) { age[q] = s_rgba_of[ref[q]] != s_rgba[q] ? age[q] + 1 : 0; if (age[q] > oldest) oldest = age[q]; }
+    }
+    return oldest;
+}
+static void test_glass(void) {
+    static const struct { const char *chord, *more; } R[] = {
+        { "alone", "\"hz\":1" }, { "alone", "\"hz\":8" }, { "alone", "\"hz\":16" }, { "alone", "\"hz\":24" }, { "fifth", "\"hz\":3" },
+        { "major", "\"hz\":4.1" }, { "major", "\"hz\":12" }, { "minor", "\"hz\":20" }, { "7-sharp-9", "\"hz\":2" }, { "major-7", "\"paused\":true" },
+    };
+    wm_device(1);
+    frames(60);
+    int worst = 0, still_off = 0;
+    for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {
+        show(); play(R[i].chord, R[i].more); frames(60);
+        const int lag = glass_lag(150);
+        if (lag > worst) worst = lag;
+        if (lag > WAVE_GLASS_LAG) { const int off = wm_glass_off(); const int *at = wm_glass_off_at(); printf("    %s %s: a pixel wrong %d frames running (%d off now, at %d,%d %d,%d)\n", R[i].chord, R[i].more, lag, off, at[0], at[1], at[2], at[3]); }
+    }
+    play("major", "\"midi\":60"); frames(90);
+    still_off = wm_glass_off();
+    wm_device(0);
+    CHECK(worst <= WAVE_GLASS_LAG, "every state, 150 frames each: no pixel of the glass wrong more than %d frames running (at most %d)", WAVE_GLASS_LAG, worst);
+    CHECK(still_off == 0, "held still: the glass is the whole picture (%d px off)", still_off);
+    printf("  glass   10 states in device mode: the panel at most %d frames behind the whole picture, none once still\n", worst);
+}
+
 /* ── cost: the 1.75C's frame in the device model ───────────────────────────────────────────────────────────────── */
 static double device_ms(bool turn, double *worst) {
     wm_device(1);
@@ -352,12 +395,15 @@ static void renders(const char *dir) {
         { "4-a-fifth-slow", "fifth", "\"hz\":3", 50 }, { "5-a-fifth-c3", "fifth", "\"midi\":48", 40 }, { "6-c-major-slow", "major", "\"hz\":4", 50 },
         { "7-c-major-c4", "major", "\"midi\":60", 40 }, { "8-the-chooser", "major-7", "\"paused\":true", 20 },
     };
+    wm_device(1);                                       /* (the panel as the device sends it: its changed windows only) */
+    show(); play("alone", "\"hz\":1"); frames(150);    /* (the scope formed once; each state is a wave.play on it) */
     for (size_t i = 0; i < sizeof R / sizeof R[0]; i++) {
-        show(); play(R[i].chord, R[i].more); frames(R[i].settle);
+        play(R[i].chord, R[i].more); frames(R[i].settle + 60);
         snap(dir, R[i].name);
     }
     tap(0.f, SCENE_WAVE_TOP_Y); frames(200);
     snap(dir, "9-the-notes");
+    wm_device(0);
     wm_rhythm("wave.stop", NULL); frames(60);
     printf("  renders %zu states into %s\n", sizeof R / sizeof R[0] + 1, dir);
 }
@@ -379,6 +425,7 @@ int main(int argc, char **argv) {
     test_levels();
     test_picture();
     test_speaker();
+    test_glass();
     if (argc > 3) renders(argv[3]);
     test_cost();
     free(pkg);

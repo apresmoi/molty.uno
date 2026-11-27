@@ -14,6 +14,8 @@
  *   level      the loudest chord no further into the soft knee than the design's (0.651 of full scale)
  *   speaker    a job's yield ducks it out within 15 ms and it waits; back, it sounds again
  *   view       the picture's clock at a sample the speaker plays, from the snapshots, against the clock itself
+ *   pieces     the tables made a piece at a time while it plays: silence until the hit, the hit itself until its cycles,
+ *              those first, the slide onto them clean; a maker told to quit stops
  *   trace      a chord in whole numbers, fast, draws the same outline frame after frame; slow, a shiver behind the hand
  *              that settles back to the circle
  */
@@ -173,7 +175,7 @@ static void test_tables(void) {
             const int k = (int)tau, k2 = (int)(tau + P);
             float y = T->hit[k] + (T->hit[k + 1] - T->hit[k]) * (tau - k);
             if (tau < d && k2 < WAV_HIT_LEN) y += (1.f - tau / d) * (T->hit[k2] + (T->hit[k2 + 1] - T->hit[k2]) * (tau + P - k2));
-            diff = fmaxf(diff, fabsf(y - T->tab[c][i]));
+            diff = fmaxf(diff, fabsf(y - T->tab[c][i] * T->unit[c]));
         }
         CHECK(diff < 0.02f, "at %.1f Hz the drum and its cycle are one wave: %.4f apart (of a 0.5 peak)", f, diff);
     }
@@ -295,8 +297,48 @@ static void test_trace(void) {
     CHECK(near > 0.01f && far < 1e-4f, "one a second: it shivers behind the hand (%.3f), the circle half a turn back (%.6f)", near, far);
 }
 
+/* the tables made a piece at a time while it plays (as the device's maker task does, off the link task): the room at
+ * once, the hit first, the cycles a voice waits for next; until they exist it plays the hit itself and slides onto them,
+ * with no click */
+static void test_pieces(void) {
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    wav_tables_t *t = wav_tables_new();
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    const double us = (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) * 1e-3;
+    CHECK(t && !wav_tables_made(t) && us < 2000., "the room for them at once (%.0f us), nothing made yet", us);
+    if (!t) return;
+    wav_player_t p;
+    wav_init(&p, t);
+    const wav_chord_t c = CH(MAJOR);
+    wav_chord(&p, &c, wav_hz(60.f), WAV_HOLD, WAV_JUST, true);
+    buf_t b = { 0 };
+    render(&p, &b, 32);
+    float quiet = 0.f;
+    for (int i = 0; i < b.n; i++) quiet = fmaxf(quiet, fabsf(b.x[i]));
+    CHECK(quiet == 0.f && wav_active(&p), "before the hit is made: silence, the chord held");
+    wav_tables_step(t);                                 /* the hit */
+    render(&p, &b, 200);                                /* the hit itself; it asks for its cycles */
+    int first = -1;
+    for (int k = 0; k < WAV_TABS && first < 0; k++) if (atomic_load(&t->want[k >> 5]) >> (k & 31) & 1) first = k;
+    wav_tables_step(t);
+    CHECK(first >= 0 && atomic_load(&t->ready[first >> 5]) >> (first & 31) & 1, "the next piece is a cycle a voice waits for (%d)", first);
+    int pieces = 1;
+    while (wav_tables_step(t)) { render(&p, &b, 16); pieces++; }   /* a piece a block, as the maker keeps up */
+    render(&p, &b, 300);
+    const clean_t k = clean(&b);
+    printf("  pieces  the hit, then %d cycles while it played: over 7.5 kHz %.1f dB, step %.3f (bound %.3f)\n", pieces, k.worst_db, k.step, k.bound);
+    CHECK(wav_tables_made(t) && k.worst_db <= -55.f && k.step <= k.bound * 1.05f, "made while it plays, the slide onto the cycles clean (%.1f dB)", k.worst_db);
+    free(b.x);
+    wav_tables_t *q = wav_tables_new();
+    atomic_store(&q->quit, true);
+    CHECK(!wav_tables_step(q), "told to quit, the maker stops");
+    wav_tables_free(q);
+    wav_tables_free(t);
+}
+
 int main(void) {
-    T = wav_tables_make();
+    T = wav_tables_new(); while (T && wav_tables_step(T)) {}
     if (!T) { printf("no memory\n"); return 1; }
     test_tables();
     test_rates();
@@ -304,6 +346,7 @@ int main(void) {
     test_speaker();
     test_view();
     test_trace();
+    test_pieces();
     printf("sessions (the design's audiotest):\n");
     session("alone-sweep", s_sweep);
     session("fifth-slow-to-fast", s_fifth);
