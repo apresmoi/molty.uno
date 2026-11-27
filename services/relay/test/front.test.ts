@@ -63,8 +63,6 @@ interface BoxOpts {
   reply?: (heard: string) => { said: string; wait: boolean };
   /** turn end after this many mic chunks */
   turnEndAfter?: number;
-  /** the front keeps an inner voice thought to itself (it repeats what was said): no audio, tts.end absorbed */
-  absorb?: (thought: string) => boolean;
   /** speak as a model does: the transcript one word at a time with each word's audio (and cue), the final text at the end */
   pieces?: boolean;
 }
@@ -74,6 +72,10 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   const got: any[] = [];
   const listens: Record<string, { n: number; front: boolean; hold: boolean; heard: string; turned: boolean }> = {};
   let k = 0;
+  // the box's rule (molty_voice/realtime.py "state"): an agent line is voiced only when the front waits
+  // for its turn, or with no turn between conversations; anything else is context (tts.end absorbed)
+  let waitingFor: string | undefined;
+  let talking = false;
   const say = (m: unknown) => void room.socketMessage(sock, JSON.stringify(m));
   const speak = (id: string, words: string, end: Record<string, unknown> = {}, delay = 5) => {
     if (o.pieces) {
@@ -103,16 +105,22 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     text(t);
     const f = JSON.parse(t);
     got.push(f);
+    if (f.t === "stt.start" && f.front) talking = true;
+    if (f.t === "front.end") (talking = false), (waitingFor = undefined);
     if (f.t === "stt.start") listens[f.id] = { n: 0, front: f.front === true, hold: f.hold === true, heard: o.heard?.[Object.keys(listens).length] ?? (Object.keys(listens).length ? "" : "what is on my calendar today?"), turned: false };
     // Molty ended the turn itself (held: the release): the box commits it and its front answers now
     const l = f.t === "stt.end" ? listens[f.id] : undefined;
     if (l && l.front && l.heard && !l.turned) {
       l.turned = true;
       say({ t: "front.reply", id: `fr${++k}`, stt: f.id });
-      speak(`fr${k}`, (o.reply ?? (() => ({ said: "Hi there!", wait: false })))(l.heard).said, {}, 20);
+      const r = (o.reply ?? (() => ({ said: "Hi there!", wait: false })))(l.heard);
+      if (r.wait) waitingFor = f.id;
+      speak(`fr${k}`, r.said, r.wait ? { wait: true } : {}, 20);
     }
     if (f.t === "stt.end") setTimeout(() => !sock.closed && listens[f.id] && say({ t: "stt.final", id: f.id, text: listens[f.id].heard, ms: { final: 2 } }), 3);
-    if (f.t === "tts" && f.front === "inner" && o.absorb?.(f.text)) setTimeout(() => say({ t: "tts.end", id: f.id, absorbed: true }), 5);
+    const voiced = f.turn !== undefined ? f.turn === waitingFor : !talking;
+    if (f.t === "tts" && f.front === "inner" && voiced && f.turn !== undefined) waitingFor = undefined;
+    if (f.t === "tts" && f.front === "inner" && !voiced) setTimeout(() => say({ t: "tts.end", id: f.id, absorbed: true }), 5);
     else if (f.t === "tts") {
       const words = f.front === "inner" && !f.exact ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
       speak(f.id, words);
@@ -125,6 +133,7 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     l.n++;
     if (l.hold) return; // held to talk: no turn detection, the release ends it
     if (l.n === 1 && l.heard) say({ t: "stt.hint", id: fr.header.s, k: "speech" });
+    if (l.n === 1 && l.heard && l.front) waitingFor = undefined; // a new turn wins
     if (!l.heard && l.n === 3) {
       l.turned = true;
       say({ t: "stt.turn_end", id: fr.header.s, reason: "no_speech" });
@@ -135,6 +144,7 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
         const r = (o.reply ?? ((h: string) => (h.includes("?") ? { said: "Let me check on that.", wait: true } : { said: "Hi there!", wait: false })))(l.heard);
         const id = `fr${++k}`;
         say({ t: "front.reply", id, stt: fr.header.s, ms: { created: 180 } });
+        if (r.wait) waitingFor = fr.header.s;
         speak(id, r.said, r.wait ? { wait: true } : {}, 20);
       }
     }
@@ -144,8 +154,8 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   return { got, listens, hello, of: (t: string) => got.filter((m) => m.t === t) };
 }
 
-async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[]; sayText?: () => boolean } = {}) {
-  const ctx = makeRoom({ timings: FAST, log: process.env.FRONT_DEBUG ? (m, d) => console.log(m, JSON.stringify(d)) : undefined });
+async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[]; sayText?: () => boolean; voiced?: () => boolean } = {}) {
+  const ctx = makeRoom({ timings: FAST, ...(o.voiced ? { voiced: o.voiced } : {}), log: process.env.FRONT_DEBUG ? (m, d) => console.log(m, JSON.stringify(d)) : undefined });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: o.caps ?? CAPS });
   const dev = device(ctx.room, sock, { chunks: o.chunks, sayText: o.sayText });
   const pair = async (link: string, name: string, role?: "voice") => {
@@ -265,7 +275,8 @@ describe("voice front: a turn", () => {
     const ctx = await setup({ box: { reply: () => ({ said: "One sec.", wait: true }) } });
     await ctx.shake();
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
-    const out = (await ctx.room.command(ctx.token, "say", { text: "Build [happy] 42 passed.", exact: true })) as any;
+    const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id;
+    const out = (await ctx.room.command(ctx.token, "say", { text: "Build [happy] 42 passed.", exact: true, in_reply_to: t1 })) as any;
     expect(out.ok).toBe(true);
     await until(() => ctx.dev.named("say").length >= 2);
     expect(ctx.box.of("tts").at(-1)).toMatchObject({ text: "Build 42 passed.", front: "inner", exact: true });
@@ -278,7 +289,7 @@ describe("voice front: a turn", () => {
     const ctx = await setup({ box: { reply: () => ({ said: "Let me look that up for you right now.", wait: true }) } });
     await ctx.shake();
     await until(() => ctx.dev.named("say").length > 0);
-    const r = (await ctx.room.command(ctx.token, "say", { text: "It is sunny." })) as any;
+    const r = (await ctx.room.command(ctx.token, "say", { text: "It is sunny.", in_reply_to: ctx.dev.named("listen")[0].args.job })) as any;
     expect(r.ok).toBe(true);
     await until(() => ctx.dev.named("say").length >= 2);
     const [first, second] = ctx.dev.named("say");
@@ -287,14 +298,16 @@ describe("voice front: a turn", () => {
     expect(second.at).toBeGreaterThan(first.at);
   });
 
-  it("while the person is still talking the agent cannot cut in (the shake's open turn)", async () => {
+  it("while the person is still talking an agent line cannot cut in: it is only context", async () => {
     const ctx = await setup({ box: { turnEndAfter: 4 } });
     await ctx.shake();
     await until(() => ctx.box.of("stt.start").length > 0);
     await sleep(25);
-    // the shake's turn is open (human_speaking): an agent cannot cut in; it can as soon as the turn ended
     const early = (await ctx.room.command(ctx.token, "say", { text: "Hello." })) as any;
-    expect(early.ok ? "ok" : early.error).toBe("human_speaking");
+    const job = (await ctx.room.job(ctx.token, early.result.job, 0)) as any;
+    expect(job.result).toMatchObject({ status: "done", result: { spoken: false, as: "inner", how: "absorbed" } });
+    await until(() => sayTexts(ctx.dev).length > 0);
+    expect(sayTexts(ctx.dev)).toEqual(["Let me check on that."]);
   });
 
   it("the agent never answers: the front says it is still waiting, once, then listens", async () => {
@@ -339,13 +352,12 @@ describe("voice front: a turn", () => {
     expect(ctx.box.of("stt.start")[1].hold).toBeUndefined();
   });
 
-  it("an agent answer during a hands-free listen nobody spoke into yet: the listen yields to it, the conversation goes on", async () => {
-    const ctx = await setup({ chunks: 40, box: { heard: ["hi molty", "", ""], reply: () => ({ said: "Hey!", wait: false }), turnEndAfter: 3 } });
-    // the follow-up listen's person never speaks: the box would call no_speech at chunk 3; answer before that
-    ctx.box.listens; // (typed access)
+  it("the awaited answer during a hands-free listen nobody spoke into yet: the listen yields to it, the conversation goes on", async () => {
+    const ctx = await setup({ chunks: 40, box: { heard: ["what about my build?", "", ""], reply: () => ({ said: "Let me check.", wait: true }), turnEndAfter: 3 } });
+    // after "still waiting" Molty listens again; the person never speaks there: the agent's answer comes before no_speech
     await ctx.shake();
-    await until(() => ctx.box.of("stt.start").length >= 2);
-    const r = (await ctx.room.command(ctx.token, "say", { text: "By the way, your build passed." })) as any;
+    await until(() => ctx.box.of("stt.start").length >= 2, 3000);
+    const r = (await ctx.room.command(ctx.token, "say", { text: "By the way, your build passed.", in_reply_to: ctx.dev.named("listen")[0].args.job })) as any;
     expect(r.ok).toBe(true);
     await until(() => sayTexts(ctx.dev).includes("So, By the way, your build passed."));
     const stops = ctx.dev.named("listen_stop").map((c) => c.args.reason);
@@ -414,7 +426,7 @@ describe("voice front: every way out", () => {
   it("after a front reply the device gets the say's end and the hands-free listen at once, with or without an agent answer in flight", async () => {
     // live 2026-11-27 (turn 4): the reply's say stayed open 12.8 s for 4.5 s of audio; the next listen came 8 s late
     for (const inFlight of [false, true]) {
-      const ctx = await setup({ chunks: 30, box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there, all good here!", wait: false }), absorb: (t) => t.startsWith("Hey") } });
+      const ctx = await setup({ chunks: 30, box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there, all good here!", wait: false }) } });
       await ctx.shake();
       await until(() => ctx.dev.named("say").length > 0);
       const reply = ctx.dev.named("say")[0].args.job as string;
@@ -472,18 +484,19 @@ describe("voice front: every way out", () => {
 });
 
 describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)", () => {
-  it("one voice: the agent's greeting after the front's own greeting is absorbed, a new fact is said once in the front's turn", async () => {
+  it("one voice: the front answered the turn itself, the agent's lines are only context, nothing more is said", async () => {
     // live 2026-11-27: the front greeted; 11 s later the agent's own greeting for that turn was said as a second answer
-    const ctx = await setup({ box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there!", wait: false }), absorb: (t) => t.startsWith("Hey") } });
+    const ctx = await setup({ box: { heard: ["hi molty", ""], reply: () => ({ said: "Hey there!", wait: false }) } });
     await ctx.shake();
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id as string;
     const g = (await ctx.room.talk(ctx.token, { say: "Hey Juan! Just lounging on your desk like a proper cat.", in_reply_to: t1 })) as any;
     expect(g).toMatchObject({ ok: true, result: { status: "done", spoken: false, as: "inner", how: "absorbed" } });
-    expect(g.result.hint).toMatch(/said nothing/);
+    expect(g.result.hint).toMatch(/only when it handed the turn to you/);
+    // with no in_reply_to while the conversation goes on: context too (the agent speaks up only between conversations)
     const f = (await ctx.room.talk(ctx.token, { say: "By the way, your build passed." })) as any;
-    expect(f.result).toMatchObject({ status: "done", spoken: true, as: "inner", how: "said", said: "So, By the way, your build passed." });
-    expect(sayTexts(ctx.dev)).toEqual(["Hey there!", "So, By the way, your build passed."]);
+    expect(f.result).toMatchObject({ status: "done", spoken: false, as: "inner", how: "absorbed" });
+    expect(sayTexts(ctx.dev)).toEqual(["Hey there!"]);
     expect(ctx.box.of("tts").map((t) => t.front)).toEqual(["inner", "inner"]); // never text to speech
     const act = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries;
     expect(act.find((e: any) => e.kind === "job" && e.job === g.result.job).data).toMatchObject({ status: "done", as: "inner" });
@@ -491,7 +504,7 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
 
   it("nothing is said while the person speaks: an answer to the turn before waits for their turn, then the front decides", async () => {
     // live: Dude's greeting for turn 1 came while the person spoke turn 2 and played after the front's reply to it
-    const ctx = await setup({ chunks: 10, box: { heard: ["hi molty", "tell me something about my screen", ""], reply: () => ({ said: "Hi there!", wait: false }), turnEndAfter: 6, absorb: (t) => t.startsWith("Hey") } });
+    const ctx = await setup({ chunks: 10, box: { heard: ["hi molty", "tell me something about my screen", ""], reply: () => ({ said: "Hi there!", wait: false }), turnEndAfter: 6 } });
     await ctx.shake();
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id as string;
@@ -524,40 +537,45 @@ describe("voice front: an agent's answer belongs to the moment (live 2026-11-27)
     expect(sayTexts(ctx.dev).filter((t) => /tandup/.test(t)).length).toBe(1);
   });
 
-  it("after the conversation ended, an answer to a turn the front already answered is dropped: no session, nothing said", async () => {
+  it("after the conversation ended, an answer to a turn the front already answered is only context: nothing said", async () => {
     // live: a retry after the conversation ended idle opened a new provider session to say a stale greeting
     const ctx = await setup({ box: { heard: ["hi molty"], reply: () => ({ said: "Hi there!", wait: false }) } });
     await ctx.shake();
     await until(() => ctx.box.of("front.end").length > 0, 3000);
     const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id as string;
-    const tts = ctx.box.of("tts").length;
     const r = (await ctx.room.command(ctx.token, "say", { text: "Hey! Going pretty smooth.", in_reply_to: t1 })) as any;
     expect(r.ok).toBe(true);
     const job = (await ctx.room.job(ctx.token, r.result.job, 0)) as any;
-    expect(job.result).toMatchObject({ status: "done", result: { spoken: false, as: "inner", how: "absorbed", reason: "conversation_over" } });
+    expect(job.result).toMatchObject({ status: "done", result: { spoken: false, as: "inner", how: "absorbed" } });
+    // the box was told which turn it answers (the box decides: it never waited for it, so no session, no sound)
+    expect(ctx.box.of("tts").at(-1)).toMatchObject({ front: "inner", turn: ctx.box.of("stt.start")[0].id });
     await sleep(50);
-    expect(ctx.box.of("tts").length).toBe(tts);
-    expect(ctx.box.of("front.context").at(-1).text).toMatch(/Hey! Going pretty smooth\.$/); // kept, never voiced (no session opened for it)
     expect(sayTexts(ctx.dev)).toEqual(["Hi there!"]);
   });
 
-  it("which answers are said: the one the front waits for, but none to a turn over a minute old", () => {
+  it("the front's model heard the turn: the relay's own voice check never ends the conversation under its reply", async () => {
+    // live 2026-11-27 (run 5, turn 3): a short turn the relay judged unvoiced ended the conversation as idle while
+    // the front was making its reply; the box closed the session mid reply
+    const ctx = await setup({ voiced: () => false, box: { heard: ["um ok", ""], reply: () => ({ said: "Okay!", wait: false }) } });
+    await ctx.shake();
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    expect((await ctx.inbox()).find((e) => e.type === "utterance")?.data.text).toBe("um ok"); // the agent gets the turn
+    expect(sayTexts(ctx.dev)).toEqual(["Okay!"]);
+    const ends = ctx.box.of("front.end");
+    expect(ends.length === 0 || ctx.box.of("stt.start").length >= 2).toBe(true); // not ended under the reply: it listened again
+    await until(() => ctx.box.of("front.end").length > 0, 3000);
+    expect(ctx.box.of("stt.start").length).toBe(2);
+  });
+
+  it("an answer to a turn over a minute old is never sent to be said", () => {
     let now = 0;
     const clock = { now: () => now, setTimeout: () => 0, clearTimeout: () => {} } as any;
     const ft = new FrontTalk({ clock, openTurn: () => undefined } as any);
     ft.spoken("t1");
     ft.turnEnded("t1", 0);
-    const latest = { id: "t1", at: 500 };
-    expect(ft.fate("t1", latest)).toEqual({ speak: true });
-    ft.spoken("t2"); // the person speaks again: t1 is not the moment any more
-    expect(ft.fate("t1", latest)).toEqual({ speak: false, reason: "conversation_over" }); // (no conversation live here)
-    ft.listened({ ok: true, text: "" }, false, "t2"); // it was nothing: t1 is the moment again
-    expect(ft.fate("t1", latest)).toEqual({ speak: true });
-    ft.spoke("t1", { wait: true } as any); // the front handed t1 to the agent: its answer is said even after the person spoke again
-    ft.spoken("t3");
-    expect(ft.fate("t1", latest)).toEqual({ speak: true });
+    expect(ft.fate("t1", { id: "t1", at: 500 })).toEqual({ speak: true });
     now = 60001;
-    expect(ft.fate("t1", latest)).toEqual({ speak: false, reason: "old_turn" });
+    expect(ft.fate("t1", { id: "t1", at: 500 })).toEqual({ speak: false, reason: "old_turn" });
   });
 });
 
