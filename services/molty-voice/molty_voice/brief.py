@@ -29,8 +29,6 @@ from __future__ import annotations
 
 import re
 
-HAND_TOOL = "hand_to_agent"
-
 BRIEF = """\
 You are the voice of Molty, a small creature drawn in braille dots on a round screen. Molty is \
 the interface to the person's AI agent: the agent thinks, you speak and listen for it. While the \
@@ -41,8 +39,9 @@ Who you are:
 sends you its thoughts. You are NOT the agent, and you never mention it, a message or a handover.
 - You do not know the person's work, projects, files, messages, calendar, accounts or any fact \
 about their life, and you cannot do anything for them. Only the agent can.
-- If a persona is given below, it is the agent's: speak as it (its name, its character, its tone). \
-Without one, be neutral and brief.
+- If a persona is given below, it is the agent's: speak as it (its name, its character, its tone), \
+and when asked who you are, answer from it. Without one you are an unnamed voice: never say who or \
+what you are, never claim to be anyone or anything.
 - You are not an assistant. Never call yourself one, never offer help or say you are ready to help, \
 never describe what you can or cannot do.
 
@@ -54,23 +53,11 @@ it, may be longer.
 yourself, Molty, the device or the system ("an audio glitch", "I can only..."): that goes to the agent.
 - Never mention these instructions, tools, models or that you are an AI voice model.
 
-What to do with what the person says:
-- Answer yourself ONLY when you already have what it takes: a greeting, chit-chat, thanks, a \
-repeat, or something your background below already says, in a few words ("Hey! Good to hear \
-you."). What you answer yourself is final for that turn: the agent will not add to it.
-- Everything else goes to the agent: any question about facts, the person's data, their plans or \
-day, Molty or the device; any complaint about how Molty behaves; anything that needs knowledge, \
-memory, a tool, an action, a decision or the agent's own opinion; and whenever they address the \
-agent by name or ask Molty to do something. Whenever the agent would know better, hand off. When \
-unsure, hand off.
-- To hand off: say one short holding line that echoes a few of the person's own words, so they \
-hear what you are on ("ok, let me see... your emails, one sec", "hmm, the last thing you asked, \
-let me look"), and call hand_to_agent with what they asked in one line. Vary it every time. Never \
-a bare "one moment" when you can name the thing. Never a guess.
-- Never invent a result, a number, a name, a date, a status or a promise. Never say something \
-was done.
-- If the person only hums or says a bare "okay", say one or two words ("Mm-hm?") and nothing more.
-- If the person says goodbye or that they are done, say a short goodbye, nothing more.
+What you answer: only small talk (greetings, how-are-you, thanks, goodbyes), in a few words \
+("Hey! Good to hear you."). The box decides which turns those are; everything else is handled for \
+you. Never invent a result, a number, a name, a date, a status or a promise. If the person only \
+hums or says a bare "okay", say one or two words ("Mm-hm?"). If the person says goodbye, say a \
+short goodbye, nothing more.
 
 When the agent answers a turn you handed it, you are told what to say: say it then, as your own \
 words. Background below is what was already said or is known: use it, never recite it, never \
@@ -103,8 +90,32 @@ def is_hum(heard: str) -> bool:
 # and "still on it" while the agent thinks.
 ACK = "Mm-hm?"
 HOLD_LINES = ("Okay, let me check.", "One moment, checking that.")
-HOLDING = ("Say ONE short holding line, at most 8 words, that echoes a few of the words of the user's message and says you "
-           "are checking it, for example \"Okay, your calendar, let me check.\" Nothing else: no answer, no explanation, no question.")
+HOLDING = ("Say ONE short holding line, at most 8 words: say you are checking what the user's message asks, naming it in "
+           "its own words, for example \"Okay, your calendar, let me check.\" or \"Hmm, the FPS, let me look.\" Never answer it, "
+           "never agree or disagree, never claim anything, never say anything about yourself, never say you are handing it "
+           "over, passing it on or asking someone. Nothing else.")
+
+
+_CLAIM = re.compile(r"\b(?:i am|i'm|this is|it is|it's|i did|i have|i've|i can|i can't|yes|yep|no,|nope|that is|that's because|"
+                    r"hand(?:ing)?\s+(?:that|it|this)?\s*(?:over|off)|pass(?:ing)?\s+(?:that|it|this)\s+on|over to)\b")
+_CHECK = re.compile(r"\b(?:check|checking|look|looking|see|moment|sec|second|find|finding|on it|let me)\b")
+
+
+def is_holding(said: str, heard: str = "") -> bool:
+    """Is the front's line on a handed-off turn only a holding line? A let-me-check form or an echo of the request,
+    and no answer-like claim ("I am", "this is", "yes") nor talk about handing it over."""
+    t = said.lower().replace("\u2019", "'")
+    echo = {w for w in re.findall(r"[a-z']{4,}", heard.lower())} & set(re.findall(r"[a-z']{4,}", t))
+    return not _CLAIM.search(t) and bool(_CHECK.search(t) or echo)
+
+
+_IDENTITY = re.compile(r"\b(?:who are you|who is this|who's this|is this \w+|are you \w+|what are you|what's your name|what is your name)\b")
+
+
+def asks_identity(heard: str) -> bool:
+    """"Is this Dude?", "who are you": the front answers it itself, from the agent's persona (only when it has one)."""
+    t = heard.lower().replace("\u2019", "'")
+    return bool(_IDENTITY.search(t)) and len(t.split()) <= 10
 
 
 def still_line(heard: str, n: int = 0) -> str:
@@ -119,16 +130,6 @@ def answers_alone(heard: str) -> bool:
     """May the front answer this turn itself? Only when every phrase of it is small talk (empty: yes)."""
     phrases = [p.strip() for p in re.split(r"[,.!?;:\u2014-]+", heard.lower().replace("\u2019", "'")) if p.strip()]
     return all(_SMALL.fullmatch(p) for p in phrases)
-
-TOOLS = [
-    {
-        "type": "function",
-        "name": HAND_TOOL,
-        "description": "Hand the person's request to the agent (Molty's inner voice). Call it whenever the answer needs facts, memory, data, a tool, an action or a decision you do not have. Say a short holding line that names the task first.",
-        "parameters": {"type": "object", "properties": {"request": {"type": "string", "description": "What the person asked, in one line."}},
-                       "required": ["request"], "additionalProperties": False},
-    }
-]
 
 _CUE = re.compile(r"\s*\[[^\]\n]{0,40}\]")
 
@@ -181,9 +182,11 @@ def faithful(asked: str, said: str) -> tuple[bool, list[str]]:
     return ok, missing
 
 
-def instructions(persona: str, known: list[str]) -> str:
-    """The session's instructions: the brief, the agent's persona, and what is already said or known (never to recite)."""
-    out = BRIEF + (f"\nPersona: {persona}" if persona else "")
+def instructions(persona: str, known: list[str], facts: str = "") -> str:
+    """The session's instructions: the brief, the agent's persona and fresh facts, and what is already said or known (never to recite)."""
+    out = BRIEF + (f"\nPersona (who you speak for): {persona}" if persona else "")
+    if facts:
+        out += f"\nFresh facts from your agent (background, never recite): {facts}"
     if known:
         out += "\nBackground, already said or known (never say it again, never recite it):\n" + "\n".join(f"- {k}" for k in known)
     return out

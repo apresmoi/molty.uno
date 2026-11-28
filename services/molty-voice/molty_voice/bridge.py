@@ -28,7 +28,7 @@ Wire (docs/AGENT-LINK.md "Voice box"): JSON text control messages + binary audio
                  {"t":"tts",...,"front":"inner"|"wait","exact"?,"turn"?}: an agent line (voiced only when the front
                  waits for listen `turn`, or with no turn between conversations; else context: tts.end absorbed;
                  exact: keep its wording) / "still waiting" (a plain tts is verbatim);
-                 {"t":"front.context","text","persona"?}; {"t":"front.end","reason"}
+                 {"t":"front.context","text","persona"?,"facts"?}; {"t":"front.end","reason"}
   box -> relay   {"t":"stt.hint","id","k":"speech"} the person started speaking
                  {"t":"front.reply","id","stt","ms"?} the front answers listen `stt` itself: frames s=id, tts.word,
                  tts.text, tts.end follow as for a tts
@@ -264,7 +264,7 @@ class Bridge:
         elif t == "tts.cancel" and isinstance(mid, str):
             await f.speak_cancel(mid)
         elif t == "front.context" and text:
-            await f.context(text[:4000], m.get("persona") is True)
+            await f.context(text[:4000], m.get("persona") is True, m.get("facts") is True)
         elif t == "front.end":
             await f.end(str(m.get("reason") or "ended")[:40])
 
