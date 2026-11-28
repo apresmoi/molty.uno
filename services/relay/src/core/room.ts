@@ -55,7 +55,7 @@ import {
 } from "./api.js";
 import { durationMs, bytesToPcm16, fadeOut, levels, pcm16ToBytes } from "./audio.js";
 import { hasVoice, junkTranscript } from "./voiced.js";
-import { ASK_TITLE_CAP, HAPTIC_CAP, RHYTHM_CAP, WAVE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
+import { ASK_TITLE_CAP, ATLAS_CAP, HAPTIC_CAP, RHYTHM_CAP, WAVE_CAP, LEGACY_ASK_LABEL, CREATURES_CAP, DND_CAP, PROGRESS_CAP, DEFAULT_WPM, PKG_CAP, SCENE_CAP, MAX_SCENE_TTL_S, WORKING_ACTIONS, WORKING_CAP, WORKING_MOOD, ACK_CAP, ACK_MODES, GESTURES_CAP, RESUME_CAP, RESUME_FEATURE, type AskArgs, type SayMarks, COMMANDS, BOX_NO_SPEECH_MS, CommandError, LEGACY_MAX_LISTEN_MS, LISTEN_CEILING_MS, LISTEN_WINDOW_CAP, TALK_BUDGET_MS, THINK_HOLD_S, type TalkArgs, validateAsk, validateCommand, validateTalk, MAX_DRAFTS_PER_TURN, MAX_KEEP_WORDS, REACT_CAP, REACT_MIN_GAP_MS, REACT_SHOW_MS, validateDraft, validateReact } from "./commands.js";
 import { FIRST_WORDS_MODES, type FirstWordsMode, type LineState, OPENER, lineCut, linePlay, type OpenerMessage, clauseEnd, guardOpener, hangs, planReply, pushHistory } from "./opener.js";
 import { PcmFeed, estimateSpeechMs, speechWords, splitSpeech, synthesize } from "./speech.js";
 import { DEFAULT_PARTIAL_POLICY, DRAFT_DROPPED_EVENT, DRAFT_USED_EVENT, type DropReason, PARTIAL_EVENT, PartialChunker, PauseTracker, judgeDraft, words } from "./partials.js";
@@ -1339,6 +1339,9 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     }
     if (cmd.name.startsWith("wave.") && !live.getMeta()?.caps?.includes(WAVE_CAP)) {
       return fail("unsupported", `this Molty's firmware has no tone player (no \`${WAVE_CAP}\` in its caps): update it, or it has no speaker`);
+    }
+    if (cmd.name.startsWith("atlas.") && !live.getMeta()?.caps?.includes(ATLAS_CAP)) {
+      return fail("unsupported", `this Molty's firmware has no sky atlas (no \`${ATLAS_CAP}\` in its caps): update it`);
     }
     if (cmd.name.startsWith("creature.") && !live.getMeta()?.caps?.includes(CREATURES_CAP)) {
       return fail("unsupported", `this Molty's firmware has no creature packages (no \`${CREATURES_CAP}\` in its caps): update it`);

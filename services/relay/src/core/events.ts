@@ -110,7 +110,7 @@ const RHYTHM_ID_RE = /^[a-z0-9-]{1,24}$/;
 function ringShape(d: Record<string, unknown>): JsonObject | undefined {
   if (!spot(d.spot)) return undefined;
   if (num(d.value, -10000, 10000) && d.index === undefined) return { spot: d.spot, value: d.value as number };
-  if (!int(d.index, 0, 31)) return undefined;
+  if (!int(d.index, 0, 127)) return undefined;   /* (a wheel's labels: 32; the atlas's objects: up to 96) */
   return {
     spot: d.spot,
     index: d.index as number,
@@ -337,6 +337,7 @@ export function eventSentence(ev: AgentEvent): string {
       return typeof d.muted === "boolean" ? `The human ${d.muted ? "muted" : "brought back"} ${String(d.spot)} on Molty's rhythm` : "Molty's screen was tapped";
     case "ring":
       if (d.spot === "region") return `The human is browsing ${String(d.label)} on Molty's wheel`;
+      if (d.spot === "object" || d.spot === "kind") return `The human is browsing the sky atlas on Molty: ${String(d.label ?? d.id)}`;
       return d.id ? `The human chose ${String(d.id)} on Molty's wheel: it waits, stopped, for a tap in the middle` : d.label ? `The human turned Molty's ${String(d.spot)} wheel to ${String(d.label)}` : `The human turned Molty's ${String(d.spot)} wheel to ${String(d.value)}`;
     case "rhythm":
       return d.state === "stopped" ? "The human stopped the rhythm on Molty and left it" : d.state === "paused" ? "The human stopped the rhythm on Molty: it waits on the clock, choosing" : `The human started ${String(d.rhythm ?? "the rhythm")} on Molty`;

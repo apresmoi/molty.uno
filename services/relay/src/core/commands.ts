@@ -18,7 +18,7 @@ export const PROGRESS_CAP = "progress";
 export const MAX_PROGRESS_STEP = 80;
 /** A say's `[working]` cue: never a device mark. The relay plays the say to its end, then sets the mood. */
 export const WORKING_MOOD = "working";
-export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop", "wave.play", "wave.set", "wave.stop", "front"] as const;
+export const COMMANDS = ["status", "state", "mood", "show", "say", "quick", "keep", "listen", "volume", "imu", "diag", "log", "act", "buzz", "progress", "gestures", "pkg.install", "pkg.remove", "pkg.list", "pkg.available", "scene.play", "scene.queue", "scene.clear", "creature.select", "creature.list", "rhythm.play", "rhythm.set", "rhythm.stop", "wave.play", "wave.set", "wave.stop", "atlas.load", "atlas.show", "front"] as const;
 /** `buzz {pattern | ms, strength?}`: the vibration motor (firmware cap `haptic`, only on boards that have one). A pattern is
  *  a name the device knows (tick, tap, double, nudge: unknown_pattern otherwise) or [on, off, on, ...] ms. */
 export const HAPTIC_CAP = "haptic";
@@ -106,6 +106,13 @@ function boolArg(v: unknown, name: string): boolean {
   if (typeof v !== "boolean") throw invalid(`${name} must be a boolean`);
   return v;
 }
+
+/** Firmware cap: atlas.* (the sky atlas, docs/AGENT-LINK.md "Atlas"). */
+export const ATLAS_CAP = "atlas";
+/** atlas.load: one kind's objects (the molty-atlas skill's, at most 96; the device checks each strictly). */
+export const MAX_ATLAS_OBJECTS = 96;
+export const MAX_ATLAS_BYTES = 32768;
+const ATLAS_KIND_RE = /^[a-z0-9-]{1,24}$/;
 
 export const MAX_SHOW_BYTES = 16384;
 export const MAX_SAY_BYTES = 4096;
@@ -529,6 +536,28 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       waveArgs(args, out, MAX_WAVE_KINDS);
       if (args.octave !== undefined) out.octave = int(args.octave, "octave", -3, 8);
       if (args.count !== undefined) { if (args.count !== true) throw invalid("count must be true"); out.count = true; }
+      return { name: n, args: out, job: false };
+    }
+    case "atlas.load": {
+      // the shape only: the device checks every object strictly (scene/atlas.c) and answers invalid_args
+      only(args, ["kind", "objects", "kinds", "clock"]);
+      if (args.kinds === undefined && args.objects === undefined) throw invalid("atlas.load needs kinds, objects, or both");
+      if (args.kinds !== undefined && (!Array.isArray(args.kinds) || args.kinds.length < 1 || args.kinds.length > 10 || !args.kinds.every(isRecord))) throw invalid("kinds must be a list of 1..10 kinds");
+      if (args.objects !== undefined) {
+        if (typeof args.kind !== "string" || !ATLAS_KIND_RE.test(args.kind)) throw invalid("kind must name the kind the objects are of");
+        if (!Array.isArray(args.objects) || args.objects.length < 1 || args.objects.length > MAX_ATLAS_OBJECTS || !args.objects.every(isRecord)) throw invalid(`objects must be a list of 1..${MAX_ATLAS_OBJECTS} objects (the molty-atlas skill's)`);
+      }
+      if (args.clock !== undefined && (!Number.isInteger(args.clock) || (args.clock as number) < -1 || (args.clock as number) > 1439)) throw invalid("clock must be the place's minutes of the day, 0..1439, or -1 for no place");
+      if (new TextEncoder().encode(JSON.stringify(args)).byteLength > MAX_ATLAS_BYTES) throw invalid(`atlas.load exceeds ${MAX_ATLAS_BYTES} bytes: send one kind at a time`);
+      return { name: n, args: args as JsonObject, job: false };
+    }
+    case "atlas.show": {
+      only(args, ["kind", "index", "level", "face"]);
+      const out: JsonObject = {};
+      if (args.kind !== undefined) { if (typeof args.kind !== "string" || !ATLAS_KIND_RE.test(args.kind)) throw invalid("kind must be a kind's id"); out.kind = args.kind; }
+      if (args.index !== undefined) out.index = int(args.index, "index", 0, MAX_ATLAS_OBJECTS - 1);
+      if (args.level !== undefined) { if (args.level !== "kinds" && args.level !== "objects") throw invalid("level must be kinds or objects"); out.level = args.level; }
+      if (args.face !== undefined) { if (args.face !== "drawing" && args.face !== "where") throw invalid("face must be drawing or where"); out.face = args.face; }
       return { name: n, args: out, job: false };
     }
     case "progress": {
