@@ -1,0 +1,12 @@
+# yaml-language-server: $schema=../../schema/display-2.json
+# What Molty draws for this skill (docs/DISPLAY.md). The atlas draws what atlas.load sent (scripts/atlas.mjs works out
+# the sky); build with `node packages/tools/molty-display.mjs build skills/molty-atlas`.
+molty: display/2
+package:
+  id: atlas
+  name: Sky atlas
+  version: 1.0.0
+  about: The night sky's best known objects as cards drawn in dots, and where each is now. Turn the rim to browse, tap the middle to open or turn.
+  fallback: speech
+screens:
+  atlas: screens/atlas.yaml

@@ -1,0 +1,42 @@
+[
+ {
+  "source": "astronomy-engine",
+  "url": "https://github.com/cosinekitty/astronomy"
+ },
+ {
+  "source": "Hipparcos main catalogue",
+  "url": "https://vizier.cfa.harvard.edu/viz-bin/VizieR?-source=I/239"
+ },
+ {
+  "source": "IAU Catalog of Star Names",
+  "url": "https://www.iau.org/public/themes/naming_stars/"
+ },
+ {
+  "source": "Stellarium sky culture western_SnT",
+  "url": "https://github.com/Stellarium/stellarium-skycultures/tree/master/western_SnT"
+ },
+ {
+  "source": "OpenNGC",
+  "url": "https://github.com/mattiaverga/OpenNGC"
+ },
+ {
+  "source": "Washington Double Star catalogue",
+  "url": "https://www.astro.gsu.edu/wds/"
+ },
+ {
+  "source": "IMO Meteor Shower Calendar 2027",
+  "url": "https://www.imo.net/files/meteor-shower/cal2027.pdf"
+ },
+ {
+  "source": "Orion Nebula, Hubble 2006 mosaic",
+  "url": "https://commons.wikimedia.org/wiki/File:Orion_Nebula_-_Hubble_2006_mosaic_18000.jpg"
+ },
+ {
+  "source": "Ring Nebula",
+  "url": "https://commons.wikimedia.org/wiki/File:M57_The_Ring_Nebula.JPG"
+ },
+ {
+  "source": "Wikipedia page views",
+  "url": "https://wikimedia.org/api/rest_v1/"
+ }
+]

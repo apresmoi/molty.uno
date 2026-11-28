@@ -1,0 +1,9 @@
+about: The sky atlas atlas.load sent. Turn the rim through the kinds, tap the middle to open one; turn it through the kind's objects, each its card; tap the middle to turn a card to where it is now (with a place); tap the kind above to go back.
+duration: hold
+draw:
+  # the cards: the kinds, a kind's objects, each one's drawing and where it is now
+  - sky_atlas: { radius: 1 }
+  # the rim: a kind every 30 degrees, an object every 15 (five a click turning fast), the first one ticks firmer
+  - wheel: { id: atlas, step: 15 }
+  # the middle: opens a kind, turns a card
+  - centre_tap: { radius: 0.55 }
