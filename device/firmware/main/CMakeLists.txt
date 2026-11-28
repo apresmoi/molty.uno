@@ -141,6 +141,8 @@ idf_component_register(
         "rhythm/rhythm_dev.c"    # its lock, the speaker, the buzz, the link's commands
         "rhythm/wave_player.c"   # the tone player: the drum hit at any rate, its cycles, the trace (plain C, host-tested)
         "rhythm/wave_core.c"     # the chord on the screen: commands, the levels, events, its share of the speaker
+        "scene/atlas.c"          # the sky atlas: its store, levels and cards (plain C, host-tested)
+        "scene/atlas_cmd.c"      # ... atlas.load and atlas.show
         # sense: device events (IMU shake, taps, buttons) for the agent + the fluid
         "sense/gesture.c"
         "sense/shake_settle.c"   # shake to talk: when the handling noise is over (host-tested)

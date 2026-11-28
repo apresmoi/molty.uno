@@ -197,7 +197,7 @@ static bool resolve(scene_t *sc, const bind_t *b, const pkg_item_t *it, const cJ
     if (it->k == PK_TEXT) {
         const char *s = str_of(b, &f[PF_STR], el);
         size_t len = s ? strlen(s) : 0;
-        if (!len || sc->nchars + (int)len > SCENE_LETTERS) return false;
+        if (!len || sc->nchars + (int)len > SCENE_LAYOUT_LETTERS) return false;
         o->str = (uint16_t)sc->nchars; o->nstr = (uint16_t)len;
         memcpy(sc->chars + sc->nchars, s, len); sc->nchars += (int)len;
     }
@@ -687,6 +687,16 @@ static void ball(const ctx_t *c, const scene_item_t *it, const pkg_asset_t *img,
     }
 }
 
+/* a field of dots (an atlas card's picture or model): each point the one braille dot under it, kept in high definition */
+static void field(const ctx_t *c, const scene_t *sc, const scene_item_t *it) {
+    canvas_t *s = c->s;
+    if (!c->paint) return;
+    for (int q = 0; q < it->npts; q++) {
+        const int i = (int)lrintf((sc->pts[it->pts + q][0] + 1.f) * 0.5f * s->W - 0.5f), j = (int)lrintf((1.f - sc->pts[it->pts + q][1]) * 0.5f * s->H - 0.5f);
+        if (i >= 0 && i < s->W && j >= 0 && j < s->H) paint(s, j * s->W + i, 1.f, SCENE_INK, it->rgb);
+    }
+}
+
 /* an asset `size` wide, turned rot degrees: each dot's coverage from 2 × 2 samples (one, when
  * the dot is no bigger than an asset pixel) */
 /* a small upright symbol (a planet, a sign on the wheel): drawn crisp on the panel, like a
@@ -906,7 +916,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
             it = &g; pts = (const float (*)[2])gp;
         }
         const pkg_asset_t *a = it->asset >= 0 ? &sc->pkg->assets[it->asset] : NULL;
-        c->s->keep = it->k == PK_BALL || (it->k == PK_GLYPH && a && a->kind != PA_MASK);   /* no shape draws it */
+        c->s->keep = it->k == PK_BALL || it->k == PK_FIELD || (it->k == PK_GLYPH && a && a->kind != PA_MASK);   /* no shape draws it */
         switch (it->k) {
         case PK_RING:  ring(c, it, false); break;
         case PK_ARC:   ring(c, it, true); break;
@@ -920,6 +930,7 @@ static void paint_items(const ctx_t *c, const scene_t *sc, float t, float grow, 
         case PK_CURVE: path(c, pts, it->npts, true, it->w * 0.5f, it->rgb); break;
         case PK_DISC:  disc(c, it->x, it->y, it->r, it->rgb); break;
         case PK_BALL:  ball(c, it, a, t); break;
+        case PK_FIELD: field(c, sc, it); break;
         case PK_GLYPH: if (a && !crisp(c, it, a, letters, nletters)) glyph(c, it, a); break;
         case PK_TEXT:  text(c, sc, it, letters, nletters); break;
         case PK_SPOT:  break;                                  /* a place to tap, not a drawing */

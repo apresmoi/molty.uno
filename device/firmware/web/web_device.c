@@ -263,11 +263,11 @@ static void sense_tick(uint32_t now) {
     imu_feed(now);
     if (pair) gesture_reset(&s_g);
     if (s_lis.on && s_voice_in >= 0.05f) s_lis.speech_ms += (uint32_t)(s_fi[FI_FRAME_MS] + 0.5f);   /* the VAD hears it */
-    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active());
+    const bool up = !pair && !s_q.open && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active() || atlas_active());
     for (int b = 0; b < 2; b++) {
         const bool on = s_btn[b];
         if (up && (b == MOLTY_BTN_REJECT || beat)) {   /* sense.c: a scene shows: reject closes it; accept is a rhythm's or a chord's centre */
-            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else wave_local_centre(); } else mole_fluid_scene_close(); }
+            if (on && !s_btn_prev[b] && gesture_limit_allow(&s_btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else if (atlas_active()) atlas_local_centre(); else wave_local_centre(); } else mole_fluid_scene_close(); }
             s_presser[b].pending = false; gesture_switch_reset(&s_sw[b]); s_sw[b].down = on;
             s_btn_prev[b] = on;
             continue;

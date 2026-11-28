@@ -53,6 +53,7 @@ static const char *pkg_ran;
 PKG_STUB(pkg_cmd_install, "pkg.install") PKG_STUB(pkg_cmd_remove, "pkg.remove") PKG_STUB(pkg_cmd_list, "pkg.list")
 PKG_STUB(pkg_cmd_scene_play, "scene.play") PKG_STUB(pkg_cmd_scene_queue, "scene.queue") PKG_STUB(pkg_cmd_scene_clear, "scene.clear")
 PKG_STUB(pkg_cmd_creature_select, "creature.select") PKG_STUB(pkg_cmd_creature_list, "creature.list")
+PKG_STUB(atlas_cmd_load, "atlas.load") PKG_STUB(atlas_cmd_show, "atlas.show")
 
 /* self_update.c's screen writer, extracted verbatim by link_build.sh */
 #include "update_screen.inc"
@@ -191,8 +192,8 @@ int main(void) {
     cJSON *out=NULL, *a=cJSON_Parse("{}");
     assert(link_cmd_run("update",a,&out)==LINK_CMD_REFUSED && update_cmds==1 && !strcmp(link_cmd_refusal(),"wrong_board"));
     /* every package, scene and creature command is registered, past the old 16-command table */
-    const char *pkgs[]={"pkg.install","pkg.remove","pkg.list","scene.play","scene.queue","scene.clear","creature.select","creature.list"};
-    for (int i=0;i<8;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
+    const char *pkgs[]={"pkg.install","pkg.remove","pkg.list","scene.play","scene.queue","scene.clear","creature.select","creature.list","atlas.load","atlas.show"};
+    for (int i=0;i<10;i++) { pkg_ran=NULL; assert(link_cmd_run(pkgs[i],a,&out)==ESP_OK && pkg_ran && !strcmp(pkg_ran,pkgs[i])); }
     cJSON_Delete(a);
     cJSON_Delete(sdk_sent);
     /* the creature for the relay: nothing before one loaded, then its info once per generation */

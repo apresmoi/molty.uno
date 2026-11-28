@@ -35,6 +35,9 @@ esp_err_t pkg_cmd_list(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_play(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_queue(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_scene_clear(const cJSON *args, cJSON **result);
+/* atlas.load, atlas.show: the sky atlas (scene/atlas.h, atlas_cmd.c) */
+esp_err_t atlas_cmd_load(const cJSON *args, cJSON **result);
+esp_err_t atlas_cmd_show(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_creature_select(const cJSON *args, cJSON **result);
 esp_err_t pkg_cmd_creature_list(const cJSON *args, cJSON **result);
 esp_err_t pkg_http_register(httpd_handle_t server);

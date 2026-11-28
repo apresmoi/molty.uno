@@ -71,6 +71,7 @@
 #include "sky.h"          /* the moon and the falling stars behind the creature */
 #include "rhythm.h"       /* the beat player a scene's beat draws (scene_beat) */
 #include "wave.h"         /* the tone player a scene's wave draws (scene_wave) */
+#include "atlas.h"        /* the sky atlas */
 #include "ring_input.h"   /* a scene's wheel turned by the finger */
 #include "weather.h"      /* the weather on the glass behind the creature */
 
@@ -938,6 +939,11 @@ static void wave_wheel(const scene_t *sc) {
     s_wh.w.quiet = true; s_wh.w.land = land;
     if (!s_wh.drag.down) { s_wh.w.index = index; s_wh.w.value = midi; }
 }
+static void atlas_ring_evt(void) {   /* where an atlas's wheel settled (atlas.h) */
+    mole_ring_evt_t e = { 0 };
+    atlas_settled(e.spot, sizeof(e.spot), e.id, sizeof(e.id), e.label, sizeof(e.label), &e.index);
+    xSemaphoreTake(s_mutex, portMAX_DELAY); s_ring_evt = e; s_ring_evt_on = true; xSemaphoreGive(s_mutex);
+}
 /* each frame: a new scene starts its wheel afresh; the face and a beat player's dial follow the player while no
  * finger is on it */
 static void wheel_frame(float rdt) {
@@ -966,6 +972,7 @@ static void wheel_frame(float rdt) {
         if (pick && !s_wh.w.level)
             for (int q = 0; q < s_wh.w.nlabels; q++) if (s_wh.map[q] == v.cur) s_wh.w.index = q;
     }
+    if (atlas_item(sc) >= 0) atlas_wheel(sc, &s_wh.w, s_wh.labels, s_wh.tint, SCENE_WHEEL_LABELS);
     s_wh.w.since += rdt;
     s_wh.w.flash = fmaxf(0.f, s_wh.w.flash - rdt / 0.15f);
     s_wh.w.turning = s_wh.drag.down;
@@ -977,6 +984,13 @@ static void wheel_turn(int clicks, bool fast) {
     if (n < 0) return;
     const scene_item_t *d = &sc->items[n];
     if (!clicks) return;
+    if (atlas_item(sc) >= 0) {                            /* the atlas's (passing its first: the firmer tick) */
+        const int moved = atlas_turn(clicks, fast);
+        if (!moved) return;
+        s_wh.w.flash = 1.f; s_hold.on = false;
+        atomic_store(&s_tick_plan, moved == 2 ? WAVE_LAND_TICK : d->tick_ms << 8 | d->tick); atomic_fetch_add(&s_ticks, abs(clicks));
+        return;
+    }
     if (sc->wave >= 0) {                                  /* the tone player's: a note, a chord kind, or the pitch */
         const int moved = wave_local_turn(clicks, fast);
         if (!moved) return;                               /* at its end: no click to feel */
@@ -1006,6 +1020,7 @@ static void wheel_turn(int clicks, bool fast) {
 /* the words a tap takes up a level, while they show: the region's label above the name (up to the regions), a wave's
  * note above its chord's name (up to the notes); where they are (glass y) */
 static bool label_shown(const scene_t *sc, float *y) {
+    if (sc && atlas_item(sc) >= 0) return atlas_label(y);
     if (sc && sc->wave >= 0) { *y = SCENE_WAVE_TOP_Y * sc->items[sc->wave].r / 0.5f; return s_wh.w.face == 1 && !s_wh.w.level && s_wh.w.nlabels; }
     *y = SCENE_WHEEL_ABOVE_Y;
     return s_wh.w.above != NULL;
@@ -1036,7 +1051,8 @@ static bool wheel_touch(int n, float x, float y, float t) {
             const int d = scene_dial(sc, s_wh.w.face);
             ring_up(&s_wh.drag);
             s_wh.w.since = 0.f; s_wh.w.turning = false;
-            if (d >= 0 && (s_wh.w.nlabels ? s_wh.w.index != s_wh.i0 : s_wh.w.value != s_wh.v0)) {   /* settled where it moved to */
+            if (atlas_item(sc) >= 0) { if (atlas_key() != s_wh.v0) atlas_ring_evt(); }
+            else if (d >= 0 && (s_wh.w.nlabels ? s_wh.w.index != s_wh.i0 : s_wh.w.value != s_wh.v0)) {   /* settled where it moved to */
                 char id[RHY_ID_MAX + 1] = "";
                 if (sc->items[d].sets == 2 && !s_wh.w.level) { if (sc->wave >= 0) wave_kind_id(s_wh.w.index, id); else rhythm_id(s_wh.map[s_wh.w.index], id); }
                 ring_evt(&sc->items[d], id);
@@ -1057,13 +1073,14 @@ static bool wheel_touch(int n, float x, float y, float t) {
     int layer;
     s_wh.zone = zone_at(sc, x, y, &layer);
     switch (s_wh.zone) {
-    case ZONE_RING: ring_down(&s_wh.drag, x, y, t); s_wh.v0 = s_wh.w.value; s_wh.i0 = s_wh.w.index; s_wh.w.turning = true; break;
+    case ZONE_RING: ring_down(&s_wh.drag, x, y, t); s_wh.v0 = atlas_item(sc) >= 0 ? atlas_key() : s_wh.w.value; s_wh.i0 = s_wh.w.index; s_wh.w.turning = true; break;
     case ZONE_CENTRE:                                     /* the regions: into the one chosen; else plays and stops */
-        if (sc->wave >= 0) wave_local_centre();           /* (a wave: the notes, the chords, playing, and back) */
+        if (atlas_item(sc) >= 0) atlas_local_centre();
+        else if (sc->wave >= 0) wave_local_centre();      /* (a wave: the notes, the chords, playing, and back) */
         else if (s_wh.w.face == 1 && s_wh.w.level) pick_level(0, s_wh.w.index);
         else rhythm_local_play();
         break;
-    case ZONE_LABEL: if (sc->wave >= 0) wave_local_up(); else pick_level(1, s_wh.region); break;   /* up to the regions (the notes), on its own */
+    case ZONE_LABEL: if (atlas_item(sc) >= 0) atlas_local_up(); else if (sc->wave >= 0) wave_local_up(); else pick_level(1, s_wh.region); break;   /* up to the regions (the notes), on its own */
     case ZONE_DOT:                                        /* (the tap's place, 0..1 of the panel) */
         if (sc->wave >= 0) wave_local_mute(layer, (x + 1.f) * 0.5f, (1.f - y) * 0.5f);
         else rhythm_local_mute(layer, (x + 1.f) * 0.5f, (1.f - y) * 0.5f);
@@ -1470,6 +1487,7 @@ static void sim_frame(float rdt, const fluid_cfg_t *cfg) {
     wheel_frame(rdt);
     beat_frame(rdt);                                       /* (every frame: a rhythm with no clock on screen stops) */
     wave_frame(rdt);                                       /* (... and a chord with no circle on screen) */
+    atlas_frame(s_cur == ST_SCENE ? s_sp.cur : NULL, rdt, s_draw && s_draw->nowed > 0);
     if (s_cur == ST_SCENE && s_sp.cur && s_wh.gen == s_sp.gen) scene_wheel(s_sp.cur, &s_wh.w);
     /* a say's words under a change of picture (the drawer draws them live, the rest it reads once, at its pass): the ink
      * stands on its target, as a creature's and a scene's do. Their target, floor and view are made again only while the

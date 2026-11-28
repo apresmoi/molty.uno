@@ -51,6 +51,8 @@
 #include "haptic.h"
 #include "rhythm.h"
 #include "wave.h"
+bool atlas_active(void);                /* scene/atlas.h: the sky atlas shows; its centre, the accept button's */
+void atlas_local_centre(void);
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -220,11 +222,11 @@ static void sense_task(void *arg)
 
         /* a skill's scene shows: the reject button closes it (the creature comes back), whatever it is bound to; with a
          * rhythm or a chord on it the accept button does what its centre does. Never a buzz: a button clicks by itself */
-        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active());
+        const bool up = !pairing && !link_ask_pending() && mole_fluid_scene_up(), beat = up && (rhythm_active() || wave_active() || atlas_active());
         for (int b = 0; b < 2; b++) {
             bool on = molty_button_pressed((molty_button_t)b);
             if (up && (b == MOLTY_BTN_REJECT || beat)) {
-                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else wave_local_centre(); } else mole_fluid_scene_close(); }
+                if (on && !prev[b] && gesture_limit_allow(&btn_l, now)) { if (b == MOLTY_BTN_ACCEPT) { if (rhythm_active()) rhythm_local_play(); else if (atlas_active()) atlas_local_centre(); else wave_local_centre(); } else mole_fluid_scene_close(); }
                 presser[b].pending = false; gesture_switch_reset(&sw[b]); sw[b].down = on;
                 prev[b] = on;
                 continue;

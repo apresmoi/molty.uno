@@ -117,6 +117,7 @@ cJSON *link_identity_hello(void)
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "update";   /* self-update, confirmed by a tap */
     if (molty_board_has(MOLTY_CAP_TOUCH)) caps[n++] = "pkg";   /* pkg.install (confirmed by a tap), pkg.remove, pkg.list */
     caps[n++] = "scene";   /* scene.play / scene.queue / scene.clear: an installed package's layouts */
+    caps[n++] = "atlas";   /* atlas.load / atlas.show: the sky atlas's cards (atlas.h) */
     caps[n++] = "creatures";   /* creature.select / creature.list: the built-in and installed creature packages */
     caps[n++] = "log_upload";   /* sends its log lines up ({"t":"log"}) when the relay's welcome asks */
     cJSON_AddItemToObject(j, "caps", cJSON_CreateStringArray(caps, n));

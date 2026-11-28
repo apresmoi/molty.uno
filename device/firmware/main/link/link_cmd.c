@@ -358,6 +358,7 @@ void link_cmd_init(void)
     link_cmd_register("rhythm.stop", rhythm_cmd_stop);
     link_cmd_register("wave.play", wave_cmd_play); link_cmd_register("wave.set", wave_cmd_set);
     link_cmd_register("wave.stop", wave_cmd_stop);
+    link_cmd_register("atlas.load", atlas_cmd_load); link_cmd_register("atlas.show", atlas_cmd_show);
     link_cmd_register("creature.select", pkg_cmd_creature_select); link_cmd_register("creature.list", pkg_cmd_creature_list);
 }
 

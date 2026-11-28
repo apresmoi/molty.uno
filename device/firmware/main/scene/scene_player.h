@@ -46,7 +46,8 @@ extern "C" {
 #define SCENE_LIGHTS      4             /* the groups one spot lights                      */
 #define SCENE_PTS_MAX     512           /* resolved line / curve points, all items         */
 #define SCENE_LIVE_PTS    384           /* points a wave (scene_wave) draws after them     */
-#define SCENE_LETTERS     40            /* a scene's own text, letters (the overlay holds FLUID_MAX_LETTERS) */
+#define SCENE_LETTERS     64            /* a scene's own text, letters, its live ones too (the overlay holds FLUID_MAX_LETTERS) */
+#define SCENE_LAYOUT_LETTERS 40         /* ... of which a layout's own text at most                                 */
 #define SCENE_SAY_CHARS   4096          /* its spots' readings and ids, characters          */
 #define SCENE_QUEUE_MAX   8
 #define SCENE_TTL_DEFAULT 60.f

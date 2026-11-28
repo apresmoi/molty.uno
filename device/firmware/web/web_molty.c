@@ -561,6 +561,14 @@ WM_API int wm_rhythm(const char *name, const char *args) {
     cJSON_Delete(a); cJSON_Delete(out);
     return err ? -1 : 0;
 }
+/** The sky atlas's commands (docs/AGENT-LINK.md "Atlas"): name "atlas.load" or "atlas.show", args its JSON. 0, or -1. */
+WM_API int wm_atlas(const char *name, const char *args) {
+    if (!s_up || !name) return -1;
+    cJSON *a = args ? cJSON_Parse(args) : NULL;
+    const char *err = !strcmp(name, "atlas.load") ? atlas_load(a) : !strcmp(name, "atlas.show") ? atlas_show(a) : "unknown_command";
+    cJSON_Delete(a);
+    return err ? -1 : 0;
+}
 /** The rhythm's sound made for the last frame: 16 kHz mono samples (wm_rhythm_pcm_n of them), for the page to play. */
 WM_API const int16_t *wm_rhythm_pcm(void) { return s_pcm; }
 WM_API int wm_rhythm_pcm_n(void) { return s_npcm; }

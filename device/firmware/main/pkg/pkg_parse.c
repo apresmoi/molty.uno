@@ -19,7 +19,7 @@
 #define PKG_FREE(p)   free(p)
 #endif
 
-const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot", "beat", "dial", "centre", "wave" };
+const char *const PKG_KIND_NAMES[PK_KINDS] = { "ring", "arc", "ticks", "line", "curve", "disc", "ball", "glyph", "text", "spot", "beat", "dial", "centre", "wave", "atlas" };
 
 /* ── arena: 16 KB blocks, linked; the package struct sits at the head of the first ── */
 
@@ -202,10 +202,10 @@ enum { T_NUM, T_COLOR, T_ASSET, T_IMAGE, T_STR, T_SAY, T_LIST };
 #define KB(k) (1ull << (k))   /* a kind's bit, or a field's (PF_COUNT > 32) */
 #define XY (KB(PK_RING) | KB(PK_ARC) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_GLYPH) | KB(PK_TEXT) | KB(PK_SPOT))
 #define ALL ((1u << PK_KINDS) - 1u)
-#define WHEEL (KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE) | KB(PK_WAVE))   /* the device's own pieces: in no group */
+#define WHEEL (KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE) | KB(PK_WAVE) | KB(PK_ATLAS))   /* the device's own pieces: in no group */
 static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELDS[] = {
     { "x", PF_X, T_NUM, XY }, { "y", PF_Y, T_NUM, XY },
-    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) | KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE) | KB(PK_WAVE) },
+    { "r", PF_R, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_DISC) | KB(PK_BALL) | KB(PK_SPOT) | KB(PK_BEAT) | KB(PK_DIAL) | KB(PK_CENTRE) | KB(PK_WAVE) | KB(PK_ATLAS) },
     { "w", PF_W, T_NUM, KB(PK_RING) | KB(PK_ARC) | KB(PK_TICKS) | KB(PK_LINE) | KB(PK_CURVE) },
     { "a0", PF_A0, T_NUM, KB(PK_ARC) | KB(PK_TICKS) }, { "a1", PF_A1, T_NUM, KB(PK_ARC) },
     { "len", PF_LEN, T_NUM, KB(PK_TICKS) }, { "n", PF_N, T_NUM, KB(PK_TICKS) },
@@ -244,7 +244,7 @@ static const struct { const char *key; uint8_t pf, type; uint16_t kinds; } FIELD
 static const uint64_t REQUIRED[PK_KINDS] = {
     [PK_RING] = KB(PF_R), [PK_ARC] = KB(PF_R) | KB(PF_A0) | KB(PF_A1), [PK_TICKS] = KB(PF_R) | KB(PF_N),
     [PK_DISC] = KB(PF_R), [PK_BALL] = KB(PF_R), [PK_GLYPH] = KB(PF_ASSET) | KB(PF_SIZE), [PK_TEXT] = KB(PF_STR),
-    [PK_SPOT] = KB(PF_R) | KB(PF_SAY), [PK_BEAT] = KB(PF_R), [PK_DIAL] = KB(PF_ID), [PK_CENTRE] = KB(PF_R), [PK_WAVE] = KB(PF_R),
+    [PK_SPOT] = KB(PF_R) | KB(PF_SAY), [PK_BEAT] = KB(PF_R), [PK_DIAL] = KB(PF_ID), [PK_CENTRE] = KB(PF_R), [PK_WAVE] = KB(PF_R), [PK_ATLAS] = KB(PF_R),
 };
 
 typedef struct { const pkg_t *p; const pkg_layout_t *l; bool in_each; arena_t *a; } ictx_t;
@@ -399,8 +399,8 @@ static const char *parse_layout(arena_t *a, const pkg_t *p, const cJSON *j, pkg_
     int beats = 0, centres = 0, dials[2] = { 0, 0 };
     for (int i = 0; i < l->nitems; i++) {
         const pkg_item_t *it = &l->items[i];
-        if ((it->k == PK_BEAT || it->k == PK_WAVE) && it->each >= 0) return "layout: a beat is not repeated";
-        beats += it->k == PK_BEAT || it->k == PK_WAVE; centres += it->k == PK_CENTRE;   /* (a wave is the beat's sibling) */
+        if ((it->k == PK_BEAT || it->k == PK_WAVE || it->k == PK_ATLAS) && it->each >= 0) return "layout: a beat is not repeated";
+        beats += it->k == PK_BEAT || it->k == PK_WAVE || it->k == PK_ATLAS; centres += it->k == PK_CENTRE;   /* (a wave and an atlas are the beat's siblings) */
         if (it->k == PK_DIAL) dials[it->f[PF_FACE].src == PV_NUM && it->f[PF_FACE].num == 1.f]++;
     }
     if (beats > 1 || centres > 1 || dials[0] > 1 || dials[1] > 1) return "layout: one beat, one centre and one dial a face";
