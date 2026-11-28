@@ -239,6 +239,7 @@
         "tap_zone": { "$ref": "#/$defs/tap_zone" },
         "beat_clock": { "$ref": "#/$defs/beat_clock" },
         "wave_ring": { "$ref": "#/$defs/wave_ring" },
+        "sky_atlas": { "$ref": "#/$defs/sky_atlas" },
         "wheel": { "$ref": "#/$defs/wheel" },
         "centre_tap": { "$ref": "#/$defs/centre_tap" },
         "for": { "type": "string", "pattern": "^[a-z][a-z0-9_]* in [a-z][a-z0-9_]*$", "description": "Repeat the shapes in draw for each element: \"body in bodies\". bodies is a list input (repeated on the device) or a data table (repeated by the compiler). Inside, \"{{ body.angle }}\" reads a field.", "errorMessage": "must read like \"body in bodies\"" },
@@ -249,9 +250,9 @@
       "oneOf": [
         { "required": ["for", "draw"], "maxProperties": 2 },
         { "required": ["use"], "propertyNames": { "enum": ["use", "with"] } },
-        { "minProperties": 1, "maxProperties": 1, "propertyNames": { "enum": ["circle", "arc", "ticks", "spoke", "line", "dot", "globe", "symbol", "label", "tap_zone", "beat_clock", "wave_ring", "wheel", "centre_tap"] } }
+        { "minProperties": 1, "maxProperties": 1, "propertyNames": { "enum": ["circle", "arc", "ticks", "spoke", "line", "dot", "globe", "symbol", "label", "tap_zone", "beat_clock", "wave_ring", "sky_atlas", "wheel", "centre_tap"] } }
       ],
-      "errorMessage": "an entry draws one thing: one shape (circle, arc, ticks, spoke, line, dot, globe, symbol, label, tap_zone, beat_clock, wave_ring, wheel, centre_tap), or for with draw, or use (with with)",
+      "errorMessage": "an entry draws one thing: one shape (circle, arc, ticks, spoke, line, dot, globe, symbol, label, tap_zone, beat_clock, wave_ring, sky_atlas, wheel, centre_tap), or for with draw, or use (with with)",
       "description": "One shape (its name is the key), a for block, or a part placed with use."
     },
     "circle": {
@@ -470,6 +471,16 @@
       },
       "description": "The chord Molty's tone player holds, on one circle, from the speaker's own clock: each voice's hits as dots joined as its shape, the hand, and the outline pushed out by the sound the hand drew (the wave, still once the beats are a note); the readout (hits a second, then hertz and the note), the chord's name, its whole numbers up top (a tap on one mutes that voice). In a beat_clock's place: one a screen, its wheels set pitch and pick."
     },
+    "sky_atlas": {
+      "type": "object",
+      "required": ["radius"],
+      "additionalProperties": false,
+      "properties": {
+        "radius": { "$ref": "#/$defs/size", "description": "1: the cards fill the glass (the design's sizes)." },
+        "show": { "$ref": "#/$defs/show" }
+      },
+      "description": "The sky atlas atlas.load sent (the molty-atlas skill): the kinds on the rim, a kind's objects, each object's card (its drawing from real data or a model, its name and numbers, and with a place, where it is now). In a beat_clock's place: one a screen, its wheel steps through the kinds and the objects, its centre_tap opens a kind and turns a card."
+    },
     "wheel": {
       "type": "object",
       "required": ["id"],
@@ -500,7 +511,7 @@
       "properties": {
         "radius": { "$ref": "#/$defs/size", "description": "The zone round the centre. 0.26 keeps clear of a clock's third ring." }
       },
-      "description": "A tap in the middle plays the beat_clock's rhythm (after a count-in), another stops it: stopped, the wheel with face 1 is up. With a wave_ring: the notes, the chords, playing, and back. Needs a beat_clock or a wave_ring on the screen."
+      "description": "A tap in the middle plays the beat_clock's rhythm (after a count-in), another stops it: stopped, the wheel with face 1 is up. With a wave_ring: the notes, the chords, playing, and back. With a sky_atlas: opens a kind, turns a card. Needs a beat_clock, a wave_ring or a sky_atlas on the screen."
     }
   }
 }

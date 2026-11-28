@@ -11,7 +11,7 @@ import { assetPng } from './assets.mjs';
 import { COMMON, READS, SHAPES, TOKENS } from './compile.mjs';
 
 const REPO = fileURLToPath(new URL('../../../', import.meta.url));
-const KIND = { ring: 'circle', arc: 'arc', ticks: 'ticks', line: 'line', curve: 'line', disc: 'dot', ball: 'globe', glyph: 'symbol', text: 'label', spot: 'tap_zone', beat: 'beat_clock', dial: 'wheel', centre: 'centre_tap', wave: 'wave_ring' };
+const KIND = { ring: 'circle', arc: 'arc', ticks: 'ticks', line: 'line', curve: 'line', disc: 'dot', ball: 'globe', glyph: 'symbol', text: 'label', spot: 'tap_zone', beat: 'beat_clock', dial: 'wheel', centre: 'centre_tap', wave: 'wave_ring', atlas: 'sky_atlas' };
 const SPLIT_AT = 5;   // screens: from here on, one file each
 
 // ---- YAML, as much as these files need

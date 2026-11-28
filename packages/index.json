@@ -25,6 +25,21 @@
     "size": 74507,
     "sha256": "cb320aaee9e993ccb861eb8ec8abcedebd112832028abdaf227508b9d5f36dd7"
   },
+  "atlas": {
+    "name": "Sky atlas",
+    "version": "1.0.0",
+    "kind": "scenes",
+    "description": "The night sky's best known objects as cards drawn in dots, and where each is now. Turn the rim to browse, tap the middle to open or turn.",
+    "layouts": [
+      "atlas"
+    ],
+    "skills": [
+      "molty-atlas"
+    ],
+    "path": "packages/atlas/atlas.json",
+    "size": 206,
+    "sha256": "1cfefedf880a64e272b837a310d15e4e2dff206dd739ed0d41c190d903677cb8"
+  },
   "cat": {
     "name": "Cat",
     "version": "2.3.2",

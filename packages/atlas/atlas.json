@@ -1,0 +1,1 @@
+{"v":"molty-pkg/1","id":"atlas","name":"Sky atlas","version":"1.0.0","kind":"scenes","layouts":{"atlas":{"dur":0,"items":[{"k":"atlas","r":1},{"k":"dial","id":"atlas","step":15},{"k":"centre","r":0.55}]}}}

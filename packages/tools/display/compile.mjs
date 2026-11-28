@@ -33,6 +33,7 @@ export const SHAPES = {
   // plays and stops it
   beat_clock: ['beat', { radius: ['r', 'distance'], dot: ['size', 'distance'] }],
   wave_ring: ['wave', { radius: ['r', 'distance'] }],
+  sky_atlas: ['atlas', { radius: ['r', 'distance'] }],
   wheel: ['dial', { id: ['id', 'id'], radius: ['r', 'distance'], grab_from: ['r0', 'distance'], step: ['step', 'angle'], by: ['by', 'number'], fast: ['fast', 'number'],
     min: ['min', 'number'], max: ['max', 'number'], value: ['value', 'number'], face: ['face', 'count'], sets: ['sets', 'sets'], labels: ['labels', 'list'],
     tick_ms: ['tick_ms', 'number'], tick: ['tick', 'number'] }],
