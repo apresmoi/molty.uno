@@ -22,6 +22,8 @@ device (both live and fake) and, with the fake provider, its own log:
   faithful       every voiced agent answer holds all the numbers, names and content words of the agent's text
                  (molty_voice.brief.faithful, the box's own rule), and the box did not report it unfaithful
   reply_end      every reply the box asked for ended "completed" in its log (none cut, cancelled or left without an end)
+  holding        on a handed-off turn the front's line is only a holding line (molty_voice.brief.is_holding: a let-me-check
+                 form or an echo of the request; no answer-like claim, no talk of handing it over)
 """
 
 from __future__ import annotations
@@ -171,6 +173,11 @@ def check(script: Script, entries: list[dict], fake_log: list[dict] | None = Non
             n = len(r["data"].get("said", "").split())
             if n > MAX_REPLY_WORDS:
                 bad.append(f"short: turn {i + 1}'s reply has {n} words (at most {MAX_REPLY_WORDS})")
+        from molty_voice.brief import is_holding
+
+        for r in rs if waiting else []:
+            if not is_holding(r["data"].get("said", ""), utter.get(t.get("job"), "")):
+                bad.append(f"holding: turn {i + 1} was handed off but the front said {r['data'].get('said', '')!r}, not a holding line")
         if i < len(script.turns) and script.turns[i].front == "handoff" and not waiting:
             bad.append(f"handoff: turn {i + 1} ({script.turns[i].heard!r}) asks what only the agent knows and was not handed off")
     for i in range(len(turns), len(script.turns)):

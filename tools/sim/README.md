@@ -71,7 +71,8 @@ reason, and a last turn marked `ends` ended it by its goodbye; a run is given 2 
 question only the agent can answer, was handed off), `faithful` (every voiced agent answer holds
 all the numbers, names and content words of what the agent said; printed "agent said" / "front
 voiced"), `reply_end` (every reply the box asked for ended "completed" in the box's log: none cut,
-cancelled, failed or without an end), `one_reply` (exactly one front response per
+cancelled, failed or without an end), `holding` (on a handed-off turn the front's line is only a holding line: a let-me-check form or
+an echo of the request, no answer-like claim such as "this is" or "I am", no talk of handing it over), `one_reply` (exactly one front response per
 turn), `agent_waiting` (an agent line is voiced only for a turn the front handed off), `never_twice`
 (no agent line spoken twice), `not_over_them` (no response created while the person speaks; fake
 provider only), `not_cut` (no end while a reply is made or the front waits for an answer that comes),

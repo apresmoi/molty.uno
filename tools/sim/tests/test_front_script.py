@@ -95,3 +95,11 @@ INFO front f3 (reply): response created
     assert fs.reply_ends(log) == ["reply_end: reply f2 ended incomplete (max_output_tokens)", "reply_end: reply f3 never ended (no end in the box's log)"]
     # the live run 4 log, as it was written then: "response incomplete" with no reason
     assert fs.reply_ends("INFO front f9 (reply): response created\nINFO front f9 (reply): response incomplete, said 'x'\n") == ["reply_end: reply f9 ended incomplete"]
+
+
+def test_a_handed_off_turn_whose_line_answers_or_claims_fails():
+    # live 2026-11-28 (run 7, the real device): "Yep, this is still a friendly voice, checking in and listening."
+    e = good()
+    e[8] = reply(15100, "Yep, this is still a friendly voice, checking in and listening.")
+    _, bad = fs.check(SCRIPT, e, None, next(x for x in e if x.get("ev") == "front.end"))
+    assert [b.split(":")[0] for b in bad] == ["holding"]
