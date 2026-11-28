@@ -28,6 +28,7 @@ static esp_err_t send_error;
 static const char *field(const char *key) { cJSON *j=cJSON_GetObjectItem(sdk_sent,key); assert(cJSON_IsString(j)); return j->valuestring; }
 static bool link_up=true;
 bool link_client_connected(void) { return link_up; }
+void link_rx_stats(link_rx_stats_t *out) { *out=(link_rx_stats_t){0}; }
 esp_err_t link_send_json(const cJSON *j) {
     cJSON_Delete(sdk_sent); sdk_sent=cJSON_Duplicate(j,true); sent++; return send_error;
 }
@@ -185,6 +186,12 @@ static void receive_pcm(unsigned seq,bool end) {
     int n=link_frame_header((char *)frame,sizeof(frame),&h); assert(n>0);
     memset(frame+n,0x12,10240); /* relay's real 320 ms chunk */
     assert(link_audio_receive(frame,n+10240)==ESP_OK);
+}
+static esp_err_t receive_pcm_raw(unsigned seq,bool end) {
+    uint8_t frame[LINK_MESSAGE_MAX];
+    link_frame_t h={.seq=seq,.end=end}; strcpy(h.stream,s_job);
+    int n=link_frame_header((char *)frame,sizeof(frame),&h); assert(n>0);
+    return link_audio_receive(frame,(size_t)n);
 }
 static void complete(esp_err_t e) { assert(xQueueSend(s_done,&e,0)==pdTRUE); link_audio_tick(); }
 
@@ -943,6 +950,7 @@ static void test_say_stall(void) {
     assert(e==ESP_ERR_TIMEOUT && !atomic_load(&s_cancel) && sdk_written>=5*10240);
     assert(took>=LINK_SAY_DRY_MS*1000ll && took<=(LINK_SAY_DRY_MS+100)*1000ll);
     complete(e); assert(sent==before && !link_audio_busy() && !strcmp(sdk_mood,"idle"));
+    assert(receive_pcm_raw(5,true)==ESP_ERR_INVALID_STATE && s_late);   /* its end, late: ignored, noted */
     audio_job_t job; listen_job(1000,&job); complete(record(&job)); assert(bin_ends==1 && !link_audio_busy());
     /* a slow voice, not a stuck socket: the relay's pong came, the speaker waits LINK_SAY_LIVE_MS (one ping a dry spell) */
     begin_say(); receive_pcm(0,false);
@@ -978,6 +986,40 @@ static void test_front_say(void) {
     esp_err_t e=play(); sdk_on_speaker_write=NULL; sdk_ring_wait=NULL;
     const int64_t took=sdk_now-t0, audio=12ll*320000;
     assert(e==ESP_OK && took<=audio+320000 && cue_ends==1 && cue_last==15);
+    complete(e); assert(!strcmp(field("name"),"say.done") && !link_audio_busy());
+}
+
+/* A long front say (run7, 2026-11-28): 28 words, 8 s of audio in 25 frames sent at the relay's pace (3 frames ahead),
+ * cues on every frame, 24 say_text updates between them (one a word), the end flag on the last frame. Every frame and
+ * every text is taken as it comes, the say ends on time (its audio and a frame), all 28 words cued, say.done. */
+static const char *const LONG28 = "w0 w1 w2 w3 w4 w5 w6 w7 w8 w9 w10 w11 w12 w13 w14 w15 w16 w17 w18 w19 w20 w21 w22 w23 w24 w25 w26 w27";
+static int64_t relay_t0; static unsigned relay_frames, relay_texts; static bool relay_ok;
+static void relay_pump(void) {
+    for (; relay_frames<25 && sdk_now-relay_t0>=(relay_frames>3 ? (int64_t)(relay_frames-3)*320000 : 0); relay_frames++) {
+        char w[160]="["; size_t at=1;
+        for (unsigned k=0;k<28;k++) { const unsigned smp=k*128000u/28u;
+            if (smp>=relay_frames*5120u && smp<(relay_frames+1)*5120u) at+=(size_t)snprintf(w+at,sizeof(w)-at,"%s[%u,%u]",at>1?",":"",k,smp); }
+        snprintf(w+at,sizeof(w)-at,"]");
+        relay_ok&=receive_cued(relay_frames,relay_frames==24,at>1?w:NULL)==ESP_OK;
+    }
+    for (; relay_texts<24 && sdk_now-relay_t0>=(int64_t)(relay_texts+1)*300000; relay_texts++) {
+        char t[160]; const char *sp=LONG28; for (unsigned k=0;k<5+relay_texts && sp;k++) sp=strchr(sp+1,' ');
+        snprintf(t,sizeof(t),"%.*s",sp?(int)(sp-LONG28):(int)strlen(LONG28),LONG28);
+        esp_err_t e; relay_ok&=say_text(s_job,t,&e) && e==ESP_OK;
+    }
+}
+static void relay_write(const int16_t *pcm, size_t n) { advance_by_audio(pcm,n); relay_pump(); }
+static void test_long_front_say(void) {
+    cJSON *args=cJSON_Parse("{\"job\":\"j_long\",\"text\":\"w0 w1 w2 w3\",\"ms\":8000,\"rate\":16000,\"cues\":true}"),*res=NULL;
+    sdk_text[0]=0; cue_n=0; cue_ends=0; cue_last=-9; glass_at=0;
+    assert(link_audio_say(args,&res)==ESP_OK); cJSON_Delete(args); cJSON_Delete(res);
+    audio_job_t job; assert(xQueueReceive(s_jobs,&job,0)==pdTRUE);
+    relay_t0=stall_t0=sdk_now; relay_frames=relay_texts=0; relay_ok=true; relay_pump();
+    sdk_on_speaker_write=relay_write; sdk_ring_wait=stall_wait;
+    esp_err_t e=play(); sdk_on_speaker_write=NULL; sdk_ring_wait=NULL;
+    const int64_t took=sdk_now-relay_t0;
+    assert(e==ESP_OK && relay_ok && relay_frames==25 && relay_texts==24 && !strcmp(sdk_text,LONG28));
+    assert(took>=8000000 && took<=8000000+320000 && cue_ends==1 && cue_last==27);
     complete(e); assert(!strcmp(field("name"),"say.done") && !link_audio_busy());
 }
 
@@ -1289,7 +1331,7 @@ int main(void) {
     sdk_count_cjson();                    /* the soak counts cJSON blocks too */
     assert(link_audio_init()==ESP_OK && link_pair_init()==ESP_OK);
     s_up_inline = true;   /* no sender task on the host: record() sends as it queues */
-    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_text(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_front_say(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
+    test_say(); test_mood_survives(); test_pair(); test_unsupported(); test_ring(); test_ring_color(); test_ask_cancel(); test_listen_stop(); test_listen_window(); test_say_cues(); test_say_text(); test_say_gate(); test_say_marks(); test_chirp_sound(); test_ack(); test_shake_talk(); test_tap_and_watchdog(); test_say_stall(); test_front_say(); test_long_front_say(); test_link_drop(); test_shake_settle(); test_resend(); test_reactions(); test_soak();
     /* activity log: every accepted job (done, failed, cancelled, refused frames, adopted shakes) ended its tag */
     assert(sdk_job_begins>0 && sdk_job_begins==sdk_job_ends);
     cJSON_Delete(sdk_sent); free(s_jobs); free(s_done); free(s_ring);

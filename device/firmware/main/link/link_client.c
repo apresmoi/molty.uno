@@ -42,8 +42,21 @@ static uint8_t *s_rx;
 static size_t s_rx_len, s_frame_offset;
 static uint8_t s_opcode;
 typedef struct { uint8_t *data; size_t len; uint8_t opcode; bool open; } rx_msg_t;
+static atomic_uint s_rx_n, s_rx_drop, s_rx_most, s_turn_us;   /* link_rx_stats */
 
 bool link_client_connected(void) { return atomic_load(&s_connected); }
+
+void link_rx_stats(link_rx_stats_t *out)
+{
+    out->msgs = atomic_exchange(&s_rx_n, 0); out->drops = atomic_exchange(&s_rx_drop, 0);
+    out->most = atomic_exchange(&s_rx_most, 0); out->turn_ms = atomic_exchange(&s_turn_us, 0) / 1000;
+}
+
+static void at_most(atomic_uint *v, unsigned x)
+{
+    unsigned was = atomic_load(v);
+    while (x > was && !atomic_compare_exchange_weak(v, &was, x)) {}
+}
 
 /* ── activity log uploads (docs/AGENT-LINK.md "Activity log"; link task only) ──
  * The relay's welcome says whether it takes {"t":"log"} frames (log.max_lines; an older
@@ -182,7 +195,8 @@ static void websocket_event(void *arg, esp_event_base_t base, int32_t id, void *
     if (d->fin && s_frame_offset == (size_t)d->payload_len) {
         s_rx[s_rx_len] = 0;
         rx_msg_t m = {.data = s_rx, .len = s_rx_len, .opcode = s_opcode};
-        if (xQueueSend(s_rxq, &m, pdMS_TO_TICKS(750)) != pdTRUE) { free(s_rx); atomic_store(&s_lost, true); }
+        if (xQueueSend(s_rxq, &m, pdMS_TO_TICKS(750)) != pdTRUE) { free(s_rx); atomic_store(&s_lost, true); atomic_fetch_add(&s_rx_drop, 1); }
+        else { atomic_fetch_add(&s_rx_n, 1); at_most(&s_rx_most, (unsigned)uxQueueMessagesWaiting(s_rxq)); }
         s_rx = NULL; s_rx_len = 0; s_opcode = 0;
     }
 }
@@ -377,7 +391,10 @@ static void link_task(void *arg)
             if (connect_session() != ESP_OK) atomic_store(&s_lost, true);
         }
         rx_msg_t m;
-        if (xQueueReceive(s_rxq, &m, pdMS_TO_TICKS(50)) == pdTRUE) {
+        const int64_t w0 = esp_timer_get_time();
+        const bool got = xQueueReceive(s_rxq, &m, pdMS_TO_TICKS(50)) == pdTRUE;
+        const int64_t w1 = esp_timer_get_time();
+        if (got) {
             if (m.open) {
                 xSemaphoreTake(s_config, portMAX_DELAY);
                 cJSON *hello = link_identity_hello();
@@ -429,6 +446,7 @@ static void link_task(void *arg)
             if (link_send_json(ping) != ESP_OK) atomic_store(&s_lost, true);
             cJSON_Delete(ping); last_ping = now;
         }
+        at_most(&s_turn_us, (unsigned)(esp_timer_get_time() - now - (w1 - w0)));   /* (this turn, its wait left out) */
     }
 }
 
