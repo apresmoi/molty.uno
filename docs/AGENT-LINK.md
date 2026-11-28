@@ -1868,17 +1868,20 @@ line), IDLE (no session).
    turn detection went off right after the turn's end). A turn has one end: the model's and
    Molty's may arrive in either order or together, the first wins and the second is a no-op (no
    second, empty commit); a provider error fails only the request it names (`event_id`). A plain
-   reply is one short sentence (at most about 12 words). **Filler by default, by rule:** the turn
-   is the agent's (WAITING) unless every phrase of the person's words is small talk (greetings,
-   how-are-you, thanks, acknowledgements, goodbyes, hums: `molty_voice/brief.py` `answers_alone`),
-   whether or not the model called its hand-off tool; the reply's end waits for the transcript for
-   that (1 s at most; it comes about 0.3 s after the turn). No output token cap on a reply: live,
-   one cut two replies before their hand-off call. Every response's end is logged with its status
-   and reason. **Never silence:** a handed-off reply that said (almost) nothing is followed at once,
-   in the same stream, by a holding line on the person's words (out of band, tools off), and if that
-   is empty too by a fixed one read aloud ("Okay, let me check."). **A bare hum** (a very short turn
-   whose words are only "hmm", "uh", "okay") gets "Mm-hm?" read aloud, and Molty listens again: its
-   reply waits for the words (0.4 s at most; only turns under 0.9 s of speech).
+   reply is one short sentence (at most about 12 words). **The branch is decided by rule FIRST**:
+   the reply waits for the person's words (0.45 s at most; they came 0.18 to 0.41 s after the commit
+   live), then ONE response is made already told what it is: small talk (every phrase is a greeting,
+   how-are-you, thanks, acknowledgement or goodbye: `molty_voice/brief.py` `answers_alone`; "is
+   this Dude?" too, once the agent has set its persona) is the front's own short reply, tools off;
+   a bare hum ("hmm", "uh", "okay") is "Mm-hm?" read aloud; everything else is the agent's turn
+   (WAITING): a holding line only, out of band on the person's words, instructions that forbid any
+   answer, claim, self-description or talk of handing over, and require naming what they asked
+   ("Okay, your calendar, let me check."). No words in time: a fixed holding line read aloud. The
+   model has no hand-off tool and never decides it (live, a model answered a question itself and the
+   agent's answer followed: two answers). This costs the transcript's wait before the first sound
+   (about a quarter second). Every response's end is logged with its status and reason. **Never
+   silence:** a holding line that came back (almost) empty is followed at once, in the same stream,
+   by a fixed one read aloud ("Okay, let me check.").
 2. **An agent line that replies to turn T** (`in_reply_to`) is voiced only when the front is
    WAITING for T: at once, a short bridge ("Ok, got it:", the box's own) and the agent's words,
    then LISTENING. A voiced agent line is a read-aloud job out of band (`response.create` with
@@ -1972,7 +1975,8 @@ sends `listen_stop {reason:"turn_end"}` at once. The box's `front.reply` plays a
 the moment the device's listen is over (its end frame, ≤ 600 ms): `cmd say` waits for the first
 audio, then at most 150 ms for its transcript, and shows those words. Firmware with the cap
 `say_text` gets the rest as the model speaks it: `cmd say_text {job, text}` with the say's whole
-text so far (whole words, each continuing the last; at most every 100 ms, the final text always,
+text so far (whole words, each continuing the last; at most every 300 ms and never waiting for the
+device's answer to the last one, the final text always,
 none after the say ended or after `taken: false`; a transcript that changed words already sent
 stops it), and every word is cued. Older firmware shows only the first words. Word cues are
 estimated by the box from when each word's text arrived, word i of the same whitespace-split text. No auto filler, no first words: the front answered.
@@ -2007,11 +2011,18 @@ estimated by the box from when each word's text arrived, word i of the same whit
   The claim rule keeps its meaning: only an answer the relay admits to the speaker queue claims
   the turn (`turn_claimed` for the other agents as before). A say / talk while Molty is offline is
   `device_offline` and opens no box session.
-- `front {context?, persona?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` =
-  facts the front may use (nothing is said now; the box keeps it across sessions); with `persona:
-  true` it is the agent's standing persona line (at most 500 characters: who the agent is and how
-  it talks), kept per device in the relay's storage (KV `front:persona`) and given to every box
-  that connects, so the front sounds like the agent; `end: true` ends the conversation.
+- `front {context?, persona? | facts?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`):
+  `context` = facts the front may use (nothing is said now; the box keeps it across sessions).
+  **Who the front speaks for**, the handshake: with `persona: true` the context is who the agent is
+  and how it talks (2 or 3 sentences, at most 1500 characters), with `facts: true` its 3 to 5 fresh
+  facts (what it is doing, recent memories; at most 1500 characters, replaced whenever they change).
+  The relay keeps both per device (KV `front:persona`, `front:facts`; the persona prefixed with the
+  agent's paired name, "Your agent's name: Dude.") and gives them to every box that connects; the box
+  puts them in each session's instructions as background, never recited (both full: about 750 text
+  tokens a response, cached after the first, well under a cent a session). Until the agent sets its
+  persona, the front is an unnamed, neutral voice (it never claims to be anyone) and every
+  utterance's `front.role` says how to set it (an agent with an old skill reads it too); once set,
+  the front may answer "is this Dude?" itself, from it. `end: true` ends the conversation.
   `{skipped:"front_off", reason}` when the front is not serving.
 - The agent never answers a `waiting` turn: after 8 s Molty says it is still on it, once, naming
   the task (`tts front:"wait"`), then listens again (a new turn from the person wins). Molty shows
