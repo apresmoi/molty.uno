@@ -106,6 +106,8 @@ static const float HALO_LEVEL[HALO_REACH + 1] = { 0.55f, 0.55f, 0.45f, 0.36f }; 
 #define KEY_HD    0x8000u     /* | weight << 8 | dots: a scene's shapes at weight / HD_LEVELS,
                                * its dots over them                                       */
 static inline bool key_hd(uint16_t key) { return (key & 0xF000u) == KEY_HD; }
+/* a cell of the drawing whose cache is not made yet */
+static inline bool cache_wanted(const fluid_draw_t *d, int k) { return !d->hdcv[k] && key_hd(d->key[k]) && (d->key[k] >> 8 & 15); }
 
 const char *const FLUID_PAL_NAMES[FLUID_PAL_COUNT]   = { "green", "amber", "pastel" };
 const char *const FLUID_EDGE_NAMES[FLUID_EDGE_COUNT] = { "off", "contours", "all" };
@@ -999,11 +1001,14 @@ static inline bool hd_still(const fluid_frame_t *s, const fluid_draw_opts_t *o, 
 
 /* the cells under fb box b, redrawn next (KEY_STALE), marked as s_stale's (a shape's change: the growth's, a word's) */
 static uint8_t s_stale = FLUID_ANIM_GROW;
+#define WHY_LEAD 0x80u                                  /* (in d->why beside the animations' bits: a mover's cell, FLUID_TAG_LEAD) */
+_Static_assert(FLUID_ANIM_N <= 7, "a bit of why for the mover");
+static uint8_t s_lead;                                  /* WHY_LEAD while a mover's cells are marked */
 static void stale_box(fluid_draw_t *d, const int16_t *b) {
     const float kx = (float)d->W / d->stage, ky = (float)d->H / d->stage;
     int i0 = (int)floorf((b[0] - d->ox) * kx), i1 = (int)ceilf((b[1] - d->ox) * kx), j0 = (int)floorf((b[2] - d->oy) * ky), j1 = (int)ceilf((b[3] - d->oy) * ky);
     i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
-    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
+    for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale | s_lead); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
 }
 /* the cells a shape covers redrawn next: a stroke's own cells only (a long diagonal's box is most of the panel), the
  * others' box */
@@ -1015,7 +1020,7 @@ static void stale_shape(fluid_draw_t *d, const fluid_shape_t *sh, const int16_t 
         i0 = i0 < 0 ? 0 : i0; j0 = j0 < 0 ? 0 : j0; i1 = i1 > d->W ? d->W : i1; j1 = j1 > d->H ? d->H : j1;
         for (int j = j0; j < j1; j++) for (int i = i0; i < i1; i++) {
             const float ex = (i + 0.5f) * cw - sh->x, ey = (j + 0.5f) * ch - sh->y, dc = sqrtf(ex * ex + ey * ey) - sh->r;
-            if (fabsf(dc) <= reach) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
+            if (fabsf(dc) <= reach) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale | s_lead); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
         }
         return;
     }
@@ -1029,7 +1034,7 @@ static void stale_shape(fluid_draw_t *d, const fluid_shape_t *sh, const int16_t 
         float u = l2 > 1e-6f ? ((px - sh->x) * vx + (py - sh->y) * vy) / l2 : 0.f;
         u = u < 0.f ? 0.f : u > 1.f ? 1.f : u;
         const float ex = px - sh->x - u * vx, ey = py - sh->y - u * vy;
-        if (ex * ex + ey * ey <= reach * reach) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
+        if (ex * ex + ey * ey <= reach * reach) { d->key[j * d->W + i] = KEY_STALE; d->why[j * d->W + i] |= (uint8_t)(1u << s_stale | s_lead); if (d->hdcv) d->hdcv[j * d->W + i] = 0; }
     }
 }
 static uint32_t shape_hash(const fluid_shape_t *sh) {
@@ -1194,13 +1199,18 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
         /* (the light holds still while the picture changes, and on the dots while a wave moves more than they send in
          * two frames: the eye is on the wave; it goes on from there after, never all at once) */
         if (o->fine && !o->fine->ahead) {               /* its fine dust instead of the haze (or worked out ahead on the sim task) */
-            o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2);
+            o->fine->pause = d->m.on || (d->sd_kind && d->sd_m > 2) || o->fine->hold;
             fluid_fine_frame(o->fine, s, o);
         }
         if (d->sd_kind) sd_alive(d, o);
         else caption_box(d, o);
         hold_box(d, o);
         if (d->force && d->hdcv) memset(d->hdcv, 0, (size_t)W * H);   /* the drawing's cache, drawn again */
+        /* a change just ended: the cells of the drawing it drew without it (no line of its new picture there: a hairline
+         * too faint for one, its cache never made) drawn again, over the next frames. The fine dust's drift would redraw
+         * them now and then; held still (fluid_fine_t.hold), nothing would */
+        if (d->morphed && !d->m.on && d->hdcv && o->fine && o->fine->hold) for (int k = 0; k < W * H; k++) if (cache_wanted(d, k)) d->key[k] = KEY_STALE;
+        d->morphed = d->m.on;
         /* a shape that changed (a tapped spot's drawing growing), came or went: the cells it covered and covers. The two
          * lists are walked together, so a shape that comes or goes in the middle (an aspect's rings, lit by a tap) leaves
          * those after it as they are: by their place in the list every one of them would count as changed. (The caption's
@@ -1211,8 +1221,8 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
             enum { AHEAD = 24 };
             uint32_t *h1 = d->sh1;                          /* (shape_boxes) */
             uint8_t *const cache = d->hdcv;
-#define GONE(q) do { if (d->shp0[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; s_stale = d->shp0[q].tag == FLUID_TAG_CAPTION ? FLUID_ANIM_WORD : FLUID_ANIM_GROW; stale_shape(d, &d->shp0[q], d->sb0[q]); d->hdcv = cache; } while (0)
-#define CAME(q) do { if (o->shapes[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; s_stale = o->shapes[q].tag == FLUID_TAG_CAPTION ? FLUID_ANIM_WORD : FLUID_ANIM_GROW; stale_shape(d, &o->shapes[q], d->sb[q]); d->hdcv = cache; } while (0)
+#define GONE(q) do { if (d->shp0[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; s_stale = d->shp0[q].tag == FLUID_TAG_CAPTION ? FLUID_ANIM_WORD : FLUID_ANIM_GROW; s_lead = d->shp0[q].tag == FLUID_TAG_LEAD ? WHY_LEAD : 0; stale_shape(d, &d->shp0[q], d->sb0[q]); d->hdcv = cache; s_lead = 0; } while (0)
+#define CAME(q) do { if (o->shapes[q].tag == FLUID_TAG_CAPTION) d->hdcv = NULL; s_stale = o->shapes[q].tag == FLUID_TAG_CAPTION ? FLUID_ANIM_WORD : FLUID_ANIM_GROW; s_lead = o->shapes[q].tag == FLUID_TAG_LEAD ? WHY_LEAD : 0; stale_shape(d, &o->shapes[q], d->sb[q]); d->hdcv = cache; s_lead = 0; } while (0)
             int i = 0, j = 0;                               /* this frame's, the last one's */
             if (d->m.on) {                                  /* (a change's one pass: the whole look is new, every cell stale) */
                 for (int k = 0; k < W * H; k++) d->key[k] = KEY_STALE;
@@ -1430,9 +1440,9 @@ int fluid_draw_cells(fluid_draw_t *d, const fluid_frame_t *s, const fluid_draw_o
      * only its whole cells show the look) */
     d->anim_on = d->m.on ? 1u << FLUID_ANIM_WAVE : 0; d->anim_late = 0;
     for (int k = 0; k < W * H; k++) {
-        if (!d->why[k]) continue;
-        d->anim_on |= d->why[k];
-        if (!d->dirty[k] && !d->m.on) d->anim_late |= d->why[k];
+        if (!(d->why[k] & ~WHY_LEAD)) continue;
+        d->anim_on |= d->why[k] & ~WHY_LEAD;
+        if (!d->dirty[k] && !d->m.on) d->anim_late |= d->why[k] & ~WHY_LEAD;
     }
     return drawn;
 }
@@ -1534,12 +1544,31 @@ static inline void blend565(uint16_t *px, uint16_t c, int a) {
  * at its weight (wt, 0..HD_LEVELS: its cell's; NULL whole), each shape over what is under it. A ring, a
  * disc or a stroke visits only the pixels of the row it can reach. A caption letter shows only the pixels
  * that formed (their hash under 1 - unformed: a dithered order). */
+/* what a shape's rows share, made once for the rows of a cell (hdc_cell) instead of on each: its colour, and a stroke's
+ * divides and root (the same operations as on a row, so the same floats) */
+typedef struct { uint16_t le; float il2, il, inx; } shape_prep_t;
+static void shape_prep(const fluid_shape_t *sh, int pal, shape_prep_t *p) {
+    float c[3];
+    shape_rgb(sh, pal, c);
+    p->le = (uint16_t)(((int)c[0] & 0xF8) << 8 | ((int)c[1] & 0xFC) << 3 | (int)c[2] >> 3);
+    p->il2 = p->il = p->inx = 0.f;
+    if (sh->k != FLUID_SHAPE_SEG) return;
+    const float vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
+    p->il2 = l2 > 1e-6f ? 1.f / l2 : 0.f;
+    if (fabsf(vy) > 1e-3f) { p->il = 1.f / fsqrt(l2); p->inx = 1.f / (-vy * p->il); }
+}
+static void shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                       float unformed, const float *dim, const shape_prep_t *prep, uint16_t *row, int bx, int y, int xa, int xb);
 void fluid_shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
                       float unformed, uint16_t *row, int bx, int y, int xa, int xb) {
-    fluid_shapes_row_dim(shapes, nshapes, box, ox, oy, palette, wt, unformed, NULL, row, bx, y, xa, xb);
+    shapes_row(shapes, nshapes, box, ox, oy, palette, wt, unformed, NULL, NULL, row, bx, y, xa, xb);
 }
 void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
                           float unformed, const float *dim, uint16_t *row, int bx, int y, int xa, int xb) {
+    shapes_row(shapes, nshapes, box, ox, oy, palette, wt, unformed, dim, NULL, row, bx, y, xa, xb);
+}
+static void shapes_row(const fluid_shape_t *shapes, int nshapes, const int16_t (*box)[4], int ox, int oy, int palette, const uint8_t *wt,
+                       float unformed, const float *dim, const shape_prep_t *prep, uint16_t *row, int bx, int y, int xa, int xb) {
     const int pal = (palette >= 0 && palette < FLUID_PAL_COUNT) ? palette : FLUID_PAL_PASTEL;
     const float Y = (float)(y - oy) + 0.5f;
     /* the caption's backdrop over the drawing on this row: how far it reaches (none: dim NULL or off the row) */
@@ -1562,9 +1591,10 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
             if (xi > 0.f) { span[1][0] = cx + xi; span[1][1] = cx + xo + 1.f; }
         } else if (sh->k == FLUID_SHAPE_SEG) {
             const float vx = sh->x1 - sh->x, vy = sh->y1 - sh->y, l2 = vx * vx + vy * vy;
-            il2 = l2 > 1e-6f ? 1.f / l2 : 0.f;
+            il2 = prep ? prep[n].il2 : l2 > 1e-6f ? 1.f / l2 : 0.f;
             if (fabsf(vy) > 1e-3f) {                    /* not level: where the band crosses the row */
-                const float il = 1.f / fsqrt(l2), nx = -vy * il, ny = vx * il, reach = sh->hw + 1.f, c = ny * (Y - sh->y), inx = 1.f / nx;
+                const float il = prep ? prep[n].il : 1.f / fsqrt(l2), ny = vx * il, reach = sh->hw + 1.f, c = ny * (Y - sh->y),
+                            inx = prep ? prep[n].inx : 1.f / (-vy * il);
                 const float p = (-reach - c) * inx, q = (reach - c) * inx;
                 const float lo = ox + sh->x + (p < q ? p : q) - 1.f, hi = ox + sh->x + (p < q ? q : p) + 2.f;
                 if (lo > span[0][0]) span[0][0] = lo;
@@ -1577,9 +1607,9 @@ void fluid_shapes_row_dim(const fluid_shape_t *shapes, int nshapes, const int16_
             du = sh->co / sh->w * sh->mw; dv = sh->si / sh->h * sh->mh;
         }
         const bool mask = sh->k == FLUID_SHAPE_MASK || sh->k == FLUID_SHAPE_CHAR;
-        float c[3];
-        shape_rgb(sh, pal, c);
-        const uint16_t le = (uint16_t)(((int)c[0] & 0xF8) << 8 | ((int)c[1] & 0xFC) << 3 | (int)c[2] >> 3);
+        uint16_t le;
+        if (prep) le = prep[n].le;
+        else { float c[3]; shape_rgb(sh, pal, c); le = (uint16_t)(((int)c[0] & 0xF8) << 8 | ((int)c[1] & 0xFC) << 3 | (int)c[2] >> 3); }
         for (int q = 0; q < 2; q++) {
             if (span[q][1] <= span[q][0]) continue;
             int l = span[q][0] < -1000.f ? -1000 : ifloor(span[q][0]), r = span[q][1] > 5000.f ? 5000 : iceil(span[q][1]);
@@ -1614,9 +1644,10 @@ static bool hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int nca
      * PSRAM (the drawer's stack is small) */
     enum { NEAR = 96 };                                 /* (past it every shape is tried on each row: at the chart's middle, where
                                                          * its lines meet, that drew a cell in ~10 ms on the device) */
-    if (!d->near) d->near = FLUID_CALLOC((sizeof(fluid_shape_t) + sizeof(int16_t[4])) * NEAR);
+    if (!d->near) d->near = FLUID_CALLOC((sizeof(fluid_shape_t) + sizeof(int16_t[4]) + sizeof(shape_prep_t)) * NEAR);
     fluid_shape_t *sh = d->near;
     int16_t (*box)[4] = (int16_t (*)[4])(sh + NEAR);
+    shape_prep_t *prep = (shape_prep_t *)(box + NEAR);
     int n = d->near ? 0 : NEAR + 1;
     const float ccx = (x0 + x1) * 0.5f - d->ox, ccy = (y0 + y1) * 0.5f - d->oy;   /* its centre (stage px) and half diagonal */
     const float hx = (x1 - x0) * 0.5f, hy = (y1 - y0) * 0.5f, reach = fsqrt(hx * hx + hy * hy) + 1.5f;
@@ -1638,14 +1669,14 @@ static bool hdc_cell(fluid_draw_t *d, const fluid_draw_opts_t *o, int k, int nca
             const float lim = sq->r + reach;
             if ((ccx - sq->x) * (ccx - sq->x) + (ccy - sq->y) * (ccy - sq->y) > lim * lim) continue;
         }
-        if (n < NEAR) { sh[n] = o->shapes[q]; memcpy(box[n], b, sizeof(box[n])); }
+        if (n < NEAR) { sh[n] = o->shapes[q]; memcpy(box[n], b, sizeof(box[n])); shape_prep(&sh[n], o->palette >= 0 && o->palette < FLUID_PAL_COUNT ? o->palette : FLUID_PAL_PASTEL, &prep[n]); }
         n++;
     }
     for (int y = y0; y < y1; y++) {
         uint16_t *row = d->hdc + (size_t)y * d->fb_w;
         memset(row + x0, 0, sizeof(uint16_t) * (size_t)(x1 - x0));
         if (n > NEAR) fluid_shapes_row(o->shapes, ncache, (const int16_t (*)[4])d->sb, d->ox, d->oy, o->palette, NULL, 0.f, row, 0, y, x0, x1);
-        else if (n) fluid_shapes_row(sh, n, (const int16_t (*)[4])box, d->ox, d->oy, o->palette, NULL, 0.f, row, 0, y, x0, x1);
+        else if (n) shapes_row(sh, n, (const int16_t (*)[4])box, d->ox, d->oy, o->palette, NULL, 0.f, NULL, prep, row, 0, y, x0, x1);
     }
     d->hdcv[k] = n > 0 ? 2 : 1;                         /* (1: nothing of the drawing reaches it, black) */
     d->nbuilt++;
@@ -3673,23 +3704,33 @@ static int crisp_send(const fluid_draw_t *d, const fluid_draw_opts_t *o, const f
  * shape change) arrives over two or three frames, never as one long one. Every frame of a tap or a reading stays under
  * the bound (bench6: 15-31 kpx drawn a frame). A light frame makes the cache ahead (GLASS_AHEAD_US). */
 #define GLASS_CACHE_US 8000
+#define GLASS_CACHE_HOLD_US 11000                       /* .. with the dust held still (a wave): its sends are a few kpx, its
+                                                         * frame has the room the dust's would take */
 #define GLASS_DRAW_PX  40000                            /* (~19 ms at bench4's 0.47 us a px drawn into the glass) */
 #define GLASS_LIGHT_US 12000
 #define GLASS_AHEAD_US 3000
 static inline int cell_px(const fluid_draw_t *d, int k) { return (d->cx[k % d->W + 1] - d->cx[k % d->W]) * (d->cy[k / d->W + 1] - d->cy[k / d->W]); }
-static inline bool cache_wanted(const fluid_draw_t *d, int k) { return !d->hdcv[k] && key_hd(d->key[k]) && (d->key[k] >> 8 & 15); }
 static void glass_cache(fluid_draw_t *d, const fluid_draw_opts_t *o, int64_t t0) {
     const int N = d->W * d->H, nc = cache_shapes(o);
     if (!hdc_room(d)) return;
-    for (int q = 0, k = 0; q < N; q++, k = (k + 997) % N) {   /* (997: prime to the grid's cells, a scattered order) */
-        if (!d->dirty[k]) continue;
+    for (int q = 0; q < N; q++) {                       /* a mover's cells first, whatever the time: few, and whole */
+        if (!d->dirty[q] || !(d->why[q] & WHY_LEAD)) continue;
+        if (cache_wanted(d, q)) hdc_cell(d, o, q, nc);
+        d->ndrawn += cell_px(d, q);
+    }
+    /* (997: prime to the grid's cells, a scattered order; from where it ran out last frame, so no cell waits for long) */
+    const int k0 = d->owe_k >= 0 && d->owe_k < N ? d->owe_k : 0;
+    d->owe_k = -1;
+    for (int q = 0, k = k0; q < N; q++, k = (k + 997) % N) {
+        if (!d->dirty[k] || (d->why[k] & WHY_LEAD)) continue;
         const int px = cell_px(d, k);
-        if (d->ndrawn + px <= GLASS_DRAW_PX && (!cache_wanted(d, k) || now_us() - t0 < GLASS_CACHE_US)) {
+        if (d->ndrawn + px <= GLASS_DRAW_PX && (!cache_wanted(d, k) || now_us() - t0 < (o->fine && o->fine->hold ? GLASS_CACHE_HOLD_US : GLASS_CACHE_US))) {
             if (cache_wanted(d, k)) hdc_cell(d, o, k, nc);
             d->ndrawn += px;
             continue;
         }
-        d->dirty[k] = 0; d->owe[k] = 1; d->nowed++; d->anim_late |= d->why[k];
+        if (d->owe_k < 0) d->owe_k = k;
+        d->dirty[k] = 0; d->owe[k] = 1; d->nowed++; d->anim_late |= d->why[k] & ~WHY_LEAD;
     }
 }
 /* the changed cells whose dust alone moved, over black or over their drawing as cached (no dot or letter in them; by the

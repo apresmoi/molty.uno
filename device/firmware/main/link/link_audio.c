@@ -62,6 +62,9 @@ static volatile uint32_t s_stat_last, s_stat_gap;       /* diag: a say's last fr
 /* the speaker gone dry asks whether the relay still hears it: a ping (the link task, link_audio_probe), its pong */
 static atomic_bool s_probe;
 static atomic_uint s_pong_ms;
+static uint32_t s_probe_at;                             /* diag: a say's ping, ms into it (0: none) */
+static uint32_t s_text_n, s_text_us;                    /* diag: a say's say_text commands, their time (link task) */
+static bool s_late;                                     /* diag: a frame of the say came after it ended (link task) */
 static const char *s_end_reason;                       /* diag: why the last listen ended */
 static uint32_t s_speech_ms;
 static unsigned s_mood_gen0;                           /* link_cmd_mood_gen() when the job started */
@@ -196,7 +199,10 @@ static bool say_dry(int64_t *fed, uint32_t *probe, bool started)
         return now - s_held_at > (int64_t)LINK_RESUME_WINDOW_MS * 1000;
     }
     const uint32_t dry = (uint32_t)((now - *fed) / 1000);
-    if (started && dry >= LINK_SAY_PROBE_MS && !*probe) { *probe = (uint32_t)(now / 1000) | 1u; atomic_store(&s_probe, true); }
+    if (started && dry >= LINK_SAY_PROBE_MS && !*probe) {
+        *probe = (uint32_t)(now / 1000) | 1u; atomic_store(&s_probe, true);
+        if (!s_probe_at) s_probe_at = *probe - s_job_t0_ms;
+    }
     return link_say_stalled(dry, started, *probe && (int32_t)(atomic_load(&s_pong_ms) - *probe) >= 0);
 }
 
@@ -797,9 +803,18 @@ static void run_job(const audio_job_t *job)
                         "audio.listen end %s took=%ums frames=%u bytes=%u reason=%s speech_ms=%u ack=%s fail=%u drop=%u",
                         esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes,
                         s_end_reason, (unsigned)s_speech_ms, link_ack_name(s_ack), (unsigned)s_up.fail, (unsigned)s_up.drop);
-    else
+    else {
         mole_diag_event(e != ESP_OK, "audio.say end %s took=%ums frames=%u bytes=%u last=%ums gap=%ums",
                         esp_err_to_name(e), took, (unsigned)s_stat_frames, (unsigned)s_stat_bytes, (unsigned)s_stat_last, (unsigned)s_stat_gap);
+        /* what the link did meanwhile (link_rx_stats): rx / dropped / the queue's most / the link task's longest turn; the
+         * say_text commands and their time; the end frame seen; the dry say's ping and the relay's pong (ms into it, -) */
+        link_rx_stats_t rx; link_rx_stats(&rx);
+        const uint32_t pong = atomic_load(&s_pong_ms) - s_job_t0_ms;
+        const bool ponged = s_probe_at && pong >= s_probe_at && pong < took + 1000u;
+        mole_diag_event(e != ESP_OK, "audio.say link rx=%u drop=%u q=%u turn=%ums text=%u/%ums end=%d ping=%d pong=%d",
+                        rx.msgs, rx.drops, rx.most, rx.turn_ms, (unsigned)s_text_n, (unsigned)(s_text_us / 1000),
+                        atomic_load(&s_end), s_probe_at ? (int)s_probe_at : -1, ponged ? (int)pong : -1);
+    }
     drain();
     const bool chirp = job->listen && s_ack == LINK_ACK_CHIRP;
     atomic_store(&s_chirp_cut, false);   /* before done: only a job accepted after it cuts */
@@ -846,8 +861,9 @@ esp_err_t link_audio_init(void)
         if (xTaskCreatePinnedToCoreWithCaps(up_task, "link_up", 6144, NULL, 4, NULL, tskNO_AFFINITY,
                                             MALLOC_CAP_SPIRAM) != pdPASS) return ESP_ERR_NO_MEM;
     }
-    /* PSRAM stack: no flash ops on this task; internal RAM is the scarce one */
-    return xTaskCreatePinnedToCoreWithCaps(audio_task, "link_audio", 6144, NULL, 4, NULL, tskNO_AFFINITY,
+    /* PSRAM stack: no flash ops on this task; internal RAM is the scarce one. On core 1, beside the sim (which waits on
+     * the panel's pulse a third of each frame): unpinned it took a quarter of core 0, the drawer's, under a chord */
+    return xTaskCreatePinnedToCoreWithCaps(audio_task, "link_audio", 6144, NULL, 4, NULL, 1,
                                            MALLOC_CAP_SPIRAM) == pdPASS ? ESP_OK : ESP_ERR_NO_MEM;
 }
 
@@ -859,6 +875,8 @@ static void begin(const audio_job_t *job, bool cued)
     s_job_t0_ms = now_ms();
     s_mood_gen0 = link_cmd_mood_gen();   /* after our own listening/speaking mood */
     s_seq = 0; s_stat_frames = 0; s_stat_bytes = 0; s_stat_last = 0; s_stat_gap = 0; s_busy = true; s_listen = job->listen;
+    s_probe_at = 0; s_text_n = 0; s_text_us = 0; s_late = false;
+    if (!job->listen) { link_rx_stats_t rx; link_rx_stats(&rx); }   /* (a say's own counts from here) */
     s_cued = cued; s_cue_next = 0;
     s_mark_fired = 0; s_mark_mood = -1;
     atomic_store(&s_end, false); atomic_store(&s_cancel, false); atomic_store(&s_stop, STOP_NONE);
@@ -1151,8 +1169,10 @@ esp_err_t link_audio_say_text(const cJSON *args, cJSON **out)
 {
     const cJSON *j = cJSON_GetObjectItemCaseSensitive(args, "job"), *text = cJSON_GetObjectItemCaseSensitive(args, "text");
     if (!cJSON_IsString(j) || !j->valuestring[0] || strlen(j->valuestring) >= sizeof(s_job) || !say_text_ok(text)) return ESP_ERR_INVALID_ARG;
+    const int64_t t0 = esp_timer_get_time();
     const esp_err_t e = s_busy && !s_listen && !strcmp(j->valuestring, s_job)
                       ? mole_fluid_say_text(s_say_text_ver, text->valuestring, (int)strlen(text->valuestring)) : ESP_ERR_INVALID_STATE;
+    if (e == ESP_OK) { s_text_n++; s_text_us += (uint32_t)(esp_timer_get_time() - t0); }
     if (e != ESP_OK && e != ESP_ERR_INVALID_STATE) return e;
     cJSON *result = cJSON_CreateObject();
     if (!result) return ESP_ERR_NO_MEM;
@@ -1206,6 +1226,10 @@ esp_err_t link_audio_listen_stop(const cJSON *args, cJSON **out)
 esp_err_t link_audio_receive(const void *data, size_t len)
 {
     link_frame_t h; const uint8_t *pcm; size_t n;
+    if (!s_busy && !s_listen && link_frame_parse(data, len, &h, &pcm, &n) && !strcmp(h.stream, s_job) && (!s_late || h.end)) {
+        s_late = true;   /* a say's frames after it ended (given up dry): when they came, its end's too (diag, once each) */
+        mole_diag_event(true, "audio.late seq=%u end=%d at=%ums", (unsigned)h.seq, h.end, (unsigned)(now_ms() - s_job_t0_ms));
+    }
     if (!s_busy || s_listen) return ESP_ERR_INVALID_STATE;
     if (!link_frame_parse(data, len, &h, &pcm, &n) || strcmp(h.stream, s_job) || h.seq != s_seq || atomic_load(&s_end)) {
         link_audio_cancel(); return ESP_ERR_INVALID_ARG;

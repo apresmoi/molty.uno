@@ -211,8 +211,8 @@ frame, with no round trip.
   out by the sound the hand drew there (each voice's real cycle, fading behind the hand while slow, still once the beats
   are a note). The dots and the hand give way to the outline from 12 to 32 hits a second. The middle reads hits a
   second, then hertz and the note with its octave; a chord's name under it, its whole numbers up top (a tap on one mutes
-  its voice). With a wave, `sets: "pitch"` is the tone player's pitch (face 0) and `sets: "pick"` its chord kinds, one
-  level up its twelve notes (face 1, each bead in its note's colour); a centre plays and stops it. All of it is live
+  its voice). With a wave, `sets: "pitch"` is the tone player's pitch (face 0: fine steps, a detent on each note,
+  [AGENT-LINK.md](AGENT-LINK.md#waves)) and `sets: "pick"` its chord kinds (face 1); a centre plays and stops it. All of it is live
   shapes, at most what a frame holds with the hold ring; a still outline redraws nothing.
 
 - An **`atlas`** draws the sky atlas `atlas.load` sent ([AGENT-LINK.md](AGENT-LINK.md#atlas), `scene/atlas.h`): the kinds,

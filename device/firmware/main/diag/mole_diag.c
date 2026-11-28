@@ -16,6 +16,7 @@
 #include "link/link_client.h"
 #include "link/link_audio.h"
 #include "haptic/haptic.h"
+#include "fps_lab_dev.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -1240,6 +1241,7 @@ cJSON *mole_diag_json(int timeline_secs)
     cJSON_AddStringToObject(j, "fw", esp_app_get_description()->version);
     cJSON_AddItemToObject(j, "time", net_clock_json());   /* the date (net_clock.h): the sky's */
     cJSON_AddBoolToObject(j, "haptic", haptic_available());  /* a vibration motor wired and its PWM up (haptic.h) */
+    cJSON_AddItemToObject(j, "lab", fps_lab_knobs_json());   /* the frame rate lab's knobs (fps_lab_dev.h, GET /api/lab) */
     cJSON *fr = cJSON_AddObjectToObject(j, "frames");
     cJSON *sim = frames_json(&s_sim);
     cJSON_AddNumberToObject(sim, "work_ms", s_sim_work_us / 1000.0);

@@ -300,6 +300,11 @@ size_t wav_fill(wav_player_t *p, int16_t *out, size_t n) {
     wav_tables_t *t = p->t;
     if (!atomic_load(&t->hit_ready)) { memset(out, 0, n * sizeof(int16_t)); return n; }   /* (its first ms: the hit is being made) */
     const int in_n = (int)(IN_MS * WAV_RATE / 1000.f), pluck_n = (int)(PLUCK_LEN * WAV_RATE);
+    int nk = 0;                                          /* (the voices that play or fade: the rest cost nothing a sample) */
+    for (int k = 0; k < WAV_VOICES; k++) {
+        const wav_voice_t *q = &p->v[k];
+        if (k < p->ch.n || q->env > 1e-6f || q->gate || (q->mode == WAV_PLUCK && q->wait > 0) || p->later.on) nk = k + 1;
+    }
     for (size_t i = 0; i < n; i++) {
         if (p->n % WAV_VIEW_EVERY == 0) snapshot(p);
         p->duck += (p->duckT - p->duck) * s_duck;
@@ -312,7 +317,7 @@ size_t wav_fill(wav_player_t *p, int16_t *out, size_t n) {
         const bool ctl = (p->n & 15) == 0;
         float sum = 0.f;
         bool any = p->hold || p->later.on;
-        for (int k = 0; k < WAV_VOICES; k++) {
+        for (int k = 0; k < nk; k++) {
             wav_voice_t *q = &p->v[k];
             q->lf += (q->lft - q->lf) * s_glide;
             if (ctl) {

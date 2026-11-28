@@ -161,6 +161,8 @@ idf_component_register(
         "diag/sta_watch.c"      # the station state the diag samples rssi by (host-tested)
         "diag/loop_watch.c"     # abort on a wedged event loop / esp_timer task (host-tested)
         "diag/flash_gate.c"     # the flash's quiet window: writes that can wait hold while the screen animates (host-tested)
+        "diag/fps_lab.c"        # the frame rate lab: knobs, frame records, pose repeats (host-tested, FPS-LAB.md)
+        "diag/fps_lab_dev.c"    # ... its HTTP routes (/api/lab), its task, the creature's glue
     INCLUDE_DIRS
         "."
         "net"
@@ -278,6 +280,9 @@ set_source_files_properties(
     "creature/creature_dots.c"
     "creature/creature_ring.c"
     "scene/scene_player.c"
+    "rhythm/wave_player.c"
+    "rhythm/wave_core.c"
+    "rhythm/rhythm_player.c"
     ${MOLTY_BOARD_FAST_SRCS}
     PROPERTIES COMPILE_OPTIONS "-O2;-fno-math-errno"
 )

@@ -47,6 +47,7 @@ import contextlib
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 
@@ -65,9 +66,18 @@ _ws_log = logging.getLogger("molty_voice.realtime.socket")
 _ws_log.setLevel(logging.WARNING)
 
 PROVIDER_RATE = 24000
+# The model ended a turn: its own commit comes at once (within 2 ms in every live turn); without it this long,
+# the box commits itself. A fallback only: no live turn has waited on it.
+COMMIT_WAIT_S = 0.3
+# A reply ends once the person's transcript is in (it comes ~0.3 s after the turn, the reply's audio later): this long at most.
+# Every reply waits for the person's words, this long at most (they came 0.18 to 0.41 s after the commit live,
+# median 0.28): the branch (answer alone / hand off) is decided by rule on them; without them, a fixed holding line.
+HEARD_FIRST_S = 0.45
 # What the front keeps of the agent across sessions: its last lines, each and in all at most this long.
 # Lines older than the relay's longest conversation (15 min) are dropped.
 MEMORY_LINES, MEMORY_LINE, MEMORY_CHARS, MEMORY_MAX_AGE_S = 8, 500, 2000, 900.0
+# Who the agent is and its fresh facts (the relay keeps both per device): each at most this long.
+PERSONA_MAX = FACTS_MAX = 1500
 # A held listen has no turn detection: a 100 ms chunk this loud (about -46 dBFS) is the person speaking.
 HOLD_VOICE_RMS = 0.005
 
@@ -85,6 +95,8 @@ class _Listen:
     committed: bool = False
     ended: bool = False
     replied: bool = False  # its one front response is asked for
+    heard_text: str = ""  # the person's words (the transcript), once known
+    heard: asyncio.Event = field(default_factory=asyncio.Event)  # set once the transcript is in (or there is none)
     finaled: bool = False
     item: str | None = None
     text: str = ""
@@ -113,6 +125,12 @@ class _Speech:
     cancelled: bool = False
     exact: bool = False  # inner: keep the agent's wording as close as it can
     awaited: bool = False  # inner: the answer the front waits for (WAITING)
+    asked: str = ""  # inner: the exact text it was told to read aloud
+    lst: _Listen | None = None  # reply: the listen whose turn it answers
+    hold: bool = False  # reply: the guaranteed holding line (the model's reply said nothing)
+    attempt: int = 0  # reply: responses so far for this one spoken reply
+    dropped: bool = False  # wait: the agent's answer came first: never said (tts.end absorbed)
+    faithful: bool = True  # inner: what it said holds every number, name and content word of `asked`
 
 
 def realtime_url(base: str, model: str) -> str:
@@ -149,9 +167,12 @@ class RealtimeFront:
         self._active: _Speech | None = None
         self._n = 0
         self._memory: list[tuple[float, str]] = []  # (when, line): the agent's lines and context, background (MEMORY_* caps)
-        self._persona = ""  # the agent's standing persona line (front {context, persona}), in every session's brief
+        self._persona = ""  # who the agent is (front {context, persona}), in every session's brief: none, a neutral voice
+        self._facts = ""  # the agent's fresh facts (front {context, facts}), replaced as they change
         self._waiting_for: str | None = None  # WAITING: the listen whose turn the front handed to the agent
+        self._waiting_heard = ""  # ...and what the person said in it (the "still on it" line names it)
         self._talking = False  # a conversation is going on: a front listen ran in this session
+        self._bridge = 0  # which of brief.BRIDGES came last
         self.capped = False
         self.close_reason = ""
 
@@ -205,8 +226,7 @@ class RealtimeFront:
             "output_modalities": ["audio"],
             "instructions": self._instructions(),
             "audio": {"input": audio_in, "output": {"format": {"type": "audio/pcm", "rate": PROVIDER_RATE}, "voice": self.cfg.realtime_voice}},
-            "tools": brief.TOOLS,
-            "tool_choice": "auto",
+            "tools": [],  # the box decides every hand-off itself (brief.answers_alone): the model never does
             "max_output_tokens": self.cfg.realtime_max_output_tokens,
         }
 
@@ -298,6 +318,7 @@ class RealtimeFront:
         self._items.clear()
         if lst and not lst.finaled:
             lst.finaled = True
+            lst.heard.set()
             await self._send_json({"t": "stt.final", "id": lst.mid, "error": f"realtime session closed ({why})"})
         pending = [s for s in (self._active, self._creating) if s] + self._queue
         self._active = self._creating = None
@@ -348,14 +369,31 @@ class RealtimeFront:
         await self._vad(None)
         if lst.committed or lst.finaled:
             return  # the turn detection committed it: its transcript is on its way
+        if lst.turned and lst.speech and not lst.hold:
+            # one turn, one end: the model ended it first (speech_stopped) and the provider commits it itself
+            # (its `committed` brings the reply). A second commit here would be empty and fail (live, run 6).
+            # Should that commit never come, the box commits after COMMIT_WAIT_S.
+            asyncio.get_running_loop().create_task(self._commit_later(lst))
+            return
         if not lst.speech or lst.samples < DEVICE_RATE // 10:
             # nothing worth a transcript (or a reply)
             log.info("listen %s: ended by Molty, nobody spoke", mid)
             lst.finaled = True
+            lst.heard.set()
             await self._send({"type": "input_audio_buffer.clear"})
             await self._send_json({"t": "stt.final", "id": mid, "text": "", "ms": {"final": 0}})
             return
-        # Molty ended the turn itself (a tap, its window): commit what was heard, and answer it on a front listen
+        await self._commit(lst)
+
+    async def _commit_later(self, lst: _Listen) -> None:
+        await asyncio.sleep(COMMIT_WAIT_S)
+        if not lst.committed and self._listen is lst:
+            log.info("listen %s: no commit from the provider: the box commits", lst.mid)
+            await self._commit(lst)
+
+    async def _commit(self, lst: _Listen) -> None:
+        """Molty ended the turn (a tap, its window, the release), or the provider never committed it: commit, then the one reply."""
+        mid = lst.mid
         y = lst.rs.flush()
         if y.size:
             await self._send({"type": "input_audio_buffer.append", "audio": base64.b64encode(float_to_pcm16(y)).decode()})
@@ -391,10 +429,34 @@ class RealtimeFront:
         if not await self._ensure():
             await self._send_json({"t": "tts.end", "id": mid, "error": "realtime unavailable"})
             return
+        sp = _Speech(sid=mid, kind=kind, text=text, exact=exact or mode == "exact", awaited=waiting)
         if kind == "inner":
             self._waiting_for = None  # answered: LISTENING again after it
             self._remember(f"Your inner voice said: {brief.spoken(text)}")
-        self._enqueue(_Speech(sid=mid, kind=kind, text=text, exact=exact or mode == "exact", awaited=waiting))
+            # read aloud out of band (no conversation context, no tools: live, a model in the conversation
+            # contradicted the agent's facts); the bridge before a waiting answer is ours
+            self._bridge = (self._bridge + 1) % len(brief.BRIDGES)
+            sp.asked = brief.read_aloud(text, brief.BRIDGES[self._bridge] if waiting else "")
+            if waiting:
+                await self._drop_filler()
+        elif kind == "wait":
+            # "still on it": deterministic, never free generation (live, one said "I'm still hearing double")
+            self._bridge += 1
+            sp.asked = brief.still_line(self._waiting_heard, self._bridge)
+        self._enqueue(sp)
+
+    async def _drop_filler(self) -> None:
+        """The agent's answer is here: a "still on it" not yet sounding never plays (it would hold the answer back)."""
+        for f in [x for x in self._queue if x.kind == "wait"]:
+            self._queue.remove(f)
+            f.dropped = True
+            await self._end_speech(f, None)
+        if self._creating is not None and self._creating.kind == "wait":
+            self._creating.dropped = True  # cancelled as soon as it is created
+        f = self._active
+        if f is not None and f.kind == "wait" and not f.samples and not f.cancelled:
+            f.cancelled = f.dropped = True
+            await self._send({"type": "response.cancel"})
 
     async def speak_cancel(self, mid: str) -> None:
         self._queue = [s for s in self._queue if s.sid != mid]
@@ -411,18 +473,22 @@ class RealtimeFront:
 
     def _instructions(self) -> str:
         now = time.monotonic()
-        return brief.instructions(self._persona, [t for at, t in self._memory if now - at <= MEMORY_MAX_AGE_S])
+        return brief.instructions(self._persona, [t for at, t in self._memory if now - at <= MEMORY_MAX_AGE_S], self._facts)
 
     async def _know(self, text: str) -> None:
         """Background: into the instructions of this session (if one is open) and the next ones; never said."""
         self._remember(text)
         await self._send({"type": "session.update", "session": {"type": "realtime", "instructions": self._instructions()}})
 
-    async def context(self, text: str, persona: bool = False) -> None:
-        """Silent context, kept for later sessions; never a session (billed) opened just for it."""
-        log.info("front: %s, %d chars", "persona" if persona else "context", len(text))
-        if persona:
-            self._persona = text[:MEMORY_LINE]
+    async def context(self, text: str, persona: bool = False, facts: bool = False) -> None:
+        """Silent context, kept for later sessions; never a session (billed) opened just for it. `persona`: who the agent
+        is (replaces it), `facts`: its fresh facts (replace them), else one more line of what it said or knows."""
+        log.info("front: %s, %d chars", "persona" if persona else "fresh facts" if facts else "context", len(text))
+        if persona or facts:
+            if persona:
+                self._persona = text[:PERSONA_MAX]
+            else:
+                self._facts = text[:FACTS_MAX]
             return await self._send({"type": "session.update", "session": {"type": "realtime", "instructions": self._instructions()}})
         await self._know(text)
 
@@ -439,13 +505,35 @@ class RealtimeFront:
         return f"f{self._n}{random.getrandbits(24):06x}"
 
     def _reply(self, lst: _Listen) -> None:
-        """Rule 1: a front listen's turn end gets exactly one front response, first in the queue."""
+        """Rule 1: a front listen's turn end gets exactly one spoken front response, first in the queue, its
+        branch decided BY RULE before anything is said (live, a model answered a question and the agent's
+        answer followed: two answers): the person's words are awaited first (HEARD_FIRST_S)."""
         if lst.replied:
             return
         lst.replied, self._waiting_for = True, None  # a new turn wins: no earlier answer is awaited any more
-        s = _Speech(sid=self._new_id(), kind="reply", listen=lst.mid, t0=time.monotonic())
+        s = _Speech(sid=self._new_id(), kind="reply", listen=lst.mid, t0=time.monotonic(), lst=lst)
+        asyncio.get_running_loop().create_task(self._branch(s))
+
+    async def _branch(self, s: _Speech) -> None:
+        lst = s.lst
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(lst.heard.wait(), HEARD_FIRST_S)
+        heard = lst.heard_text if lst.heard.is_set() else None
+        if heard is not None and brief.is_hum(heard):
+            s.asked = brief.ACK  # no real words: a minimal acknowledgement, then Molty listens
+        elif heard is not None and (brief.answers_alone(heard) or (self._persona and brief.asks_identity(heard))):
+            pass  # small talk (or "is this Dude?" with the agent's persona): the front's own short reply
+        else:
+            # the agent's turn: a holding line only, on the person's words; with no words in time, a fixed one
+            s.wait = True
+            if heard:
+                s.hold = True
+            else:
+                s.asked = brief.HOLD_LINES[self._bridge % len(brief.HOLD_LINES)]
+        log.info("front %s: %s for %r", s.sid, "an acknowledgement" if s.asked == brief.ACK else "a holding line, handed to the agent" if s.wait
+                 else "the front's own reply", (heard or "(no words yet)")[:80])
         self._queue.insert(0, s)
-        asyncio.get_running_loop().create_task(self._next())
+        await self._next()
 
     def _enqueue(self, s: _Speech) -> None:
         s.t0 = time.monotonic()
@@ -461,16 +549,18 @@ class RealtimeFront:
         s = self._queue.pop(0)
         self._creating = s
         meta = {"molty": s.sid}
-        if s.kind == "inner":
-            # the agent's answer it waited for, or the agent speaking up (per-response instructions: a bare system message gets reacted to)
-            say = self._instructions() + "\n\n" + brief.inner(s.text, s.exact, s.awaited)
-            await self._send({"type": "response.create", "response": {"instructions": say, "tool_choice": "none", "metadata": meta}})
+        eid = {"event_id": f"rc_{s.sid}"}  # an error for this request names it (error.event_id)
+        if s.asked or s.hold:
+            # out of band, its own input, no tools: a read-aloud of `asked` (the agent's line, "still on it", an
+            # acknowledgement, the last-resort holding line), or a holding line on the person's words
+            text, how = (s.asked, brief.READ_ALOUD) if s.asked else (s.lst.heard_text if s.lst else "", brief.HOLDING)
+            await self._send({"type": "response.create", **eid, "response": {
+                "conversation": "none", "output_modalities": ["audio"], "instructions": how, "tool_choice": "none",
+                "input": [{"type": "message", "role": "user", "content": [{"type": "input_text", "text": text or "(unclear)"}]}], "metadata": meta}})
         elif s.kind == "plain":
-            await self._send({"type": "response.create", "response": {"instructions": brief.exactly(s.text), "tool_choice": "none", "metadata": meta}})
-        elif s.kind == "wait":
-            await self._send({"type": "response.create", "response": {"instructions": self._instructions() + "\n" + brief.STILL_WAITING, "tool_choice": "none", "metadata": meta}})
-        else:  # the one reply to the person's turn
-            await self._send({"type": "response.create", "response": {"metadata": meta}})
+            await self._send({"type": "response.create", **eid, "response": {"instructions": brief.exactly(s.text), "tool_choice": "none", "metadata": meta}})
+        else:  # the front's own reply to small talk: no tools, nothing to hand off
+            await self._send({"type": "response.create", **eid, "response": {"tool_choice": "none", "metadata": meta}})
 
     async def _on_created(self, resp: dict) -> None:
         rid = resp.get("id") if isinstance(resp.get("id"), str) else None
@@ -487,7 +577,11 @@ class RealtimeFront:
             s.t0 = time.monotonic()  # its first_audio counts from here: ms.created already covers the turn's end to here
         self._active = s
         log.info("front %s (%s): response created", s.sid, s.kind)
-        if s.kind == "reply":
+        if s.dropped and not s.cancelled:
+            s.cancelled = True
+            await self._send({"type": "response.cancel"})
+        s.attempt += 1
+        if s.kind == "reply" and s.attempt == 1:
             lst = self._listen if self._listen and self._listen.mid == s.listen else None
             ms = {"created": round((time.monotonic() - lst.t_stop) * 1000)} if lst and lst.t_stop else {}
             await self._send_json({"t": "front.reply", "id": s.sid, "stt": s.listen, **({"ms": ms} if ms else {})})
@@ -551,17 +645,46 @@ class RealtimeFront:
         self.usage.add(resp.get("usage") or {})
         for item in resp.get("output") or []:
             name = item.get("name") if isinstance(item, dict) and item.get("type") == "function_call" else None
-            if name == brief.HAND_TOOL and s.kind == "reply":
-                s.wait = True
+            if name:  # no tools are offered; one called anyway is answered so the conversation stays valid
                 await self._send({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": item.get("call_id"),
-                                                                             "output": json.dumps({"ok": True, "note": "Your inner voice is on it: you will be told its answer."})}})
+                                                                             "output": json.dumps({"ok": False})}})
         status = resp.get("status")
-        if s.kind == "reply" and s.wait and not (self._listen and self._listen.mid != s.listen and self._listen.speech):
+        if s.asked and s.samples and s.kind == "inner":
+            # verified, never assumed: a deviation is reported (tts.end faithful false), and what was said joins the conversation
+            ok, missing = brief.faithful(s.asked, s.said)
+            s.faithful = ok
+            log.log(logging.INFO if ok else logging.WARNING, "front %s: read aloud %s%s", s.sid, "as asked" if ok else "NOT as asked",
+                    "" if ok else f", missing {' '.join(missing[:12])}")
+            await self._send({"type": "conversation.item.create", "event_id": f"ci_{s.sid}",
+                              "item": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": s.said.strip()[:4000]}]}})
+        why = (resp.get("status_details") or {}).get("reason") if isinstance(resp.get("status_details"), dict) else None
+        # every response's end, with its reason (live, a token cap ended two replies "incomplete" before their hand-off call)
+        log.log(logging.INFO if status == "completed" else logging.WARNING, "front %s (%s): response %s%s, said %r", s.sid, s.kind, status,
+                f" ({why})" if why else "", s.said.strip()[:300])
+        if s.kind == "reply":
+            # its end waits for the person's words (they are in long before, as a rule): the hand-off is decided by rule
+            asyncio.get_running_loop().create_task(self._end_reply(s, status))
+        else:
+            await self._said(s, done=True)
+            await self._end_speech(s, error=None if s.samples or status == "cancelled" else f"no audio ({status})")
+        await self._next()
+
+    async def _end_reply(self, s: _Speech, status: str | None) -> None:
+        """The reply's branch was decided before it (_branch): WAITING for a hand-off, never silence."""
+        lst = s.lst
+        if s.wait and not (self._listen and self._listen.mid != s.listen and self._listen.speech):
             self._waiting_for = s.listen  # WAITING for this turn (unless the person has already spoken again)
-        log.info("front %s (%s): response %s, said %r", s.sid, s.kind, status, s.said.strip()[:300])
+            self._waiting_heard = lst.heard_text if lst else ""
+        if s.wait and len(s.said.split()) < 2 and not s.cancelled and s.attempt < 3:
+            # never silence: the model handed off and said (almost) nothing (live: 8 s of it). Same stream, at once:
+            # a holding line on the person's words, tools off; if that is empty too, a fixed one read aloud
+            s.hold, s.asked = False, brief.HOLD_LINES[self._bridge % len(brief.HOLD_LINES)]
+            log.info("front %s: the reply said %r: %s follows", s.sid, s.said.strip(), "a holding line" if s.hold else repr(s.asked))
+            s.said, s.rid = (s.said.strip() + " ") if s.said.strip() else "", None
+            self._queue.insert(0, s)
+            return await self._next()
         await self._said(s, done=True)
         await self._end_speech(s, error=None if s.samples or status == "cancelled" or s.wait else f"no audio ({status})")
-        await self._next()
 
     async def _end_speech(self, s: _Speech, error: str | None) -> None:
         y = s.rs.flush()
@@ -574,6 +697,10 @@ class RealtimeFront:
             end["error"] = error[:200]
         if s.wait:
             end["wait"] = True
+        if not s.faithful:
+            end["faithful"] = False
+        if s.dropped:
+            end["absorbed"] = True
         if s.first is not None:
             end["ms"] = {"first_audio": round((s.first - s.t0) * 1000), "total": round((time.monotonic() - s.t0) * 1000)}
         await self._send_json(end)
@@ -650,11 +777,14 @@ class RealtimeFront:
                 text = ev.get("transcript") if isinstance(ev.get("transcript"), str) else it.text
                 since = it.t_end or it.t_stop or time.monotonic()
                 log.info("listen %s: transcript, %d chars", it.mid, len(text.strip()))
+                it.heard_text = text.strip()
+                it.heard.set()
                 await self._send_json({"t": "stt.final", "id": it.mid, "text": text.strip()[:4000], "ms": {"final": round((time.monotonic() - since) * 1000)}})
         elif t == "conversation.item.input_audio_transcription.failed":
             it = self._items.pop(ev.get("item_id"), None)
             if it and not it.finaled:
                 it.finaled = True
+                it.heard.set()
                 await self._send_json({"t": "stt.final", "id": it.mid, "error": "transcription failed"})
         elif t == "response.created":
             await self._on_created(ev.get("response") if isinstance(ev.get("response"), dict) else {})
@@ -673,7 +803,7 @@ class RealtimeFront:
             await self._on_error(ev.get("error") if isinstance(ev.get("error"), dict) else {})
 
     async def _on_error(self, err: dict) -> None:
-        code, msg = str(err.get("code") or err.get("type") or "error"), str(err.get("message") or "")[:200]
+        code, msg = str(err.get("code") or err.get("type") or "error"), scrub(str(err.get("message") or ""))[:200]
         s = self._creating
         if s is not None and "active_response" in code:
             # another response (the turn detection's) got there first: ours goes after it
@@ -681,10 +811,17 @@ class RealtimeFront:
             self._queue.insert(0, s)
             return
         log.warning("realtime error %s: %s", code, msg)  # the provider's message: never our key
-        if s is not None:
+        # only an error that names our response request fails it (a turn's empty second commit never does)
+        eid = err.get("event_id")
+        if s is not None and (eid == f"rc_{s.sid}" or (not eid and not code.startswith("input_audio_buffer"))):
             self._creating = None
             await self._end_speech(s, error=f"realtime error {code}")
             await self._next()
+
+
+def scrub(msg: str) -> str:
+    """A provider's message, with any key it quotes cut out (live, an invalid-key error quoted its masked key and last 4)."""
+    return re.sub(r"\b(?:sk|rk|pk)-[A-Za-z0-9_*\-]{4,}", "[key]", msg)
 
 
 def _why(e: BaseException) -> str:

@@ -9,7 +9,8 @@
  *              chord 4, 5 and 6 a turn, for ever; equal tuning plays the piano's pitches
  *   clicks     the design's offline sessions (audiotest.mjs): a sweep from 1 Hz to the top and back a semitone a click
  *              (the drum handing over to the cycles on the way), chords slow to fast, mutes, tuning switches, previews
- *              in a row, entering, stopping: energy over 7.5 kHz under -55 dB of the loudest window, every step within
+ *              in a row, entering, stopping, the rim as it plays (25 cents a click to C5, a semitone to C6, a whole
+ *              tone above, and back): energy over 7.5 kHz under -55 dB of the loudest window, every step within
  *              what a 7.2 kHz sine of that level makes; a deliberate hard cut is caught (the check is not blind)
  *   level      the loudest chord no further into the soft knee than the design's (0.651 of full scale)
  *   speaker    a job's yield ducks it out within 15 ms and it waits; back, it sounds again
@@ -113,6 +114,16 @@ static void s_previews(wav_player_t *p, buf_t *b) {
 }
 static void s_minor_equal(wav_player_t *p, buf_t *b) { start(p, CH(MINOR), -6, WAV_EQUAL); render(p, b, 1560); turns(p, b, -6, 84, 50); render(p, b, 800); }
 static void s_ninth(wav_player_t *p, buf_t *b) { start(p, CH(DOM9), 84, WAV_JUST); render(p, b, 60); turns(p, b, 84, 96, 50); render(p, b, 500); wav_silence(p); render(p, b, 500); }
+/* the rim as it plays now (mole_fluid.c, wave_core.c): 25 cents a click to C5, a semitone to C6, a whole tone above, a
+ * click every 25 ms (a quick turn), and back */
+static void fine(wav_player_t *p, buf_t *b, float from, float to, float by, int ms) {
+    for (float m = from; ; m += from < to ? by : -by) { wav_set_root(p, wav_hz(m)); render(p, b, ms); if (fabsf(m - to) < by * 0.5f) break; }
+}
+static void s_rim(wav_player_t *p, buf_t *b) {
+    start(p, CH(MAJOR), 48, WAV_JUST); render(p, b, 460);
+    fine(p, b, 48.f, 72.f, 0.25f, 25); fine(p, b, 72.f, 84.f, 1.f, 25); fine(p, b, 84.f, 96.f, 2.f, 25); render(p, b, 300);
+    fine(p, b, 96.f, 84.f, 2.f, 25); fine(p, b, 84.f, 72.f, 1.f, 25); fine(p, b, 72.f, 48.f, 0.25f, 25); render(p, b, 500);
+}
 static void s_cut(wav_player_t *p, buf_t *b) {   /* the control: a held note cut dead and started again with no ramp */
     start(p, CH(ALONE), 81, WAV_JUST); render(p, b, 460);
     p->v[0].env = p->v[0].envT = 0.f; render(p, b, 100);
@@ -354,6 +365,7 @@ int main(void) {
     session("previews-then-enter", s_previews);
     session("minor-equal-slow-to-fast", s_minor_equal);
     session("ninth-top", s_ninth);
+    session("rim-fine-semi-tone", s_rim);
     {
         wav_player_t p;
         wav_init(&p, T);

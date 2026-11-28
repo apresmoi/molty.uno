@@ -1113,13 +1113,17 @@ each voice the beat player's own low drum with a beater's click on it, hit once 
   The speaker is shared and synced exactly as the rhythm's (its delay, its `sync` trim, its yield to a say or a listen).
 - **The scope** is the waves package's screen (a `wave` item, [PACKAGES.md](PACKAGES.md#layouts)): with none on screen
   for 2 s the chord stops; stopped, the scope goes.
-- **On Molty itself:** three levels. The chord kinds on the rim, stopped (each plucked as the rim reaches it, root in the
-  middle of the piano); a tap on the note above the kind's name goes up to the twelve notes (each plucked), the middle
-  comes back down; the middle again plays it at the pitch just heard. Playing, the rim is the pitch, a semitone a click,
-  turning fast the chosen note's next octave (a longer tick); a tap on a whole number up top (or a voice's dots while
-  slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the middle stops it on the note it stopped at. `ring`
-  events as the rhythm's (`pitch` value, `chord` index and id, `note` index); a `wave` event `{state, chord, note, hz}`
-  when the human plays or stops it (opt-in for a webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
+- **On Molty itself:** two faces. Stopped, the chooser: the chord kinds on the rim, each plucked as the rim reaches it
+  at the pitch it last played (middle C before any); the note up top is that pitch's, a readout. The middle plays it
+  there. Playing, the rim is the pitch, 6 degrees a click: a quarter semitone a click to C5, with a detent on each note
+  (a firmer tick, 30 ms at 90 percent against the fine step's 15 at 50, and one click's hold before a fine step leaves
+  it), a semitone a click to C6, a whole tone above; under 20 hits a second tenths of a hit a second to 4, fifths to 10,
+  then whole ones (each whole one a detent); turning fast an octave a click (the strongest tick). The chord stays in
+  whole numbers on the root between notes too; the readout names the nearest note and its cents off ("HZ A4 +25"). A
+  tap on a whole number up top (or a voice's dots while slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the
+  middle stops it back to the chooser at the same pitch. `ring` events as the rhythm's (`pitch` value, `chord` index
+  and id); a `wave` event `{state, chord, note, hz}` when the human plays or stops it (`note` the nearest; opt-in for a
+  webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
 
 ### Atlas
 
@@ -1966,9 +1970,32 @@ line), IDLE (no session).
    holding line that echoes the person's words ("ok, let me see... checking your emails") and a
    hand-off (then WAITING for that turn). Never none, never two. The box asks for that reply
    itself on the turn's commit (`create_response` is off: live, an auto response was lost when
-   turn detection went off right after the turn's end).
+   turn detection went off right after the turn's end). A turn has one end: the model's and
+   Molty's may arrive in either order or together, the first wins and the second is a no-op (no
+   second, empty commit); a provider error fails only the request it names (`event_id`). A plain
+   reply is one short sentence (at most about 12 words). **The branch is decided by rule FIRST**:
+   the reply waits for the person's words (0.45 s at most; they came 0.18 to 0.41 s after the commit
+   live), then ONE response is made already told what it is: small talk (every phrase is a greeting,
+   how-are-you, thanks, acknowledgement or goodbye: `molty_voice/brief.py` `answers_alone`; "is
+   this Dude?" too, once the agent has set its persona) is the front's own short reply, tools off;
+   a bare hum ("hmm", "uh", "okay") is "Mm-hm?" read aloud; everything else is the agent's turn
+   (WAITING): a holding line only, out of band on the person's words, instructions that forbid any
+   answer, claim, self-description or talk of handing over, and require naming what they asked
+   ("Okay, your calendar, let me check."). No words in time: a fixed holding line read aloud. The
+   model has no hand-off tool and never decides it (live, a model answered a question itself and the
+   agent's answer followed: two answers). This costs the transcript's wait before the first sound
+   (about a quarter second). Every response's end is logged with its status and reason. **Never
+   silence:** a holding line that came back (almost) empty is followed at once, in the same stream,
+   by a fixed one read aloud ("Okay, let me check.").
 2. **An agent line that replies to turn T** (`in_reply_to`) is voiced only when the front is
-   WAITING for T: at once, "ok, got it:" and the facts, then LISTENING. In every other case (the
+   WAITING for T: at once, a short bridge ("Ok, got it:", the box's own) and the agent's words,
+   then LISTENING. A voiced agent line is a read-aloud job out of band (`response.create` with
+   `conversation: "none"`, its own `input`, read-aloud instructions, no tools): the model has no
+   conversation to answer from, so it cannot override the agent (live, it said "I can't see your
+   calendar" over the agent's answer). The box checks what was said against what it asked for
+   (every number, name and nearly every content word, `molty_voice/brief.py` `faithful`) and adds it
+   to the conversation as the front's own message; a deviation is reported, never hidden
+   (`tts.end faithful: false`, the agent's result `faithful: false` with a hint, the activity log). In every other case (the
    front answered T itself, T is not the latest turn, the person is speaking, a newer turn began)
    it is context only: kept as background, never voiced, no response, no session opened, and the
    agent's result says so at once (`how: "absorbed"`).
@@ -1978,7 +2005,10 @@ line), IDLE (no session).
 4. **The conversation never ends under a reply or a wait**: a listen the front's model heard
    speech in is the model's turn (the relay's own voice check does not overrule it), and a listen
    the front replied to never ends the conversation as idle. WAITING ends by its own limit: "still
-   on it" once at 8 s, then a listen; nobody speaking ends it.
+   on it" once at 8 s, then a listen; nobody speaking ends it. "Still on it" is a fixed line read
+   aloud, naming the task in the person's words when that is easy ("Still checking your calendar."),
+   never free words; when the agent's answer comes before it has sounded, it is dropped (`tts.end
+   absorbed`) and the answer plays.
 5. **Background** (the agent's lines, context, its persona) is part of the session instructions,
    marked as already said or known with the rule never to recite it; never conversation items.
    The agent's last 8 lines (2000 characters, none older than 15 minutes) and its persona line
@@ -2050,7 +2080,8 @@ sends `listen_stop {reason:"turn_end"}` at once. The box's `front.reply` plays a
 the moment the device's listen is over (its end frame, ≤ 600 ms): `cmd say` waits for the first
 audio, then at most 150 ms for its transcript, and shows those words. Firmware with the cap
 `say_text` gets the rest as the model speaks it: `cmd say_text {job, text}` with the say's whole
-text so far (whole words, each continuing the last; at most every 100 ms, the final text always,
+text so far (whole words, each continuing the last; at most every 300 ms and never waiting for the
+device's answer to the last one, the final text always,
 none after the say ended or after `taken: false`; a transcript that changed words already sent
 stops it), and every word is cued. Older firmware shows only the first words. Word cues are
 estimated by the box from when each word's text arrived, word i of the same whitespace-split text. No auto filler, no first words: the front answered.
@@ -2085,11 +2116,18 @@ estimated by the box from when each word's text arrived, word i of the same whit
   The claim rule keeps its meaning: only an answer the relay admits to the speaker queue claims
   the turn (`turn_claimed` for the other agents as before). A say / talk while Molty is offline is
   `device_offline` and opens no box session.
-- `front {context?, persona?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`): `context` =
-  facts the front may use (nothing is said now; the box keeps it across sessions); with `persona:
-  true` it is the agent's standing persona line (at most 500 characters: who the agent is and how
-  it talks), kept per device in the relay's storage (KV `front:persona`) and given to every box
-  that connects, so the front sounds like the agent; `end: true` ends the conversation.
+- `front {context?, persona? | facts?, end?}` (relay command, `POST …/cmd`, MCP `molty_front`):
+  `context` = facts the front may use (nothing is said now; the box keeps it across sessions).
+  **Who the front speaks for**, the handshake: with `persona: true` the context is who the agent is
+  and how it talks (2 or 3 sentences, at most 1500 characters), with `facts: true` its 3 to 5 fresh
+  facts (what it is doing, recent memories; at most 1500 characters, replaced whenever they change).
+  The relay keeps both per device (KV `front:persona`, `front:facts`; the persona prefixed with the
+  agent's paired name, "Your agent's name: Dude.") and gives them to every box that connects; the box
+  puts them in each session's instructions as background, never recited (both full: about 750 text
+  tokens a response, cached after the first, well under a cent a session). Until the agent sets its
+  persona, the front is an unnamed, neutral voice (it never claims to be anyone) and every
+  utterance's `front.role` says how to set it (an agent with an old skill reads it too); once set,
+  the front may answer "is this Dude?" itself, from it. `end: true` ends the conversation.
   `{skipped:"front_off", reason}` when the front is not serving.
 - The agent never answers a `waiting` turn: after 8 s Molty says it is still on it, once, naming
   the task (`tts front:"wait"`), then listens again (a new turn from the person wins). Molty shows

@@ -315,7 +315,7 @@ static void sense_tick(uint32_t now) {
     {   /* sense.c: a wheel's clicks, its own tick, one at most every HAPTIC_WHEEL_GAP_MS */
         int ms, strength;
         haptic_plan_t pl;
-        if (mole_fluid_take_ticks(&ms, &strength) && haptic_wheel_due(&s_tick_at, now) && haptic_plan_wheel(&pl, ms, strength)) {
+        if (mole_fluid_ticks_waiting() && haptic_wheel_due(&s_tick_at, now) && mole_fluid_take_ticks(&ms, &strength) && haptic_plan_wheel(&pl, ms, strength)) {
             s_wheel_ticks++; s_tick_ms = pl.seg[0]; s_tick_strength = pl.strength;
         }
     }

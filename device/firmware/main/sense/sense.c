@@ -24,7 +24,7 @@
  * tick (mole_fluid_take_ticks, haptic_wheel: at most one every HAPTIC_WHEEL_GAP_MS, so a fast turn feels fewer ticks
  * than it makes). It sends a `ring` event once it settles. While a skill's scene shows the reject button closes it
  * (mole_fluid_scene_close), whatever it is bound to; with a rhythm or a chord on it the accept button is its centre
- * (plays and stops it; a chord's goes down a level). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
+ * (plays and stops it). A finger held still on the glass closes it too (mole_fluid.c), with the touch buzz.
  * A tap that does something buzzes the motor gently at once (acted): on a spot or beside an opened layout's spots;
  * a question's and a pairing's answers where they are taken (link_ask.c, link_pair.c). Never the water (a plain
  * tap, a drag), never a physical button (it clicks by itself).
@@ -267,10 +267,12 @@ static void sense_task(void *arg)
         mole_scene_evt_t sv;                            /* the screen changed on the device itself: the relay hears what is up */
         if (mole_fluid_scene_event(&sv)) emit(link_evt_scene_frame(sv.pkg, sv.layout, sv.why, sv.spot));
         if (mole_fluid_take_closed()) acted();         /* a hold on the glass closed a scene: the touch buzz */
-        {   /* a wheel's clicks: its own tick (haptic_plan.h HAPTIC_WHEEL_*, or the dial's), one at most every 60 ms */
+        {   /* a wheel's clicks: its own tick (haptic_plan.h HAPTIC_WHEEL_*, or the dial's), one at most every 60 ms (the
+             * clicks in between felt as one at its end) */
             static uint32_t tick_at;
             int ms, strength;
-            if (mole_fluid_take_ticks(&ms, &strength) && haptic_wheel_due(&tick_at, (uint32_t)(esp_timer_get_time() / 1000))) haptic_wheel(ms, strength);
+            if (mole_fluid_ticks_waiting() && haptic_wheel_due(&tick_at, (uint32_t)(esp_timer_get_time() / 1000)) && mole_fluid_take_ticks(&ms, &strength))
+                haptic_wheel(ms, strength);
         }
         mole_ring_evt_t re;                             /* a wheel settled */
         if (mole_fluid_ring_event(&re)) emit(link_evt_ring_frame(re.spot, re.value, re.index, re.label, re.id));

@@ -44,8 +44,11 @@ export const FRONT = {
   verdictMs: 400,
   /** The device ends a stopped listen within one 100 ms chunk; a reply waits this long at most for its end frame. */
   deviceFreeMs: 600,
-  /** A front say's text goes to the device as it grows (cap say_text): at most once this often, the final text always. */
-  textEveryMs: 100,
+  /**
+   * A front say's text goes to the device as it grows (cap say_text): at most once this often, the final text always.
+   * Each is a command the device answers while it plays: live, ~20 of them in a long line came with its link stalling.
+   */
+  textEveryMs: 300,
 } as const;
 
 export const FRONT_MODES = ["off", "on"] as const;
@@ -77,14 +80,23 @@ export function innerResult(how: "said" | "absorbed" | "queued", said?: string, 
 }
 
 /** The `utterance`'s `front.role`: plain words for any agent, whatever its skill. */
-export const FRONT_ROLE = "you are the inner voice: a voice front speaks for you and already said `said`; send only facts or decisions it lacks (it waits for them when `waiting`), no greetings, no chat";
+export const FRONT_ROLE = "you are the inner voice: a voice front speaks for you and already said `said`; send only facts or decisions it lacks (it waits for them when `waiting`), no greetings, no chat.";
+/** ...and, while the agent has not said who it is, how to (an agent with an old skill reads `front.role` too). */
+export const FRONT_SETUP =
+  ' The voice front does not know who you are, so it speaks as a neutral voice: send once `front {"context": "<who you are and how you talk, 2 or 3 sentences>", "persona": true}` and, whenever they change, `front {"context": "<3 to 5 fresh facts: what you are doing, recent memories>", "facts": true}` (REST: POST /v1/devices/<id>/cmd {"name": "front", "args": {...}}; 1500 characters each).';
 
-/** The agent's standing persona line (`front {context, persona: true}`), kept per device: KV key. */
+/** Who the agent is and its fresh facts (`front {context, persona | facts: true}`), kept per device: KV keys. */
 const PERSONA = "front:persona";
+const FACTS = "front:facts";
 
 /** Speech by the front for a say / talk job (the room's Prepared). */
 export interface FrontPrepared {
   front?: FrontSpeech;
+}
+
+/** What a say / talk the front voiced got: `said`, and `faithful: false` when the box found facts of the line missing. */
+export function voiced(sp: FrontSpeech | undefined, said?: string): JsonObject {
+  return { ...innerResult("said", said), ...(sp?.unfaithful ? { faithful: false, hint: "the voice front did NOT say your line as given (see said): tell the person another way if it matters" } : {}) };
 }
 
 /** A say / talk the front did not voice: done (it absorbed the thought), else failed. */
@@ -178,8 +190,8 @@ export class FrontTalk {
   private readonly waiting = new Map<string, () => void>();
   /** The last turns the person spoke in, oldest first: when each ended, whether the front answered it / handed it to the agent. */
   private readonly past = new Map<string, { at: number }>();
-  /** Each agent's first answer to a turn (`<agent> <turn>` -> its job). */
-  private readonly answers = new Map<string, string>();
+  /** Each agent's answer to a turn (`<agent> <turn>` -> its job, once known: a call in flight claims it first). */
+  private readonly answers = new Map<string, { job: Promise<string | undefined>; settle: (job?: string) => void }>();
 
   constructor(private readonly h: FrontHost) {}
 
@@ -272,7 +284,8 @@ export class FrontTalk {
     if (!sp) return undefined;
     const left = deadline - this.h.clock.now();
     if (!sp.final && left > 0) await Promise.race([sp.ended, sleep(this.h.clock, left)]);
-    return { said: sp.said, waiting: sp.wait, role: FRONT_ROLE, ...(sp.final ? {} : { partial: true }) };
+    const role = FRONT_ROLE + ((await this.h.kv.get<string>(PERSONA)) ? "" : FRONT_SETUP);
+    return { said: sp.said, waiting: sp.wait, role, ...(sp.final ? {} : { partial: true }) };
   }
 
   /** A job the front spoke has ended (`replyOf`: it was the reply to that turn): Molty listens again, or waits for the agent. */
@@ -349,10 +362,17 @@ export class FrontTalk {
       this.answerOf(hash, turn, job);
       return { ok: true as const, result: { job } };
     };
+    let settle: ((job?: string) => void) | undefined;
     if (turn !== undefined) {
-      const first = this.answerOf(hash, turn);
-      const was = first && (await this.h.jobStatus(first));
-      if (was && was !== "failed") return { ok: true, result: { job: first!, repeated: true } };
+      // the repeat rule holds for calls in flight too: the first claims the turn before anything is awaited,
+      // a second waits for its job (live and in tests, a retry 5 ms later was voiced or absorbed on its own)
+      for (let first = this.answerOf(hash, turn); first; first = this.answerOf(hash, turn)) {
+        const job = await first;
+        const was = job && (await this.h.jobStatus(job));
+        if (was && was !== "failed") return { ok: true, result: { job: job!, repeated: true } };
+        if (this.answerOf(hash, turn) === first) break; // that one came to nothing: this call answers
+      }
+      settle = this.claim(hash, turn);
       if (!this.fate(turn, await this.h.latestTurn()).speak) {
         this.h.box.frontContext(`Your inner voice's late answer to something the person said earlier (not said aloud): ${text}`);
         return done(innerResult("absorbed", undefined, "old_turn"));
@@ -361,22 +381,34 @@ export class FrontTalk {
     // the box's listen id of that turn ("-": not one the front heard: the box keeps it as context)
     const sid = turn === undefined ? undefined : ([...this.listens].find(([, j]) => j === turn)?.[0] ?? "-");
     const prepared = await this.h.prepare(text, exact, sid).catch(() => undefined);
-    if (!prepared?.front) return undefined;
+    if (!prepared?.front) return settle?.(), undefined;
     const sp = prepared.front;
+    void sp.ended.then(() => sp.feed.error !== undefined && settle?.()); // cancelled (the job was refused): the claim comes to nothing
     await Promise.race([sp.ended, sleep(this.h.clock, FRONT.verdictMs)]);
     if (sp.absorbed) return done(innerResult("absorbed"));
     this.agentAnswering();
     return { ok: true, result: innerResult("queued"), prepared };
   }
 
-  /** The answer of agent `hash` to `turn` (its job), or records `job` as it (a retry of a failed one replaces it). */
-  answerOf(hash: string, turn: string | undefined, job?: string): string | undefined {
+  /** The answer of agent `hash` to `turn` (its job, maybe still in flight), or records `job` as it (a retry of a failed one replaces it). */
+  answerOf(hash: string, turn: string | undefined, job?: string): Promise<string | undefined> | undefined {
+    if (turn === undefined) return undefined;
+    const a = this.answers.get(`${hash} ${turn}`);
+    if (job === undefined) return a?.job;
+    a?.settle(job);
+    this.claim(hash, turn)(job);
+    return a?.job;
+  }
+
+  /** Agent `hash` is answering `turn` now: a second call for it waits for this one's job (settle it). */
+  private claim(hash: string, turn: string): (job?: string) => void {
     const k = `${hash} ${turn}`;
-    if (job === undefined || turn === undefined) return this.answers.get(k);
+    let settle!: (job?: string) => void;
+    const job = new Promise<string | undefined>((r) => (settle = r));
     this.answers.delete(k);
-    this.answers.set(k, job);
+    this.answers.set(k, { job, settle });
     while (this.answers.size > 16) this.answers.delete(this.answers.keys().next().value!);
-    return job;
+    return settle;
   }
 
   /** The agent is answering: no "still waiting". */
@@ -436,8 +468,10 @@ export class FrontTalk {
 
   /** A front box (re)connected: it gets the agent's persona line again. */
   async boxed() {
-    const p = await this.h.kv.get<string>(PERSONA);
-    if (p) this.h.box.frontContext(p, true);
+    for (const [k, as] of [[PERSONA, "persona"], [FACTS, "facts"]] as const) {
+      const t = await this.h.kv.get<string>(k);
+      if (t) this.h.box.frontContext(t, as);
+    }
   }
 
   /** The owner's view (GET …/voice `front`): the switch, whether it serves and why not, the conversation. */
@@ -447,13 +481,17 @@ export class FrontTalk {
   }
 
   /** The agent's `front {context?, end?}`: silent background for the front, or the conversation's end. */
-  async command(args: JsonObject): Promise<Outcome> {
+  async command(args: JsonObject, name?: string): Promise<Outcome> {
     const why = await this.h.whyNot();
     if (why !== null) return { ok: true, result: { skipped: "front_off", reason: why } };
     const out: JsonObject = { conversation: this.live };
-    // kept by the box across its sessions (never one opened for it); a persona line by the relay too
-    if (args.persona === true) await this.h.kv.put(PERSONA, args.context);
-    if (typeof args.context === "string") out.context = this.h.box.frontContext(args.context as string, args.persona === true);
+    // kept by the box across its sessions (never one opened for it); who the agent is (with its paired name, so
+    // the front can say "yes, this is Dude") and its fresh facts by the relay too, given to every box that connects
+    const as = args.persona === true ? "persona" : args.facts === true ? "facts" : undefined;
+    let text = args.context as string;
+    if (as === "persona" && name) text = `Your agent's name: ${name}. ${text}`;
+    if (as) await this.h.kv.put(as === "persona" ? PERSONA : FACTS, text);
+    if (typeof args.context === "string") out.context = this.h.box.frontContext(text, as);
     if (args.end === true) {
       out.ended = this.live;
       await this.end("agent");
@@ -475,8 +513,10 @@ export function frontWhyNot(front: string | undefined, mode: string, box: { fron
  * The text a front say shows (the device takes it once, with `cmd say`): what the front said by its
  * first audio, waiting FRONT.textHoldMs at most from `from` for the sentence (or the transcript) to end.
  */
-export async function frontText(sp: FrontSpeech, clock: Clock, from: number): Promise<string> {
-  while (!sp.final && !sp.feed.done && clock.now() - from < FRONT.textHoldMs && !/[.!?…]$/.test(sp.said)) {
+export async function frontText(sp: FrontSpeech, clock: Clock, from: number, caps?: string[]): Promise<string> {
+  // the device takes the rest as it comes (cap say_text): the first word is enough, the voice never waits for more
+  const enough = caps?.includes(SAY_TEXT_CAP) ? () => sp.said.trim() !== "" : () => /[.!?…]$/.test(sp.said);
+  while (!sp.final && !sp.feed.done && clock.now() - from < FRONT.textHoldMs && !enough()) {
     await Promise.race([sp.changed(), sleep(clock, Math.max(1, FRONT.textHoldMs - (clock.now() - from)))]);
   }
   return sp.said.trim();
@@ -498,14 +538,16 @@ export function frontFollow(sp: FrontSpeech, caps: string[] | undefined, first: 
   if (!caps?.includes(SAY_TEXT_CAP)) return false;
   void (async () => {
     let sent = first;
+    const dev = { taken: true }; // the device's last answer: taken:false stops the text
     await sleep(clock, FRONT.textEveryMs); // after the cmd say, the latest text of the window
     for (;;) {
       const text = sp.final ? sp.said.trim() : sp.said.replace(/\S*$/, "").trim();
       if (!saying.has(job)) return;
+      if (!dev.taken) return;
       if (text !== sent) {
         if (!text.startsWith(sent) || !/\s/.test(text[sent.length] ?? "") || new TextEncoder().encode(text).length > TEXT_MAX_BYTES) return;
-        const r = await cmd("say_text", { job, text });
-        if (!r.ok || r.result.taken === false) return;
+        // never awaited: the next text never waits for the device's answer to this one (only taken:false stops it)
+        void cmd("say_text", { job, text }).then((r) => (dev.taken = r.ok && r.result.taken !== false));
         sent = text;
       }
       if (sp.final) return;

@@ -84,7 +84,7 @@
   },
   "waves": {
     "name": "Waves",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "kind": "scenes",
     "description": "A chord Molty plays with one drum and draws on one circle, its outline the wave. Tap the middle to play or stop; turn the rim to choose or for the pitch.",
     "layouts": [
@@ -94,7 +94,7 @@
       "molty-waves"
     ],
     "path": "packages/waves/waves.json",
-    "size": 277,
-    "sha256": "897a85c1da05f40cfe39f4cfa7fe840a0a3e21edbe1698adba76b87f797c5a57"
+    "size": 299,
+    "sha256": "058eeda131c8513cdceaae2085503971285df472ea76654cc106597206ff8945"
   }
 }

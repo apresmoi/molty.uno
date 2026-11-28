@@ -341,8 +341,8 @@ function turnId(v: unknown): string | undefined {
 
 /** The voice front's silent context (`front {context}`): at most this many characters. */
 export const MAX_FRONT_CONTEXT = 2000;
-/** `front {context, persona: true}`: the agent's standing persona line (kept per device), at most this many characters. */
-export const MAX_FRONT_PERSONA = 500;
+/** `front {context, persona | facts: true}`: who the agent is / its fresh facts (each kept per device), at most this many characters. */
+export const MAX_FRONT_PERSONA = 1500;
 
 /** say / talk `exact`: word for word; with the voice front on, the front keeps the wording as close as it can (core/front.ts). */
 function exactArg(v: unknown): boolean {
@@ -594,17 +594,20 @@ export function validateCommand(name: unknown, rawArgs: unknown): Validated {
       return { name: n, args: out, job: false, ...(reply !== undefined ? { in_reply_to: reply } : {}) };
     }
     case "front": {
-      // the voice front (core/front.ts): {context?, persona?, end?}; relay-only, never forwarded to the device
-      only(args, ["context", "persona", "end"]);
+      // the voice front (core/front.ts): {context?, persona? | facts?, end?}; relay-only, never forwarded to the device
+      only(args, ["context", "persona", "facts", "end"]);
       const out: JsonObject = {};
       if (args.context !== undefined) {
         if (typeof args.context !== "string" || !args.context.trim() || args.context.length > MAX_FRONT_CONTEXT) throw invalid(`context must be text of 1..${MAX_FRONT_CONTEXT} characters`);
         out.context = args.context.trim();
       }
-      if (args.persona !== undefined && (typeof args.persona !== "boolean" || (args.persona && (typeof out.context !== "string" || out.context.length > MAX_FRONT_PERSONA)))) {
-        throw invalid(`persona: true takes a context of 1..${MAX_FRONT_PERSONA} characters (the agent's standing persona line)`);
+      for (const k of ["persona", "facts"] as const) {
+        if (args[k] !== undefined && (typeof args[k] !== "boolean" || (args[k] && (typeof out.context !== "string" || out.context.length > MAX_FRONT_PERSONA)))) {
+          throw invalid(`${k}: true takes a context of 1..${MAX_FRONT_PERSONA} characters (${k === "persona" ? "who you are and how you talk" : "3 to 5 fresh facts"})`);
+        }
+        if (args[k] === true) out[k] = true;
       }
-      if (args.persona === true) out.persona = true;
+      if (out.persona && out.facts) throw invalid("give persona or facts, not both");
       if (args.end !== undefined && typeof args.end !== "boolean") throw invalid("end must be a boolean");
       if (args.end === true) out.end = true;
       if (!Object.keys(out).length) throw invalid("give context, or end: true");

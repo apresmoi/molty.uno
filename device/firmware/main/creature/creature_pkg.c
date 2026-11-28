@@ -43,6 +43,7 @@ struct cpk {
     int16_t lay_by[CC_LAYERS_MAX], lay_w[CC_LAYERS_MAX];
     cp_mark_t marks[MARKS_MAX];
     bool moment;                /* the gesture playing is one of its moments (cpk_moment), not an agent's */
+    bool rz_key, rz_skip; int rz_n;   /* the lab's reuse for its dots (cpk_reuse)                         */
 };
 
 /* the life layers' signals by name (creature.life.layers[i].by and .w), as the player's slots */
@@ -132,6 +133,8 @@ void cpk_moment_stop(cpk_t *k) { if (k && k->clip && k->moment) { k->moment = fa
 void cpk_set_share(cpk_t *k, int pct) { if (k && k->dots) cd_set_share(k->dots, pct); }
 void cpk_come(cpk_t *k, const char *first) { if (k && k->clip) { k->moment = false; cc_come(k->clip, first); } }
 const cc_t *cpk_clip(const cpk_t *k) { return k ? k->clip : NULL; }
+void cpk_reuse(cpk_t *k, bool key, bool skip, int n) { if (k) { k->rz_key = key; k->rz_skip = skip; k->rz_n = n; } }
+const cd_reuse_t *cpk_reuse_stats(const cpk_t *k) { return k && k->dots ? cd_reuse_stats(k->dots) : NULL; }
 
 static const char *const MOOD_NAMES[7] = { "idle", "listening", "thinking", "speaking", "happy", "sleepy", "surprised" };
 
@@ -162,6 +165,7 @@ static void clip_frame(cpk_t *k, fluid_sim_t *s, float dt) {
     if (k->sky) cd_sky(k->dots, k->sky->moon_c, k->sky->nmoon_shown, k->sky->star_c, k->sky->nstar);
     else cd_sky(k->dots, NULL, 0, NULL, 0);
     cd_weather(k->dots, k->wx, s->h);
+    cd_reuse(k->dots, k->rz_key, k->rz_skip, k->rz_n);
     cd_draw(k->dots, k->clip, k->frame++);
     {   /* the dots' stages into the fluid's profile (GET /api/creature/state prof_ms.k_*) */
         uint32_t st[CD_STAGES] = { 0 };

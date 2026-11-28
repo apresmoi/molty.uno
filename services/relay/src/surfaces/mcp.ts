@@ -321,10 +321,11 @@ export const TOOLS: ToolDef[] = [
   {
     name: "molty_front",
     description:
-      "The voice front (an utterance with `front` means it is on): a realtime voice model is Molty's only voice and you are its inner voice, not the speaker. It already answered the person ({said, waiting}); send facts or nothing through molty_talk / molty_say: it voices them only for a turn it handed you (waiting: true) or between conversations, else keeps them as background (the result says spoken, how: said | absorbed | queued). Here: context = facts it may use (it says nothing now); with persona: true, context is your standing persona line (who you are, how you talk; at most 500 characters), kept for every session; end: true = end the hands-free conversation. Returns {conversation, context?, ended?}, or {skipped:\"front_off\", reason} when the front is not serving.",
+      "The voice front (an utterance with `front` means it is on): a realtime voice model is Molty's only voice and you are its inner voice, not the speaker. It already answered the person ({said, waiting}); send facts or nothing through molty_talk / molty_say: it voices them only for a turn it handed you (waiting: true) or between conversations, else keeps them as background (the result says spoken, how: said | absorbed | queued). Here: context = facts it may use (it says nothing now); with persona: true, context is who you are and how you talk (2 or 3 sentences, at most 1500 characters); with facts: true, your 3 to 5 fresh facts (1500 characters, sent again when they change): both kept for every session, so the front knows who it speaks for; end: true = end the hands-free conversation. Returns {conversation, context?, ended?}, or {skipped:\"front_off\", reason} when the front is not serving.",
     inputSchema: obj({
       context: { type: "string", description: "Background for the front, at most 2000 characters, e.g. \"The deploy finished at 14:02, 3 warnings.\"" },
       persona: { type: "boolean", description: "true: context is your standing persona line, e.g. \"You are Dude, a cat on Juan's desk; dry, warm humour.\"" },
+      facts: { type: "boolean", description: "true: context is your fresh facts, e.g. \"Juan is testing the voice front tonight. He asked me to remember oat milk.\"" },
       end: { type: "boolean", description: "true: end the conversation now." },
     }),
     auth: true,

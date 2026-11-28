@@ -38,8 +38,11 @@ the background. You can tell: the `utterance` carries `front: {said, waiting, ro
 - **One call per turn, with `in_reply_to`; never retry.** A repeat for the same turn returns the
   first answer's `job` (`repeated: true`); an answer to a turn over a minute old, or to a
   conversation that ended after the front answered it, is only kept as context (`reason`).
-- **Sound like yourself:** `molty_front {context: "…", persona: true}` sets your standing persona
-  line (who you are, how you talk; 500 characters), kept for every session. **Background:**
+- **Tell the front who it speaks for, once:** `molty_front {context: "…", persona: true}`: who you
+  are and how you talk, 2 or 3 sentences (at most 1500 characters). Until you do, it is a neutral
+  voice that never says who it is (`front.role` on every utterance reminds you). **Keep it fresh:**
+  `molty_front {context: "…", facts: true}`: 3 to 5 fresh facts (what you are doing, recent
+  memories; 1500 characters), sent again whenever they change. Both are kept for every session. **Background:**
   `molty_front {context: "…"}`. **End the conversation:** `molty_front {end: true}`.
 - **You stay the brain.** The front knows nothing about the person's work and is told never to
   invent a result. If you never answer a waiting turn, it says once that it is still on it.

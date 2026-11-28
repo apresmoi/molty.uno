@@ -210,8 +210,8 @@ draw:
   plays (or with no clock), `face: 1` while it is stopped.
 - `centre_tap` plays the clock (after a count-in) and stops it; it needs a `beat_clock` (or a `wave_ring`) on the screen.
 - `wave_ring` draws the chord `wave.play` sent (the molty-waves skill): each voice's hits as dots joined as its shape,
-  the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch, its `sets: pick` wheel the chord
-  kinds (one level up, the notes), its `centre_tap` goes down a level and plays and stops.
+  the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch (fine steps, a detent on each
+  note; its own tick the fine step's), its `sets: pick` wheel the chord kinds, its `centre_tap` plays and stops.
 - `sky_atlas` draws the sky atlas `atlas.load` sent (the molty-atlas skill): the kinds on the rim, a kind's objects, each
   object's card (its drawing, name, numbers), with a place where it is now; its `wheel` steps through them (30 degrees a
   kind, 15 an object), its `centre_tap` opens a kind and turns a card.
