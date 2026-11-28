@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentEvent } from "../src/core/events.js";
 import { decodeAudioFrame, encodeAudioFrame } from "../src/core/protocol.js";
 import type { DeviceRoom } from "../src/core/room.js";
-import { FRONT_ROLE, FrontTalk, frontText, frontTurnSummary, stopPhrase } from "../src/core/front.js";
+import { FRONT_ROLE, FRONT_SETUP, FrontTalk, frontText, frontTurnSummary, stopPhrase } from "../src/core/front.js";
 import { realClock } from "../src/core/store.js";
 import { DEVICE, type FakeHost, type FakeSocket, LINK, connect, makeRoom } from "./helpers.js";
 
@@ -15,10 +15,11 @@ const CAPS = ["say", "say_cues", "say_marks", "listen", "listen_stop", "listen_w
 const NEXT = ["NEWC2345", "NEWD2345", "NEWE2345", "NEWF2345"];
 
 /** A device: answers cmds, streams 100 ms mic chunks every 15 ms for a listen (`chunks`, then its own end), stops on listen_stop, says say.done. */
-function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; sayText?: () => boolean } = {}) {
+function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; sayText?: () => boolean; sayTextMs?: number } = {}) {
   const cmds: Array<{ name: string; args: any; at: number }> = [];
   const says: Record<string, number> = {};
   const ends: Record<string, number> = {}; // when each say's end frame reached the device
+  const frames: Record<string, Array<{ at: number; samples: number; end: boolean }>> = {}; // every frame of each say
   let timers: ReturnType<typeof setTimeout>[] = [];
   let codes = 0;
   const text = sock.sendText.bind(sock);
@@ -30,7 +31,7 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; sayTex
     if (f.t !== "cmd") return;
     cmds.push({ name: f.name, args: f.args, at: Date.now() });
     const result = f.name === "listen" ? { job: f.args.job, ms: 30000, ack: "chirp" } : f.name === "listen_stop" ? { job: f.args.job, stopping: true } : f.name === "say_text" ? { job: f.args.job, taken: o.sayText?.() ?? true } : {};
-    setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result })), 1);
+    setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "res", id: f.id, ok: true, result })), f.name === "say_text" ? (o.sayTextMs ?? 1) : 1);
     if (f.name === "listen") {
       const job = f.args.job;
       let seq = 0;
@@ -49,10 +50,11 @@ function device(room: DeviceRoom, sock: FakeSocket, o: { chunks?: number; sayTex
     bin(b);
     const fr = decodeAudioFrame(b)!;
     says[fr.header.s] = (says[fr.header.s] ?? 0) + fr.payload.byteLength / 2;
+    (frames[fr.header.s] ??= []).push({ at: Date.now(), samples: fr.payload.byteLength / 2, end: !!fr.header.end });
     if (fr.header.end) ends[fr.header.s] = Date.now();
     if (fr.header.end) setTimeout(() => void room.socketMessage(sock, JSON.stringify({ t: "evt", name: "say.done", data: { job: fr.header.s } })), 5);
   };
-  return { cmds, says, ends, named: (n: string) => cmds.filter((c) => c.name === n) };
+  return { cmds, says, ends, frames, named: (n: string) => cmds.filter((c) => c.name === n) };
 }
 
 interface BoxOpts {
@@ -68,6 +70,8 @@ interface BoxOpts {
   unfaithful?: boolean;
   /** speak as a model does: the transcript one word at a time with each word's audio (and cue), the final text at the end */
   pieces?: boolean;
+  /** an agent line spoken as the real provider does a read-aloud: `seconds` of audio in 2400-sample frames within about 0.6 s */
+  burst?: { seconds: number };
 }
 
 /** A realtime voice box on the voice socket, as molty-voice's realtime engine speaks it. */
@@ -80,7 +84,27 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   let waitingFor: string | undefined;
   let talking = false;
   const say = (m: unknown) => void room.socketMessage(sock, JSON.stringify(m));
-  const speak = (id: string, words: string, end: Record<string, unknown> = {}, delay = 5) => {
+  const speak = (id: string, words: string, end: Record<string, unknown> = {}, delay = 5, inner = false) => {
+    if (o.burst && inner) {
+      const total = Math.round(o.burst.seconds * 16000);
+      const ws = words.split(" ");
+      let sent = 0;
+      let k = 0;
+      const tick = () => {
+        if (sock.closed) return;
+        const n = Math.min(2400, total - sent);
+        const w = Math.floor((sent / total) * ws.length);
+        say({ t: "tts.text", id, text: ws.slice(0, w + 1).join(" ") });
+        say({ t: "tts.word", id, i: w, text: ws[w], start_s: sent / 16000 });
+        void room.socketMessage(sock, encodeAudioFrame({ s: id, seq: k++, kind: "pcm16", rate: 16000, end: false }, new Uint8Array(new Int16Array(n).fill(700).buffer)));
+        sent += n;
+        if (sent < total) return void setTimeout(tick, 10);
+        say({ t: "tts.text", id, text: words, final: true });
+        say({ t: "tts.end", id, ms: { first_audio: 300 }, ...end });
+      };
+      setTimeout(tick, delay);
+      return;
+    }
     if (o.pieces) {
       const ws = words.split(" ");
       ws.forEach((_, i) =>
@@ -126,7 +150,7 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
     if (f.t === "tts" && f.front === "inner" && !voiced) setTimeout(() => say({ t: "tts.end", id: f.id, absorbed: true }), 5);
     else if (f.t === "tts") {
       const words = f.front === "inner" && !f.exact ? `So, ${f.text}` : f.front === "wait" ? "Still checking, one moment." : f.text;
-      speak(f.id, words, f.front === "inner" && o.unfaithful ? { faithful: false } : {});
+      speak(f.id, words, f.front === "inner" && o.unfaithful ? { faithful: false } : {}, 5, f.front === "inner");
     }
   };
   sock.sendBinary = (b: Uint8Array) => {
@@ -157,10 +181,10 @@ function frontBox(room: DeviceRoom, sock: FakeSocket, o: BoxOpts = {}) {
   return { got, listens, hello, of: (t: string) => got.filter((m) => m.t === t) };
 }
 
-async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[]; sayText?: () => boolean; voiced?: () => boolean } = {}) {
-  const ctx = makeRoom({ timings: FAST, ...(o.voiced ? { voiced: o.voiced } : {}), log: process.env.FRONT_DEBUG ? (m, d) => console.log(m, JSON.stringify(d)) : undefined });
+async function setup(o: { box?: BoxOpts; front?: "on" | "off"; chunks?: number; caps?: string[]; sayText?: () => boolean; sayTextMs?: number; voiced?: () => boolean; timings?: Record<string, number> } = {}) {
+  const ctx = makeRoom({ timings: { ...FAST, ...o.timings }, ...(o.voiced ? { voiced: o.voiced } : {}), log: process.env.FRONT_DEBUG ? (m, d) => console.log(m, JSON.stringify(d)) : undefined });
   const sock = await connect(ctx.room, ctx.host, undefined, LINK, { caps: o.caps ?? CAPS });
-  const dev = device(ctx.room, sock, { chunks: o.chunks, sayText: o.sayText });
+  const dev = device(ctx.room, sock, { chunks: o.chunks, sayText: o.sayText, sayTextMs: o.sayTextMs });
   const pair = async (link: string, name: string, role?: "voice") => {
     const out = await ctx.room.pair({ device_id: DEVICE, link_code: link, agent_name: name, ...(role ? { role } : {}) });
     if (!out.ok || out.result.status !== "approved") throw new Error(JSON.stringify(out));
@@ -247,7 +271,7 @@ describe("voice front: a turn", () => {
     expect(ctx.dev.named("listen_stop")[0].at).toBeLessThanOrEqual(ctx.dev.named("say")[0].at);
     await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
     const u = (await ctx.inbox()).find((e) => e.type === "utterance")!;
-    expect(u.data).toMatchObject({ text: "what is on my calendar today?", trigger: "shake", front: { said: "Let me check on that.", waiting: true, role: FRONT_ROLE } });
+    expect(u.data).toMatchObject({ text: "what is on my calendar today?", trigger: "shake", front: { said: "Let me check on that.", waiting: true, role: FRONT_ROLE + FRONT_SETUP } });
     expect(u.data.front.role).toMatch(/^you are the inner voice/);
     expect(u.data.filler_in_ms).toBeUndefined(); // no auto filler: the front answered
     // the inner voice: no TTS request, the box's front says it in its own words
@@ -418,12 +442,21 @@ describe("voice front: every way out", () => {
     const ctx = await setup();
     const c = (await ctx.room.command(ctx.token, "front", { context: "You are Dude, a cat lounging on Juan's desk; dry, warm humour.", persona: true })) as any;
     expect(c.result).toMatchObject({ context: true });
-    expect(ctx.box.of("front.context").at(-1)).toMatchObject({ text: "You are Dude, a cat lounging on Juan's desk; dry, warm humour.", persona: true });
-    expect(await ctx.kv.get("front:persona")).toBe("You are Dude, a cat lounging on Juan's desk; dry, warm humour.");
-    await ctx.box.hello(); // the box restarts (or reconnects): it is told again
-    await until(() => ctx.box.of("front.context").filter((m) => m.persona).length === 2);
-    expect(ctx.box.of("front.context").filter((m) => m.persona).length).toBe(2);
-    expect(((await ctx.room.command(ctx.token, "front", { context: "x".repeat(501), persona: true })) as any).error).toBe("invalid_args");
+    const who = "Your agent's name: agent. You are Dude, a cat lounging on Juan's desk; dry, warm humour.";  // its paired name, for "is this Dude?"
+    expect(ctx.box.of("front.context").at(-1)).toMatchObject({ text: who, persona: true });
+    expect(await ctx.kv.get("front:persona")).toBe(who);
+    const f = (await ctx.room.command(ctx.token, "front", { context: "Juan is testing the voice front tonight; he asked for oat milk.", facts: true })) as any;
+    expect(f.result).toMatchObject({ context: true });
+    expect(ctx.box.of("front.context").at(-1)).toMatchObject({ facts: true });
+    await ctx.box.hello(); // the box restarts (or reconnects): it is told both again
+    await until(() => ctx.box.of("front.context").filter((m) => m.persona).length === 2 && ctx.box.of("front.context").filter((m) => m.facts).length === 2);
+    expect(ctx.box.of("front.context").filter((m) => m.facts).length).toBe(2);
+    expect(((await ctx.room.command(ctx.token, "front", { context: "x".repeat(1501), persona: true })) as any).error).toBe("invalid_args");
+    expect(((await ctx.room.command(ctx.token, "front", { context: "x", persona: true, facts: true })) as any).error).toBe("invalid_args");
+    // once it is set, the utterance's role stops asking for it
+    await ctx.shake();
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    expect((await ctx.inbox()).find((e) => e.type === "utterance")!.data.front.role).toBe(FRONT_ROLE);
   });
 
   it("after a front reply the device gets the say's end and the hands-free listen at once, with or without an agent answer in flight", async () => {
@@ -628,6 +661,51 @@ describe("voice front: every spoken word shown (cap say_text)", () => {
     const r = ((await ctx.room.ownerActivity(ctx.owner, { action: "get", query: {} })) as any).result.entries.find((e: any) => e.job === job);
     expect(r.data.said).toBe(LINE);
   });
+
+  it("a long read-aloud answer streams to its end: every frame, the end flag within one frame of the last audio, text never holding audio", async () => {
+    // live 2026-11-28 (run 7, the real device): two 23 to 28 word answers stalled at their end (the device never got the end)
+    const LONG = "Got it, give the quick voice a short who is Dude prompt plus a few fresh memories, good idea, I will note it for the setup tonight and tell you when it is done.";
+    const ctx = await setup({ caps: [...CAPS, "say_text"], sayTextMs: 400, timings: { sayChunkSamples: 5120, sayLeadFrames: 1 },
+      box: { heard: ["what do you think about it?", "", ""], reply: () => ({ said: "Hmm, let me look.", wait: true }), pieces: true } });
+    await ctx.shake();
+    await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+    const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id;
+    const r = (await ctx.room.talk(ctx.token, { say: LONG, in_reply_to: t1, exact: true })) as any;
+    expect(r.result).toMatchObject({ status: "done", how: "said" });
+    const job = r.result.job as string;
+    const fr = ctx.dev.frames[job];
+    const audio = fr.reduce((n, f) => n + f.samples, 0);
+    expect(audio).toBe(LONG.split(" ").length * 3200); // every sample of it reached the device
+    const last = fr.filter((f) => f.samples > 0).at(-1)!;
+    const end = fr.find((f) => f.end)!;
+    expect(end).toBeDefined();
+    expect(end.at - last.at).toBeLessThanOrEqual(320 + 60); // the end within one frame of the last audio
+    const gaps = fr.slice(1).map((f, i) => f.at - fr[i].at);
+    expect(Math.max(...gaps)).toBeLessThan(450); // paced, never held back (the device answered each say_text 400 ms late)
+    expect(ctx.dev.named("say_text").filter((c) => c.args.job === job).length).toBeLessThanOrEqual(LONG.split(" ").length / 2);
+  }, 20000);
+
+  for (const seconds of [8.2, 9.7]) {
+    it(`a ${seconds} s read-aloud made in under a second streams every sample and its end, in about its length`, async () => {
+      // live 2026-11-28 (run 7): the device got 22 of 24.4 and 26 of 29.7 frames of two long answers, and no end
+      const LONG = "Right: Yeah, mostly: queue a message into the shared multi-owner folder chat so the cloud agent picks it up there. Is that right?";
+      const ctx = await setup({ caps: [...CAPS, "say_text"], sayTextMs: 5, timings: { sayChunkSamples: 5120, sayLeadFrames: 1 },
+        box: { heard: ["does it make sense what i'm saying?", "", ""], reply: () => ({ said: "Let me see.", wait: true }), burst: { seconds } } });
+      await ctx.shake();
+      await until(async () => (await ctx.inbox()).some((e) => e.type === "utterance"));
+      const t1 = (await ctx.inbox()).find((e) => e.type === "utterance")!.data.turn_id;
+      const t0 = Date.now();
+      const r = (await ctx.room.talk(ctx.token, { say: LONG, in_reply_to: t1 })) as any;
+      expect(r.result).toMatchObject({ status: "done", how: "said" });
+      const fr = ctx.dev.frames[r.result.job];
+      expect(fr.reduce((n, f) => n + f.samples, 0)).toBe(Math.round(seconds * 16000)); // the tail too
+      expect(fr.at(-1)!.end).toBe(true);
+      const span = fr.at(-1)!.at - fr[0].at;
+      expect(span).toBeGreaterThan(seconds * 1000 - 2 * 320 - 100); // paced: about its length less the lead
+      expect(span).toBeLessThan(seconds * 1000);
+      expect(Date.now() - t0).toBeLessThan(seconds * 1000 + 2500);
+    }, 25000);
+  }
 
   it("no say_text to a device without the cap", async () => {
     const old = await run({ caps: CAPS });

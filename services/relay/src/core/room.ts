@@ -1299,7 +1299,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       if (dnd) return dnd;
     }
     if (cmd.name === "pkg.available") return this.available();
-    if (cmd.name === "front") return this.ft.command(cmd.args);
+    if (cmd.name === "front") return this.ft.command(cmd.args, agent.agent_name);
     const live = this.liveSocket();
     if (!live) return fail("device_offline");
     if (cmd.name === "act") {
@@ -2117,7 +2117,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
     const voice = typeof args.voice === "string" ? args.voice : undefined;
     const pre = prepared ?? (ready && !(await this.voiceIsOff()) ? await this.prepareSpeech(text, voice) : undefined);
     if (ready) await ready;
-    // a front reply waits for the stopped listen's end frame (FRONT.deviceFreeMs at most)
+    // a front reply waits for the listen's end (FRONT.deviceFreeMs)
     const tail = this.traceTail;
     if (tail && tail.buf.job === args.front_reply) await Promise.race([tail.over, sleep(this.clock, FRONT.deviceFreeMs)]);
     // prepared speech (an opener) goes to the device at once; the "running" write lands meanwhile
@@ -2463,10 +2463,8 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         if (cuesOn && c[0] < SAY_CUE_WORDS && (frontWords === undefined || c[0] < frontWords)) into.push(c);
       }
     };
-    // With the box (first audio ~0.25 s), `cmd say` goes out at once, in parallel with the
-    // synthesis: its round trip to the device no longer sits between the first audio and the
-    // first frame. Elsewhere (the cloud can take a second) it waits for the first audio, so
-    // the device never shows a say whose voice is still far off.
+    // With the box (first audio ~0.25 s) `cmd say` goes out at once, its round trip overlapping the
+    // synthesis; elsewhere (the cloud) it waits for the first audio: no say shows long before its voice.
     // cached audio is all there: cmd say with its exact length (the front: its text comes with its audio)
     const early = pick.box && !ready.cached && !ready.front;
     let frontWords: number | undefined;
@@ -2550,6 +2548,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
       let lastSent = 0;
       let samples = 0;
       let ended = false;
+      let sendFails = 0;
       let tSynth = feed.done ? tFirst : 0;
       // every frame so far: a device coming back gets what it missed, same seq, same cues
       const sentFrames: Array<{ bytes: Uint8Array; ms: number; at: number }> = [];
@@ -2558,6 +2557,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
         try {
           live.sendBinary(bytes);
         } catch (e) {
+          sendFails++; // timings.send_fail
           if (!resumable) throw e; // else it goes again from the device's own count
         }
       };
@@ -2702,6 +2702,7 @@ export class DeviceRoom implements AgentApi, OwnerApi {
           stream: lastSent - firstSent,
           play: tEnd - firstSent,
           voice: pick.name,
+          ...(sendFails ? { send_fail: sendFails } : {}),
           ...(ready.cached ? { cached: true } : {}),
           ...(ready.front ? { front: { ...ready.front.boxMs, text_wait: textWait } } : {}),
         },

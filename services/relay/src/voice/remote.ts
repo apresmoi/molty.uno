@@ -22,7 +22,7 @@
 //                held to talk: the release ends it, never your turn detection)
 //   relay → box  {"t":"tts",…,"front":"inner"|"wait","exact"?,"turn"?} (an agent line, voiced only when the front waits
 //                for listen `turn` (or with no turn between conversations), else context: tts.end absorbed /
-//                "still waiting"), {"t":"front.context","text","persona"?}, {"t":"front.end","reason"}
+//                "still waiting"), {"t":"front.context","text","persona"?,"facts"?}, {"t":"front.end","reason"}
 //   box → relay  {"t":"stt.hint","id","k":"speech"} (the person started speaking)
 //                {"t":"front.reply","id","stt","ms"?} then frames s=id, tts.word, {"t":"tts.text","id","text","final"?},
 //                {"t":"tts.end","id","wait"?,"absorbed"?,"faithful"?,"ms"?} (as a tts; wait: the front handed the turn
@@ -242,11 +242,11 @@ export class RemoteVoiceProvider implements VoiceProvider {
     return sp;
   }
 
-  /** Silent context for the front (kept across its sessions; `persona`: the agent's standing persona line); false: no box. */
-  frontContext(text: string, persona = false): boolean {
+  /** Silent context for the front (kept across its sessions; `as`: who the agent is, or its fresh facts, each replaced); false: no box. */
+  frontContext(text: string, as?: "persona" | "facts"): boolean {
     const ch = this.link();
     if (!ch) return false;
-    this.sendQuiet(ch, { t: "front.context", text, ...(persona ? { persona } : {}) });
+    this.sendQuiet(ch, { t: "front.context", text, ...(as ? { [as]: true } : {}) });
     return true;
   }
 

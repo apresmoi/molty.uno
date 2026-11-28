@@ -26,7 +26,7 @@ _log.setLevel(logging.WARNING)  # its handshake log would show the Authorization
 class FakeRealtime:
     def __init__(self, *, first_audio_ms: int = 300, speed: float = 3.0, silence_ms: int = 500, transcript: str | None = None,
                  reply=None, threshold: float = 0.02, final=None, script=None, auto_create_ms: int = 0, recite: bool = True,
-                 commit_event_ms: int = 0, ends_together: bool = False, misread=None, hold=None):
+                 commit_event_ms: int = 0, ends_together: bool = False, misread=None, hold=None, transcribe_ms: int = 250):
         self.first_audio_ms = first_audio_ms
         self.speed = speed  # audio is generated this many times faster than real time
         self.silence_ms = silence_ms
@@ -50,6 +50,7 @@ class FakeRealtime:
         self.ends_together = ends_together
         # a read-aloud request (out of band, its own input): what the model says for the text (live: it changed facts)
         self.misread = misread or (lambda text: text)
+        self.transcribe_ms = transcribe_ms  # the input transcript comes this long after the commit (0.18 to 0.41 s live)
         # a holding line asked for on the person's words (out of band): what the model says
         self.hold = hold or (lambda heard: f"Okay, {' '.join(heard.split()[:3])}, let me check.")
         self.final = final or (lambda words: words)  # the output transcript's done event (a model may restate it)
@@ -119,7 +120,7 @@ class FakeRealtime:
                 st["auto"] = asyncio.create_task(auto())
 
             async def transcribe():
-                await asyncio.sleep(0.25)
+                await asyncio.sleep(self.transcribe_ms / 1000)
                 for w in heard.split():
                     await send({"type": "conversation.item.input_audio_transcription.delta", "item_id": item, "content_index": 0, "delta": w + " "})
                 await send({"type": "conversation.item.input_audio_transcription.completed", "item_id": item, "content_index": 0, "transcript": heard})
@@ -142,7 +143,8 @@ class FakeRealtime:
             m = re.search(r"word for word, and nothing else: (.*)$", instr, re.S)
             tool = False
             if given and "holding line" in instr:
-                words = self.hold(" ".join(given).strip())
+                said = next((t["said"] for t in self.script if t["heard"] == " ".join(given).strip() and t.get("handoff")), None)
+                words = said if said is not None else self.hold(" ".join(given).strip())
             elif given:
                 words = self.misread(" ".join(given).strip())
             elif m:

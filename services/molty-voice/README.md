@@ -66,14 +66,17 @@ A second kind of voice box: instead of Kyutai on a GPU, `molty-voice` talks to a
 model** (speech in, speech out) with **your own key**, and becomes Molty's fast conversational voice,
 the *voice front* (`docs/AGENT-LINK.md` "Voice front"). It hears you while you speak, decides when
 you are done, and answers within a fraction of a second; your agent stays the brain. **One
-voice:** the front is Molty's only speaker. It answers small talk itself; for anything else it
-says a short holding line that names what you asked ("checking your emails, one sec") and hands
-the turn to your agent. Every turn of yours gets exactly one answer from the front, and your
+voice:** the front is Molty's only speaker. Which turns it answers is decided by a rule on your
+words before it says anything (about a quarter second): small talk it answers itself, a hum gets
+"Mm-hm?", and anything else gets a short holding line that names what you asked ("checking your
+emails, one sec") while the turn goes to your agent. Every turn of yours gets exactly one answer from the front, and your
 agent's line is voiced only for a turn the front handed it (at once, with a short "ok, got it"),
 or when no conversation is going on (your agent speaking up); any other line of your agent is
 background the front knows but never says. Your agent's last
-lines (8, 2000 characters in all) and its persona line (`front {context, persona: true}`) stay
-with the front across sessions, so it sounds like your agent. The first provider is OpenAI's
+lines (8, 2000 characters in all), who it is (`front {context, persona: true}`, 1500 characters)
+and its fresh facts (`front {context, facts: true}`, 1500 characters) stay with the front across
+sessions, so it knows who it speaks for; until your agent says who it is, the front is a neutral
+voice that never claims to be anyone. The first provider is OpenAI's
 Realtime API.
 
 - **Runs anywhere:** a laptop or a small server. No GPU, no Docker, no Kyutai.
