@@ -126,6 +126,17 @@ The firmware's own renderer compiled to WebAssembly, statically linked with:
 - astronomy-engine 2.1.19 (scripts/vendor/astronomy.min.js): Copyright (c) 2019-2023 Don Cross, MIT License (its
   full text heads the file).
 
+## molty-atlas skill (skills/molty-atlas, data/catalog.json)
+- Uses molty-astro's astronomy-engine (above); vendors no second copy.
+- Constellation figures: Stellarium sky culture `western_SnT` (Sky & Telescope's figures; Paul Krizak, Jonathan E.
+  Piskor, the Stellarium team), CC BY-SA 2.0. Deep-sky objects: OpenNGC, Mattia Verga, CC BY-SA 4.0. The figures and
+  rows derived from them in data/catalog.json are under the same licences (CC BY-SA).
+- Stars: the Hipparcos catalogue (ESA 1997, ESA SP-1200), free use with acknowledgement; names: the IAU Catalog of Star
+  Names (IAU WGSN), CC BY. Double stars: the Washington Double Star catalogue (US Naval Observatory). Meteor showers:
+  the International Meteor Organization's 2027 calendar, Table 5 (numbers, cited). The Orion Nebula's and the Ring
+  Nebula's dots: NASA, ESA and the Hubble Heritage Team, public domain. Order: Wikimedia page views, CC0.
+  Every source, its link and use: skills/molty-atlas/references/sources.md.
+
 ## Display tools (packages/tools, vendored)
 - js-yaml 4.1.1 (vendor/js-yaml.mjs, its dist/js-yaml.mjs unchanged): Copyright (C) 2011-2015 by Vitaly Puzrin, MIT
   License (its header names it). Reads display.yaml on the computer that builds a package; not in the firmware.

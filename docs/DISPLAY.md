@@ -95,6 +95,7 @@ Every shape except `tap_zone` also takes `color`.
 | `beat_clock` | `radius`, `dot` | the rhythm Molty plays, as a clock (see [A clock and a wheel](#a-clock-and-a-wheel)) |
 | `wheel` | `id`, `radius`, `grab_from`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a ring at the edge the finger turns |
 | `wave_ring` | `radius` | the chord Molty plays, on one circle (in a `beat_clock`'s place; its wheels set `pitch` and `pick`) |
+| `sky_atlas` | `radius` | the sky atlas `atlas.load` sent (the molty-atlas skill), in a `beat_clock`'s place; its wheel steps through the kinds and the objects |
 | `centre_tap` | `radius` | nothing: a tap in the middle plays and stops the clock |
 
 ```yaml
@@ -211,6 +212,9 @@ draw:
 - `wave_ring` draws the chord `wave.play` sent (the molty-waves skill): each voice's hits as dots joined as its shape,
   the hand, the outline the sound pushes out; its `sets: pitch` wheel turns the pitch, its `sets: pick` wheel the chord
   kinds (one level up, the notes), its `centre_tap` goes down a level and plays and stops.
+- `sky_atlas` draws the sky atlas `atlas.load` sent (the molty-atlas skill): the kinds on the rim, a kind's objects, each
+  object's card (its drawing, name, numbers), with a place where it is now; its `wheel` steps through them (30 degrees a
+  kind, 15 an object), its `centre_tap` opens a kind and turns a card.
 - Sent with regions (`rhythm.play`'s `regions`), a `sets: pick` wheel shows one region's rhythms, the region's name small
   above: a tap on it goes up to the regions, and `centre_tap` there opens the one chosen.
 

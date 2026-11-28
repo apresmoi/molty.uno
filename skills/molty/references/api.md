@@ -108,6 +108,8 @@ Success: `200 {"ok":true,"result":{…}}`. Unknown argument keys are rejected.
 | `wave.play` | `{"chords": [1..32 kinds], "pick", "note"?: 0..11, "midi"? \| "hz"?, "tuning"?, "paused"?, "mute"?: [voices]}` | `{chord, note, midi, hz, tuning, muted, paused}` | cap `wave`: Molty holds a chord by itself, one drum at any speed on its speaker, a rhythm when slow and a note when fast; shares the speaker with the beat player; the molty-waves skill sends it ([its commands](https://github.com/apresmoi/molty.uno/blob/main/skills/molty-waves/references/commands.md)) |
 | `wave.set` | one of `{"midi", "hz", "octave", "count": true}`, any of `{"note", "pick", "tuning", "mute", "paused"}` | as `wave.play` | a pitch glides, never a restart; `not_playing` before `wave.play` |
 | `wave.stop` | none | none | silence; its scope leaves the screen |
+| `atlas.load` | `{"kinds"?: [1..10], "clock"?: -1..1439, "kind"?, "objects"?: [1..96]}` | none | cap `atlas`: one kind of the sky atlas at a time (32 KB at most), browsed on Molty itself; the molty-atlas skill sends it ([its commands](https://github.com/apresmoi/molty.uno/blob/main/skills/molty-atlas/references/commands.md)) |
+| `atlas.show` | any of `{"kind", "index", "level": "kinds" \| "objects", "face": "drawing" \| "where"}` | none | where the atlas's screen goes |
 
 **Timing.** Short commands answer inline within ~10 s. `say` and `listen` are
 **async jobs**: they return `{job}` at once; poll `GET /v1/jobs/<job>?wait_s=0..8` until

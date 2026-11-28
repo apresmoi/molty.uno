@@ -134,6 +134,7 @@ and geometry in **glass units**: the round window has radius 1, `x` right, `y` u
 | `dial` | `id`, `r`, `r0`, `step`, `by`, `fast`, `min`, `max`, `value`, `face`, `sets`, `labels`, `tick_ms`, `tick` | a wheel round the edge the finger turns (below); one a face |
 | `centre` | `r` | nothing: a tap in the middle plays and stops the beat (below) |
 | `wave` | `r` | the chord the tone player holds, on one circle (below); in a beat's place, one a layout |
+| `atlas` | `r` | the sky atlas `atlas.load` sent (below); in a beat's place, one a layout |
 
 **Spots** make a scene interactive with no round trip: the agent sends each spot's reading with the scene
 (`{ "k": "spot", "each": "$bodies", "polar": ["@a", "@r"], "r": 0.09, "say": "@say", "id": "@id" }`), and a tap on it
@@ -213,6 +214,12 @@ frame, with no round trip.
   its voice). With a wave, `sets: "pitch"` is the tone player's pitch (face 0) and `sets: "pick"` its chord kinds, one
   level up its twelve notes (face 1, each bead in its note's colour); a centre plays and stops it. All of it is live
   shapes, at most what a frame holds with the hold ring; a still outline redraws nothing.
+
+- An **`atlas`** draws the sky atlas `atlas.load` sent ([AGENT-LINK.md](AGENT-LINK.md#atlas), `scene/atlas.h`): the kinds,
+  a kind's objects, each object's card. A card is still once formed: stars as discs and their figure's lines, a picture or
+  a model as dots on the braille lattice (kept dots, as a ball's), a planet as a ball in its tint; a new card is a change
+  of picture, and waits for the glass to catch up with the last. Its dial (no `sets`) steps through the kinds (30
+  degrees) and the objects (15, five fast); a centre opens a kind and turns a card; the kind's name above a card goes up.
 
 The rhythm package's clock is all three: `{ "k": "beat", "r": 0.672 }`, a tempo dial (`step` 12, `by` 2, `fast` 4, 40 to
 220, `sets: "tempo"`), a pick dial on face 1 (`step` 30, `sets: "pick"`), both ticking `$tick_ms` at `$tick`, and a

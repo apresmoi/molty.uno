@@ -89,7 +89,7 @@ Speech comes from a TTS/STT provider (Workers AI first; swappable).
 
 ## Device ↔ relay wire (WS/WSS `/v1/device?id=<device_id>`)
 
-First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","say_text","listen","listen_stop","listen_window","ack","shake_talk","trace","hints","resume","say_cancel","gestures","dnd","show","mood","act","creature","working","progress","react","ask","ask_title","update","pkg","scene","creatures","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
+First frame from device: `{"t":"hello","id":"molty-k7m2w9c4ya","key":"<b64 device_key>","fw":"...","caps":["fluid","say","say_cues","say_marks","say_text","listen","listen_stop","listen_window","ack","shake_talk","trace","hints","resume","say_cancel","gestures","dnd","show","mood","act","creature","working","progress","react","ask","ask_title","update","pkg","scene","atlas","creatures","log_upload"],"board":"waveshare-esp32-s3-touch-lcd-1.46","link_code":"..."}`
 → relay answers `{"t":"welcome","features":["listen_adopt"],"now":<relay unix ms>,"log":{"max_lines":48}}` or closes with 4401.
 `features` lists what the relay does for the device (`listen_adopt`: it adopts a listen the device
 began by itself — [Shake to talk](#shake-to-talk)); `now` is the device's time sync and `log` says the
@@ -1120,6 +1120,37 @@ each voice the beat player's own low drum with a beater's click on it, hit once 
   slow) mutes that voice (`tap` `{spot: "voice-2", muted}`); the middle stops it on the note it stopped at. `ring`
   events as the rhythm's (`pitch` value, `chord` index and id, `note` index); a `wave` event `{state, chord, note, hz}`
   when the human plays or stops it (opt-in for a webhook, as `rhythm`). The accept button is the middle; the reject button or a held finger closes it.
+
+### Atlas
+
+The sky atlas (`device/firmware/main/scene/atlas.h`): the night sky's best known objects as cards Molty browses by
+itself. The agent works out the sky (its catalogue, the maths, the place it keeps: the molty-atlas skill) and sends each
+kind's objects once; the wheel, the cards and their two faces then run on Molty with no round trip. Cap `atlas`; the
+relay refuses `atlas.*` with `unsupported` to a Molty without it.
+
+- **`atlas.load`** `{kinds?, clock?, kind?, objects?}`, one kind at a time (at most 32 KB): `kinds` (1 to 10
+  `{id, name, tint, count, up?}`) starts a new atlas (what was loaded goes); `clock` is the minutes of the place's day
+  now, 0 to 1439 (-1 or none: no place, and no where face); `kind` and `objects` (1 to 96, in the wheel's order) load
+  that kind. An object is `{id, name, facts, see, d, w?}`: `name` (21 letters) and `facts` (22) as the glass shows them,
+  `see` `eye` | `binoculars` | `telescope`; its drawing `d` one of `{k: "stars", p, l, focus?}` (stars, 3 bytes each in
+  base64: x and y signed in 0.6 / 127 of the drawing's reach, then level << 3 | colour; lines 2 bytes each),
+  `{k: "dots", p}` (a picture's stipple, up to 700), `{k: "model", m, hubble?, ratio?, pa?, size?}` (a galaxy, a
+  globular, a nebula, a planetary or an open cluster Molty makes from these, `atlas_model`),
+  `{k: "globe", tint, lit, side, rings?}` or `{k: "radiant", p, l, at: [x, y]}`, each with `moon?` (the full Moon's
+  radius at its scale). `w`, with a place: its path in the sky from now, `p` (up to 16 points, 2 bytes each: azimuth / 2,
+  altitude + 90) every `step` minutes, `t` [rise, highest, set] in minutes from now (-1: none), `ha` its highest
+  altitude, `never`. A bad object refuses the load whole (`invalid_args`); what was there stays. Parsed into PSRAM on
+  the link task, quickly; nothing is drawn there.
+- **`atlas.show`** `{kind?, index?, level?: "kinds" | "objects", face?: "drawing" | "where"}`: where the screen is.
+- **The screen** is the atlas package's (an `atlas` item, [PACKAGES.md](PACKAGES.md#layouts)); with none on screen for
+  2 s (`ATLAS_ORPHAN_S`) the store is freed (a load no screen has shown waits a minute).
+- **On Molty itself:** the kinds on the rim (a bead each in its tint, 30 degrees), the middle opens one; its objects
+  (15 degrees a click, five turned fast, a firmer tick passing the first), each its card: its drawing, its name, its
+  numbers, what shows it and whether it is up now (each object's path read at the time since the load). With a place
+  the middle turns the card to where it is now (the horizon seen from above, north up and east right, its path, the
+  direction and height, when it rises, is highest or sets, on the place's clock) and back. The kind's name above a card
+  goes back up. A `ring` event `{spot: "kind" | "object", index, label, id}` when the wheel settles somewhere new. The
+  accept button is the middle; the reject button or a held finger closes it.
 
 ## Closing a screen
 
